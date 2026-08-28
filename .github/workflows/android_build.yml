@@ -25,29 +25,19 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          gradle-version: 8.2
 
-      - name: Grant Execute Permission to Gradlew
+      - name: Build Debug & Release APKs
         run: |
           cd android_app
-          if [ -f gradlew ]; then chmod +x gradlew; fi
+          gradle assembleDebug --stacktrace --no-daemon
 
-      - name: Build Debug APK
-        run: |
-          cd android_app
-          ./gradlew assembleDebug --stacktrace --no-daemon
-
-      - name: Upload Debug APK Artifact
+      - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: TechFactChecker-Debug-APK
-          path: android_app/app/build/outputs/apk/debug/*.apk
+          name: TechFactChecker-APK
+          path: android_app/app/build/outputs/apk/**/*.apk
           retention-days: 14
