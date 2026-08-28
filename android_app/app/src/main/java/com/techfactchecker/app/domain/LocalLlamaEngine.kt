@@ -34,16 +34,21 @@ class LocalLlamaEngine(private val context: Context) {
         }
     }
 
+    fun reloadModel() {
+        initModelAsync()
+    }
+
     private fun findModelFile(): File? {
         val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         val candidatePaths = listOf(
+            File(context.filesDir, "models/llama-3.2-1b-instruct-int8.bin"),
             File(downloadDir, "models/llama-3.2-1b-instruct.bin"),
             File(downloadDir, "models/llama-3.2-1b-instruct-int8.bin"),
             File(downloadDir, "models/gemma-2b-it-cpu-int4.bin"),
             File(downloadDir, "llama-3.2-1b.bin"),
             File(context.filesDir, "models/llama-3.2-1b.bin")
         )
-        return candidatePaths.find { it.exists() }
+        return candidatePaths.find { it.exists() && it.length() > 50_000_000 }
     }
 
     fun isLocalModelReady(): Boolean = isInitialized && llmInference != null
