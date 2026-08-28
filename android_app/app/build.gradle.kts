@@ -81,6 +81,9 @@ dependencies {
     implementation("org.jsoup:jsoup:1.17.2")
     implementation("com.google.code.gson:gson:2.10.1")
 
+    // Google MediaPipe GenAI (On-Device LLaMA / Gemma LLM Inference)
+    implementation("com.google.mediapipe:tasks-genai:0.10.14")
+
     // Coil (Image Loading for Compose)
     implementation("io.coil-kt:coil-compose:2.5.0")
 

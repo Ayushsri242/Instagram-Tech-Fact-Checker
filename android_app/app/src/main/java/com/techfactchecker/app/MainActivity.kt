@@ -38,6 +38,8 @@ class MainActivity : ComponentActivity() {
     private val db by lazy { (application as TechFactCheckerApp).database }
     private val factCheckEngine = FactCheckEngine()
     private val ocrEngine = OcrEngine()
+    private val webValidator = WebValidator()
+    private val localLlamaEngine by lazy { LocalLlamaEngine(this) }
     private val gson = Gson()
 
     private var sharedUrlState = mutableStateOf("")
@@ -252,15 +254,23 @@ class MainActivity : ComponentActivity() {
                 )
             )
 
-            // Generate On-Device Reply
-            val reply = when {
-                userText.contains("install", ignoreCase = true) -> 
-                    "To install $techName on your system, run:\n```bash\npip install ${techName.lowercase().replace(" ", "-")}\n```"
-                userText.contains("code", ignoreCase = true) || userText.contains("snippet", ignoreCase = true) ->
-                    "Here is a starter code snippet for $techName:\n```python\nimport ${techName.lowercase().replace(" ", "_")}\n\n# Initialize\napp = ${techName.lowercase().replace(" ", "_")}.load()\nprint('Loaded successfully!')\n```"
-                else ->
-                    "$techName is verified from on-screen evidence. You can inspect its documentation or clone the repository to test locally."
-            }
+            // Agentic Search: search web for live information if user asks technical query
+            val searchResults = webValidator.searchDuckDuckGo("$techName $userText", maxResults = 2)
+            val searchContext = if (searchResults.isNotEmpty()) {
+                searchResults.joinToString("\n") { "- ${it.title}: ${it.snippet}" }
+            } else ""
+
+            val prompt = """
+            Context Technology: $techName
+            Live Web Evidence:
+            $searchContext
+
+            User Question: $userText
+
+            Answer the user's question accurately, concisely, and technically based on the verified evidence.
+            """.trimIndent()
+
+            val reply = localLlamaEngine.generateResponse(prompt)
 
             db.reelDao().insertChatMessage(
                 ChatMessageEntity(
