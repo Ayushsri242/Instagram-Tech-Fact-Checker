@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.sp
 import com.techfactchecker.app.ui.theme.AccentCyan
 import com.techfactchecker.app.ui.theme.CardBorder
 import com.techfactchecker.app.ui.theme.SurfaceDark
+import com.techfactchecker.app.ui.theme.VerdictGreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -27,7 +28,11 @@ fun HomeScreen(
     onNavigateToHistory: () -> Unit,
     onAnalyzeUrl: (String) -> Unit,
     isProcessing: Boolean = false,
-    processingStep: String = ""
+    processingStep: String = "",
+    isModelDownloaded: Boolean = false,
+    downloadProgress: Int = 0,
+    isDownloadingModel: Boolean = false,
+    onDownloadModel: () -> Unit = {}
 ) {
     var urlText by remember { mutableStateOf(initialUrl) }
 
@@ -78,6 +83,68 @@ fun HomeScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Model Status & Downloader Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                border = CardDefaults.outlinedCardBorder().copy(
+                    brush = androidx.compose.ui.graphics.SolidColor(if (isModelDownloaded) VerdictGreen else CardBorder)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                "🧠 On-Device Neural Engine",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                fontSize = 15.sp
+                            )
+                            Text(
+                                if (isModelDownloaded) "✅ LLaMA 3.2 Active (100% Offline)"
+                                else "Model weights not downloaded yet",
+                                color = if (isModelDownloaded) VerdictGreen else Color.Gray,
+                                fontSize = 12.sp
+                            )
+                        }
+
+                        if (!isModelDownloaded && !isDownloadingModel) {
+                            Button(
+                                onClick = onDownloadModel,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = AccentCyan)
+                            ) {
+                                Text("Get Model", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    if (isDownloadingModel) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                "Downloading LLaMA from Hugging Face: $downloadProgress%",
+                                color = AccentCyan,
+                                fontSize = 12.sp
+                            )
+                            LinearProgressIndicator(
+                                progress = { downloadProgress / 100f },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = AccentCyan,
+                                trackColor = CardBorder
+                            )
+                        }
+                    }
+                }
+            }
+
             // Input Card
             Card(
                 modifier = Modifier.fillMaxWidth(),

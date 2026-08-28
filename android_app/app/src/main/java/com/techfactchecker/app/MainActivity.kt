@@ -19,8 +19,11 @@ import com.techfactchecker.app.data.db.ChatMessageEntity
 import com.techfactchecker.app.data.db.ReelEntity
 import com.techfactchecker.app.data.db.VerificationEntity
 import com.techfactchecker.app.domain.FactCheckEngine
+import com.techfactchecker.app.domain.LocalLlamaEngine
+import com.techfactchecker.app.domain.ModelDownloader
 import com.techfactchecker.app.domain.OcrEngine
 import com.techfactchecker.app.domain.OcrResult
+import com.techfactchecker.app.domain.WebValidator
 import com.techfactchecker.app.ui.navigation.Screen
 import com.techfactchecker.app.ui.screens.ChatScreen
 import com.techfactchecker.app.ui.screens.HistoryScreen
@@ -39,6 +42,7 @@ class MainActivity : ComponentActivity() {
     private val factCheckEngine = FactCheckEngine()
     private val ocrEngine = OcrEngine()
     private val webValidator = WebValidator()
+    private val modelDownloader by lazy { ModelDownloader(this) }
     private val localLlamaEngine by lazy { LocalLlamaEngine(this) }
     private val gson = Gson()
 
@@ -59,6 +63,9 @@ class MainActivity : ComponentActivity() {
 
                     var isProcessing by remember { mutableStateOf(false) }
                     var processingStep by remember { mutableStateOf("") }
+                    var isModelDownloaded by remember { mutableStateOf(modelDownloader.isModelDownloaded()) }
+                    var isDownloadingModel by remember { mutableStateOf(false) }
+                    var downloadProgress by remember { mutableIntStateOf(0) }
 
                     NavHost(
                         navController = navController,
@@ -88,7 +95,25 @@ class MainActivity : ComponentActivity() {
                                     isProcessing = true
                                 },
                                 isProcessing = isProcessing,
-                                processingStep = processingStep
+                                processingStep = processingStep,
+                                isModelDownloaded = isModelDownloaded,
+                                downloadProgress = downloadProgress,
+                                isDownloadingModel = isDownloadingModel,
+                                onDownloadModel = {
+                                    isDownloadingModel = true
+                                    lifecycleScope.launch(Dispatchers.IO) {
+                                        val success = modelDownloader.downloadModel { progress ->
+                                            downloadProgress = progress
+                                        }
+                                        withContext(Dispatchers.Main) {
+                                            isDownloadingModel = false
+                                            if (success) {
+                                                isModelDownloaded = true
+                                                localLlamaEngine.reloadModel()
+                                            }
+                                        }
+                                    }
+                                }
                             )
                         }
 
@@ -192,8 +217,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 withContext(Dispatchers.Main) { onProgress("📥 Ingesting media & extracting metadata...") }
-                
-                // OCR & Text Analysis
+
                 withContext(Dispatchers.Main) { onProgress("👁️ Running on-device OCR...") }
                 val sampleOcr = OcrResult(
                     fullText = "Instagram Reel Content | $url",
@@ -257,7 +281,9 @@ class MainActivity : ComponentActivity() {
             // Agentic Search: search web for live information if user asks technical query
             val searchResults = webValidator.searchDuckDuckGo("$techName $userText", maxResults = 2)
             val searchContext = if (searchResults.isNotEmpty()) {
-                searchResults.joinToString("\n") { "- ${it.title}: ${it.snippet}" }
+                searchResults.joinToString("\n") { resultItem ->
+                    "- ${resultItem.title}: ${resultItem.snippet}"
+                }
             } else ""
 
             val prompt = """
