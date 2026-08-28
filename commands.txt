@@ -1,0 +1,25 @@
+https://www.instagram.com/p/DcYt-CxDV54/?igsi=MTc1bHdkYncweTMzaA==
+
+
+
+    I am continuing work on the "Local-First Multimodal Instagram Tech Fact-Checker & Knowledge Agent" in E:\RANDOM_BS\Instagram.         
+                                                                                                                                          
+    Please read HANDOFF_NOTES.md and PROJECT_SPEC.md.                                                                                     
+    The core Python pipeline (ingest.py, transcribe.py, vision.py, research.py, verify.py, db.py, main.py) is 100% complete and verified  
+  on both Video Reels and Carousel Posts.                                                                                                 
+                                                                                                                                          
+    Session Rules to follow:                                                                                                              
+    1. Reply in caveman style, keep short.                                                                                                
+    2. Explain only if asked.                                                                                                             
+    3. Never assume — ask first, code only when 100% sure.                                                                                
+    4. Two phases always: Phase 1 (analyze/plan) -> Phase 2 (implement + verify).                                                         
+    5. Hardware limits: Windows, GTX 1650 4GB VRAM, 8GB RAM.                                                                              
+                                                                                                                                          
+    Let's proceed with creating the Streamlit Web UI (app.py) or starting the Native Android / GitHub packaging.   
+
+
+
+
+1st session: agy --conversation=1888e87d-4f04-4a15-996c-d31f9acdb9ad
+
+2nd session: agy --conversation=c3faae7d-d932-4fe9-aefc-5ac6ca72bc58

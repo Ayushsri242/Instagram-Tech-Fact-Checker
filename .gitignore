@@ -1,0 +1,19 @@
+venv/
+.env
+downloads/
+__pycache__/
+*.pyc
+*.db
+*.sqlite3
+*.mp3
+*.mp4
+*.wav
+
+# Android Ignores
+.gradle/
+build/
+android_app/build/
+android_app/app/build/
+android_app/.gradle/
+*.apk
+*.aab

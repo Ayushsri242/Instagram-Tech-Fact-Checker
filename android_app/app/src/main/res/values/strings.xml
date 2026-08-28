@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Tech Fact Checker</string>
+    <string name="title_home">Fact Checker</string>
+    <string name="title_history">Library</string>
+    <string name="title_result">Report</string>
+    <string name="title_chat">Ask AI</string>
+</resources>
