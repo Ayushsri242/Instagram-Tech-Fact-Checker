@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "Tech Fact Checker",
+    "slug": "tech-fact-checker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0F141C"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0F141C"
+      },
+      "package": "com.techfactchecker.mobile",
+      "intentFilters": [
+        {
+          "action": "SEND",
+          "category": "DEFAULT",
+          "data": {
+            "mimeType": "text/plain"
+          }
+        }
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

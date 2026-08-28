@@ -17,3 +17,9 @@ android_app/app/build/
 android_app/.gradle/
 *.apk
 *.aab
+
+# Node & Expo Ignores
+node_modules/
+mobile_app/node_modules/
+.expo/
+mobile_app/.expo/
