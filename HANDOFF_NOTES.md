@@ -44,7 +44,7 @@ The long-term goal is to deploy this system as a **Native Android Mobile App (Ko
    - `save_reel_and_verification(...)`, `get_reel(...)`, `list_all_reels()`, `save_chat_message(...)`, `get_chat_history(...)`.
 7. **[`main.py`](file:///E:/RANDOM_BS/Instagram/main.py)**: CLI pipeline runner (`python main.py <URL>`).
 8. **[`app.py`](file:///E:/RANDOM_BS/Instagram/app.py)**: Full Streamlit Web UI dashboard with live progress, media/slides viewer, verdict badges, and interactive chat.
-9. **[`android_app/`](file:///E:/RANDOM_BS/Instagram/android_app/)**: Complete Native Android project (Kotlin + Jetpack Compose + Material 3 + Room SQLite + Google ML Kit OCR). Supports Instagram `ACTION_SEND` Share Sheet receiver.
+9. **[`android_app/`](file:///E:/RANDOM_BS/Instagram/android_app/)**: Complete Native Android project (Kotlin + Jetpack Compose + Material 3 + Room SQLite + Google ML Kit OCR + Google MediaPipe On-Device LLaMA 3.2 / Gemma LLM Inference + Agentic RAG Search in Chat). Supports Instagram `ACTION_SEND` Share Sheet receiver.
 10. **[`.github/workflows/android_build.yml`](file:///E:/RANDOM_BS/Instagram/.github/workflows/android_build.yml)**: GitHub Actions cloud CI/CD workflow to build Android APK in the cloud with zero laptop RAM/CPU usage.
 
 ---
