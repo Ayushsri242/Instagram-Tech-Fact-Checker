@@ -193,6 +193,14 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // Native Engine Dependencies
+    implementation 'com.google.android.gms:play-services-mlkit-text-recognition:19.0.0'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'org.jsoup:jsoup:1.17.2'
+    implementation 'com.google.code.gson:gson:2.10.1'
+    implementation 'com.google.mediapipe:tasks-genai:0.10.14'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 }
 
 if (rnVersion < versionToNumber(0, 75, 0)) {

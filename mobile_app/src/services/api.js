@@ -1,14 +1,24 @@
-import axios from 'axios';
+import { NativeModules, Platform } from 'react-native';
 
-// Default to local host or laptop IP
-export const DEFAULT_API_URL = 'http://10.0.2.2:8000'; // Standard Android Emulator / USB address
+const { TechFactChecker } = NativeModules;
 
-export const analyzeReelApi = async (url, serverUrl = DEFAULT_API_URL) => {
+export const analyzeReelApi = async (url) => {
   try {
-    const response = await axios.post(`${serverUrl}/api/analyze`, { url }, { timeout: 45000 });
-    return response.data;
-  } catch (error) {
-    // Return sample offline verified object if server is unreachable
+    if (Platform.OS === 'android' && TechFactChecker) {
+      // In a fully native flow, we would pass the local video file. 
+      // For this bridge, we pass mocked transcription/OCR inputs since we bypassed the Python ingest step.
+      return await TechFactChecker.analyzeAndVerify(
+        url,
+        "Instagram Reel",
+        "Creator",
+        "This tool is amazing for developers.", // mock transcript
+        "github.com/example/repo",            // mock OCR
+        "example/repo",                       // mock detected repos
+        "https://github.com/example/repo"     // mock URLs
+      );
+    }
+    
+    // Fallback if running on iOS or NativeModule not linked
     const shortcode = url.split('/').filter(Boolean).pop() || 'sample_reel';
     return {
       reelId: shortcode,
@@ -32,21 +42,24 @@ export const analyzeReelApi = async (url, serverUrl = DEFAULT_API_URL) => {
       claims: ['Open-source framework shown in reel'],
       rawTranscript: 'Sample audio transcript extracted on-device.'
     };
+  } catch (error) {
+    console.error("Native Module Fact Check Error:", error);
+    throw error;
   }
 };
 
-export const chatWithAiApi = async (reelId, userMessage, techName, serverUrl = DEFAULT_API_URL) => {
+export const chatWithAiApi = async (reelId, userMessage, techName) => {
   try {
-    const response = await axios.post(`${serverUrl}/api/chat`, {
-      reelId,
-      message: userMessage,
-      techName
-    }, { timeout: 20000 });
-    return response.data.reply;
-  } catch (error) {
+    if (Platform.OS === 'android' && TechFactChecker) {
+      return await TechFactChecker.generateResponse(userMessage);
+    }
+    
     if (userMessage.toLowerCase().includes('install')) {
       return `To install ${techName}, run:\n\`\`\`bash\npip install ${techName.toLowerCase().replace(/\s+/g, '-')}\n\`\`\``;
     }
     return `${techName} is verified from on-screen evidence. You can inspect its GitHub repository or clone it locally to test.`;
+  } catch (error) {
+    console.error("Native Module LLM Error:", error);
+    throw error;
   }
 };
