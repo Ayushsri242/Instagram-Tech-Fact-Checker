@@ -56,13 +56,21 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 val outputName = "reel_${System.currentTimeMillis()}.mp4"
                 val outputPath = File(tempDir, outputName).absolutePath
 
-                // 1. Download Video
+                // 1. Initialize YoutubeDL if needed
+                try {
+                    YoutubeDL.getInstance().init(reactContext.applicationContext)
+                    FFmpeg.getInstance().init(reactContext.applicationContext)
+                } catch (e: Exception) {
+                    throw Exception("Init Failed: ${e.message}", e)
+                }
+
+                // 2. Download Video
                 val request = YoutubeDLRequest(url)
                 request.addOption("-o", outputPath)
                 request.addOption("-f", "best[ext=mp4]/best")
                 YoutubeDL.getInstance().execute(request, null)
 
-                // 2. Extract Frames & Run OCR
+                // 3. Extract Frames & Run OCR
                 val retriever = MediaMetadataRetriever()
                 retriever.setDataSource(outputPath)
                 
