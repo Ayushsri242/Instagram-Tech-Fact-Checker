@@ -5,17 +5,7 @@ const { TechFactChecker } = NativeModules;
 export const analyzeReelApi = async (url) => {
   try {
     if (Platform.OS === 'android' && TechFactChecker) {
-      // In a fully native flow, we would pass the local video file. 
-      // For this bridge, we pass mocked transcription/OCR inputs since we bypassed the Python ingest step.
-      return await TechFactChecker.analyzeAndVerify(
-        url,
-        "Instagram Reel",
-        "Creator",
-        "This tool is amazing for developers.", // mock transcript
-        "github.com/example/repo",            // mock OCR
-        "example/repo",                       // mock detected repos
-        "https://github.com/example/repo"     // mock URLs
-      );
+      return await TechFactChecker.analyzeAndVerify(url);
     }
     
     // Fallback if running on iOS or NativeModule not linked
