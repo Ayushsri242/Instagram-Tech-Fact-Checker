@@ -203,8 +203,8 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 
     // YoutubeDL Android
-    implementation 'com.github.yausername.youtubedl-android:library:0.17.0'
-    implementation 'com.github.yausername.youtubedl-android:ffmpeg:0.17.0'
+    implementation 'com.github.yausername.youtubedl-android:library:0.13.1'
+    implementation 'com.github.yausername.youtubedl-android:ffmpeg:0.13.1'
 }
 
 if (rnVersion < versionToNumber(0, 75, 0)) {
