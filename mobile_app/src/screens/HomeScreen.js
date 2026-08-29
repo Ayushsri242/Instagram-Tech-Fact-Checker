@@ -36,7 +36,7 @@ export default function HomeScreen({ navigation }) {
       navigation.navigate('Result', { reel: result });
     } catch (e) {
       setLoading(false);
-      alert('Analysis failed. Please check network/link.');
+      alert(`Analysis failed: ${e.message}`);
     }
   };
 
