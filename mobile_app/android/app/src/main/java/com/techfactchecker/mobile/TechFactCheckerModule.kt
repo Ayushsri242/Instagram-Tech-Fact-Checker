@@ -8,22 +8,33 @@ import com.techfactchecker.app.domain.FactCheckEngine
 import com.techfactchecker.app.domain.LocalLlamaEngine
 import com.techfactchecker.app.domain.OcrEngine
 import com.techfactchecker.app.domain.OcrResult
-import com.yausername.ffmpeg.FFmpeg
-import com.yausername.youtubedl_android.YoutubeDL
-import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.util.concurrent.TimeUnit
 
 class TechFactCheckerModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
     companion object {
         private const val TAG = "TFC_DEBUG"
+        // TODO: Replace with your Render URL after deployment
+        private const val VIDEO_SERVICE_URL = "https://tech-fact-checker-video.onrender.com/extract"
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val factCheckEngine = FactCheckEngine()
     private val llamaEngine = LocalLlamaEngine(reactContext)
     private val ocrEngine = OcrEngine()
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .build()
 
     override fun getName(): String {
         return "TechFactChecker"
@@ -57,49 +68,46 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
             try {
                 Log.e(TAG, "STEP 1: Starting analyzeAndVerify with url=$url")
 
-                val tempDir = File(reactContext.cacheDir, "yt_dlp_tmp")
-                tempDir.mkdirs()
+                // 1. Call Render service to get direct video URL
+                Log.e(TAG, "STEP 2: Calling video extraction service...")
+                val jsonBody = JSONObject().put("url", url).toString()
+                val requestBody = jsonBody.toRequestBody("application/json".toMediaType())
+                val extractRequest = Request.Builder()
+                    .url(VIDEO_SERVICE_URL)
+                    .post(requestBody)
+                    .build()
+
+                val extractResponse = httpClient.newCall(extractRequest).execute()
+                val responseBody = extractResponse.body?.string() ?: throw Exception("Empty response from video service")
+                Log.e(TAG, "STEP 2a: Service response: $responseBody")
                 
-                val outputName = "reel_${System.currentTimeMillis()}.mp4"
-                val outputPath = File(tempDir, outputName).absolutePath
-                Log.e(TAG, "STEP 2: Output path = $outputPath")
-
-                // 1. Initialize YoutubeDL
-                Log.e(TAG, "STEP 3: Initializing YoutubeDL...")
-                try {
-                    YoutubeDL.getInstance().init(reactContext.applicationContext)
-                    Log.e(TAG, "STEP 3a: YoutubeDL init OK")
-                } catch (e: Exception) {
-                    Log.e(TAG, "STEP 3a: YoutubeDL init exception (may be already init): ${e.javaClass.name}: ${e.message}")
-                    // Already initialized is OK, continue
+                val responseJson = JSONObject(responseBody)
+                if (responseJson.has("error")) {
+                    throw Exception("Video service error: ${responseJson.getString("error")}")
                 }
-                try {
-                    FFmpeg.getInstance().init(reactContext.applicationContext)
-                    Log.e(TAG, "STEP 3b: FFmpeg init OK")
-                } catch (e: Exception) {
-                    Log.e(TAG, "STEP 3b: FFmpeg init exception (may be already init): ${e.javaClass.name}: ${e.message}")
-                    // Already initialized is OK, continue
-                }
+                val videoUrl = responseJson.getString("video_url")
+                Log.e(TAG, "STEP 3: Got direct video URL (${videoUrl.take(80)}...)")
 
-                // 2. Download Video
-                Log.e(TAG, "STEP 4: Downloading video...")
-                val request = YoutubeDLRequest(url)
-                request.addOption("-o", outputPath)
-                request.addOption("-f", "best[ext=mp4]/best")
-                val response = YoutubeDL.getInstance().execute(request, null)
-                Log.e(TAG, "STEP 4 DONE: Download complete. Exit code=${response.exitCode}")
+                // 2. Download video to temp file
+                val tempDir = File(reactContext.cacheDir, "video_tmp")
+                tempDir.mkdirs()
+                val outputFile = File(tempDir, "reel_${System.currentTimeMillis()}.mp4")
 
-                val videoFile = File(outputPath)
-                Log.e(TAG, "STEP 5: Video file exists=${videoFile.exists()}, size=${videoFile.length()}")
+                Log.e(TAG, "STEP 4: Downloading video from CDN...")
+                val videoRequest = Request.Builder().url(videoUrl).build()
+                val videoResponse = httpClient.newCall(videoRequest).execute()
+                val videoBytes = videoResponse.body?.bytes() ?: throw Exception("Failed to download video")
+                FileOutputStream(outputFile).use { it.write(videoBytes) }
+                Log.e(TAG, "STEP 4 DONE: Downloaded ${videoBytes.size} bytes to ${outputFile.absolutePath}")
 
                 // 3. Extract Frames & Run OCR
-                Log.e(TAG, "STEP 6: Extracting frames...")
+                Log.e(TAG, "STEP 5: Extracting frames...")
                 val retriever = MediaMetadataRetriever()
-                retriever.setDataSource(outputPath)
+                retriever.setDataSource(outputFile.absolutePath)
                 
                 val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 val durationMs = durationStr?.toLongOrNull() ?: 0L
-                Log.e(TAG, "STEP 6a: Video duration = ${durationMs}ms")
+                Log.e(TAG, "STEP 5a: Video duration = ${durationMs}ms")
                 
                 val combinedText = StringBuilder()
                 val repos = mutableSetOf<String>()
@@ -108,19 +116,18 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 for (i in 1..4) {
                     val timeUs = (durationMs * 1000 * i) / 5
                     val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
-                    Log.e(TAG, "STEP 6b: Frame $i at ${timeUs}us, bitmap=${bitmap != null}")
+                    Log.e(TAG, "STEP 5b: Frame $i at ${timeUs}us, bitmap=${bitmap != null}")
                     if (bitmap != null) {
                         val ocrRes = ocrEngine.processImage(bitmap)
-                        Log.e(TAG, "STEP 6c: OCR frame $i text length=${ocrRes.fullText.length}")
+                        Log.e(TAG, "STEP 5c: OCR frame $i text length=${ocrRes.fullText.length}")
                         combinedText.append(ocrRes.fullText).append("\n")
                         repos.addAll(ocrRes.detectedRepos)
                         urls.addAll(ocrRes.detectedUrls)
                     }
                 }
                 retriever.release()
-                
-                File(outputPath).delete()
-                Log.e(TAG, "STEP 7: OCR complete. Combined text length=${combinedText.length}, repos=$repos")
+                outputFile.delete()
+                Log.e(TAG, "STEP 6: OCR complete. Combined text length=${combinedText.length}")
 
                 val finalOcr = OcrResult(
                     fullText = combinedText.toString(),
@@ -129,7 +136,8 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     detectedUrls = urls.toList()
                 )
                 
-                Log.e(TAG, "STEP 8: Running FactCheckEngine...")
+                // 4. Verify
+                Log.e(TAG, "STEP 7: Running FactCheckEngine...")
                 val result = factCheckEngine.analyzeAndVerify(
                     reelId = url.hashCode().toString(),
                     sourceUrl = url,
@@ -138,8 +146,9 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     rawTranscript = "Audio transcription bypassed for on-device limits. Relied on visual text.",
                     ocrResult = finalOcr
                 )
-                Log.e(TAG, "STEP 8 DONE: verdict=${result.verdict}, techName=${result.techName}")
+                Log.e(TAG, "STEP 7 DONE: verdict=${result.verdict}, techName=${result.techName}")
                 
+                // 5. Return to JS
                 val map = Arguments.createMap()
                 map.putString("reelId", result.reelId)
                 map.putString("sourceUrl", result.sourceUrl)
@@ -164,7 +173,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 }
                 map.putArray("tools", toolsArray)
                 
-                Log.e(TAG, "STEP 9: Resolving promise to JS")
+                Log.e(TAG, "STEP 8: Resolving promise to JS")
                 promise.resolve(map)
             } catch (e: Exception) {
                 Log.e(TAG, "FATAL CRASH: ${e.javaClass.name}: ${e.message}", e)
