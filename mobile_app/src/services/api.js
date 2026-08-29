@@ -50,9 +50,13 @@ export const analyzeReelApi = async (url) => {
 
 export const chatWithAiApi = async (reelId, userMessage, techName) => {
   try {
+    console.log("NativeModules keys:", Object.keys(NativeModules));
+    console.log("TechFactChecker exists?", !!TechFactChecker);
+    
     if (Platform.OS === 'android' && TechFactChecker) {
       return await TechFactChecker.generateResponse(userMessage);
     }
+
     
     if (userMessage.toLowerCase().includes('install')) {
       return `To install ${techName}, run:\n\`\`\`bash\npip install ${techName.toLowerCase().replace(/\s+/g, '-')}\n\`\`\``;

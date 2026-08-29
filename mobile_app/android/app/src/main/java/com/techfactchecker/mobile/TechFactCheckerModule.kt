@@ -22,6 +22,16 @@ class TechFactCheckerModule(reactContext: ReactApplicationContext) : ReactContex
     }
 
     @ReactMethod
+    fun reloadModel(promise: Promise) {
+        try {
+            llamaEngine.reloadModel()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("RELOAD_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
     fun generateResponse(prompt: String, promise: Promise) {
         scope.launch {
             try {
