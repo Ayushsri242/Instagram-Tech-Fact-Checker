@@ -47,6 +47,13 @@ class MainApplication : Application(), ReactApplication {
       load()
     }
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
+    
+    try {
+        com.yausername.youtubedl_android.YoutubeDL.getInstance().init(this)
+        com.yausername.ffmpeg.FFmpeg.getInstance().init(this)
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
   }
 
   override fun onConfigurationChanged(newConfig: Configuration) {
