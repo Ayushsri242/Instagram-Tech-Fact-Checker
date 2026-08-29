@@ -62,6 +62,18 @@ jobs:
         working-directory: mobile_app
         run: npm ci --legacy-peer-deps
 
+      - name: Patch expo-modules-core for Gradle 8.x debug builds
+        working-directory: mobile_app
+        run: |
+          PLUGIN="node_modules/expo-modules-core/android/ExpoModulesCorePlugin.gradle"
+          if [ -f "$PLUGIN" ]; then
+            sed -i 's/from components\.release/from(components.findByName("release") ?: components.findByName("debug"))/g' "$PLUGIN"
+            echo "Patched ExpoModulesCorePlugin.gradle"
+            grep -n "from(" "$PLUGIN" | head -5
+          else
+            echo "Plugin file not found, skipping patch"
+          fi
+
       - name: Resolve build type
         run: |
           if [ "${{ inputs.build_type }}" = "debug" ]; then
