@@ -1,0 +1,122 @@
+name: Build Debug APK (mobile_app)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Gradle build type"
+        type: choice
+        default: "debug"
+        options:
+          - debug
+          - release
+
+jobs:
+  build:
+    name: Build React Native APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          echo "--- before ---"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+                      /usr/local/share/boost /usr/share/swift \
+                      /usr/local/share/powershell /usr/local/lib/node_modules || true
+          sudo apt-get clean || true
+          echo "--- after ---"; df -h / | tail -1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: mobile_app/package-lock.json
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Restore Gradle cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('mobile_app/android/**/*.gradle*', 'mobile_app/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Install JS dependencies
+        working-directory: mobile_app
+        run: npm ci --legacy-peer-deps
+
+      - name: Resolve build type
+        run: |
+          if [ "${{ inputs.build_type }}" = "debug" ]; then
+            echo "GRADLE_TASK=assembleDebug" >> $GITHUB_ENV
+            echo "APK_DIR=mobile_app/android/app/build/outputs/apk/debug" >> $GITHUB_ENV
+          else
+            echo "GRADLE_TASK=assembleRelease" >> $GITHUB_ENV
+            echo "APK_DIR=mobile_app/android/app/build/outputs/apk/release" >> $GITHUB_ENV
+          fi
+
+      - name: Build APK
+        working-directory: mobile_app/android
+        run: ./gradlew $GRADLE_TASK --no-daemon --build-cache --stacktrace
+
+      - name: APK size info
+        run: |
+          APK=$(ls "$APK_DIR"/*.apk | head -1)
+          echo "BUILD_TYPE=${{ inputs.build_type }}"
+          ls -lh "$APK"
+
+      - name: Publish APK as GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(ls "$APK_DIR"/*.apk | head -1)
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: no APK found under $APK_DIR"; exit 1
+          fi
+          TAG="mobile-${{ inputs.build_type }}-${{ github.run_number }}"
+          NOTES=$(printf '%s\n' \
+            "build_type=${{ inputs.build_type }}" \
+            "branch=${{ github.ref_name }}" \
+            "commit=${{ github.sha }}" \
+            "" \
+            "Download: gh release download $TAG --repo ${{ github.repository }}")
+          gh release create "$TAG" "$APK" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Tech Fact Checker ${{ inputs.build_type }} #${{ github.run_number }}" \
+            --notes "$NOTES"
+          echo "Published $TAG -> $(basename "$APK")"
+
+      - name: Free disk before cache save
+        if: always()
+        run: |
+          df -h / | tail -1
+          rm -rf mobile_app/android/app/build/intermediates || true
+          df -h / | tail -1
+
+      - name: Save Gradle cache
+        uses: actions/cache/save@v4
+        if: always()
+        continue-on-error: true
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('mobile_app/android/**/*.gradle*', 'mobile_app/android/gradle/wrapper/gradle-wrapper.properties') }}
