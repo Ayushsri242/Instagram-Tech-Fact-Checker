@@ -19,15 +19,6 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     private val factCheckEngine = FactCheckEngine()
     private val llamaEngine = LocalLlamaEngine(reactContext)
     private val ocrEngine = OcrEngine()
-    
-    init {
-        try {
-            YoutubeDL.getInstance().init(reactContext)
-            FFmpeg.getInstance().init(reactContext)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
 
     override fun getName(): String {
         return "TechFactChecker"
