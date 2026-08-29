@@ -1,21 +1,33 @@
 package com.techfactchecker.mobile
 
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import com.facebook.react.bridge.*
 import com.techfactchecker.app.domain.FactCheckEngine
 import com.techfactchecker.app.domain.LocalLlamaEngine
 import com.techfactchecker.app.domain.OcrEngine
 import com.techfactchecker.app.domain.OcrResult
+import com.yausername.ffmpeg.FFmpeg
+import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.*
+import java.io.File
 
-class TechFactCheckerModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+class TechFactCheckerModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val factCheckEngine = FactCheckEngine()
     private val llamaEngine = LocalLlamaEngine(reactContext)
+    private val ocrEngine = OcrEngine()
     
-    // We mock OCR logic for URL-based direct calls since downloading MP4 in Kotlin isn't fully set up yet.
-    // The previous app passed local File URIs to OcrEngine.
-    // To make this fully offline without yt-dlp, we can accept video paths OR we can rely on React Native to pass text.
+    init {
+        try {
+            YoutubeDL.getInstance().init(reactContext)
+            FFmpeg.getInstance().init(reactContext)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
     override fun getName(): String {
         return "TechFactChecker"
@@ -44,28 +56,66 @@ class TechFactCheckerModule(reactContext: ReactApplicationContext) : ReactContex
     }
 
     @ReactMethod
-    fun analyzeAndVerify(url: String, title: String, author: String, rawTranscript: String, ocrText: String, detectedReposStr: String, detectedUrlsStr: String, promise: Promise) {
+    fun analyzeAndVerify(url: String, promise: Promise) {
         scope.launch {
             try {
-                val detectedRepos = detectedReposStr.split(",").filter { it.isNotBlank() }
-                val detectedUrls = detectedUrlsStr.split(",").filter { it.isNotBlank() }
+                val tempDir = File(reactContext.cacheDir, "yt_dlp_tmp")
+                tempDir.mkdirs()
                 
-                val ocrResult = OcrResult(
-                    fullText = ocrText,
+                val outputName = "reel_${System.currentTimeMillis()}.mp4"
+                val outputPath = File(tempDir, outputName).absolutePath
+
+                // 1. Download Video
+                val request = YoutubeDLRequest(url)
+                request.addOption("-o", outputPath)
+                request.addOption("-f", "best[ext=mp4]/best")
+                YoutubeDL.getInstance().execute(request, null)
+
+                // 2. Extract Frames & Run OCR
+                val retriever = MediaMetadataRetriever()
+                retriever.setDataSource(outputPath)
+                
+                val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                val durationMs = durationStr?.toLongOrNull() ?: 0L
+                
+                val combinedText = StringBuilder()
+                val repos = mutableSetOf<String>()
+                val urls = mutableSetOf<String>()
+                
+                // Extract 4 frames evenly spaced
+                for (i in 1..4) {
+                    val timeUs = (durationMs * 1000 * i) / 5
+                    val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                    if (bitmap != null) {
+                        val ocrRes = ocrEngine.processImage(bitmap)
+                        combinedText.append(ocrRes.fullText).append("\n")
+                        repos.addAll(ocrRes.detectedRepos)
+                        urls.addAll(ocrRes.detectedUrls)
+                    }
+                }
+                retriever.release()
+                
+                // Cleanup temp video
+                File(outputPath).delete()
+
+                val finalOcr = OcrResult(
+                    fullText = combinedText.toString(),
                     lines = emptyList(),
-                    detectedRepos = detectedRepos,
-                    detectedUrls = detectedUrls
+                    detectedRepos = repos.toList(),
+                    detectedUrls = urls.toList()
                 )
                 
+                // 3. Verify
                 val result = factCheckEngine.analyzeAndVerify(
                     reelId = url.hashCode().toString(),
                     sourceUrl = url,
-                    title = title,
-                    author = author,
-                    rawTranscript = rawTranscript,
-                    ocrResult = ocrResult
+                    title = "Instagram Reel",
+                    author = "Creator",
+                    rawTranscript = "Audio transcription bypassed for on-device limits. Relied on visual text.",
+                    ocrResult = finalOcr
                 )
                 
+                // 4. Return to JS
                 val map = Arguments.createMap()
                 map.putString("reelId", result.reelId)
                 map.putString("sourceUrl", result.sourceUrl)
