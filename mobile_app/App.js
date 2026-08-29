@@ -6,6 +6,7 @@ import HomeScreen from './src/screens/HomeScreen';
 import ResultScreen from './src/screens/ResultScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import ChatScreen from './src/screens/ChatScreen';
+import SettingsScreen from './src/screens/SettingsScreen';
 import { colors } from './src/theme/colors';
 
 const Stack = createNativeStackNavigator();
@@ -47,6 +48,11 @@ export default function App() {
           name="Chat"
           component={ChatScreen}
           options={{ title: 'Ask AI' }}
+        />
+        <Stack.Screen
+          name="Settings"
+          component={SettingsScreen}
+          options={{ title: 'Local Setup' }}
         />
       </Stack.Navigator>
     </NavigationContainer>
