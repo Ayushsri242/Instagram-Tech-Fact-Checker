@@ -44,9 +44,14 @@ export default function HomeScreen({ navigation }) {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.title}>Tech Fact Checker</Text>
-          <Text style={styles.subtitle}>100% Free • Local-First Micro-Agent</Text>
+        <View style={[styles.header, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
+          <View>
+            <Text style={styles.title}>Tech Fact Checker</Text>
+            <Text style={styles.subtitle}>100% Free • Local-First Micro-Agent</Text>
+          </View>
+          <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={{ padding: 8, backgroundColor: colors.surface, borderRadius: 8 }}>
+            <Text style={{ color: colors.primary, fontWeight: 'bold' }}>Setup</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Input Card */}
