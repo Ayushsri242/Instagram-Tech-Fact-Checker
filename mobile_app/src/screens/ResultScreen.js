@@ -60,7 +60,7 @@ export default function ResultScreen({ route, navigation }) {
 
           <TouchableOpacity
             style={[styles.actionButton, { backgroundColor: colors.accentCyan }]}
-            onPress={() => navigation.navigate('Chat', { reelId: reel.reelId, techName: reel.techName })}
+            onPress={() => navigation.navigate('Chat', { reel })}
           >
             <Text style={[styles.actionButtonText, { color: '#000' }]}>Ask AI</Text>
           </TouchableOpacity>

@@ -15,7 +15,9 @@ import { chatWithAiApi } from '../services/api';
 import { getChatHistory, saveChatMessage } from '../services/storage';
 
 export default function ChatScreen({ route, navigation }) {
-  const { reelId, techName } = route.params;
+  const { reel } = route.params;
+  const reelId = reel?.reelId || 'unknown';
+  const techName = reel?.techName || 'Unknown Tool';
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
