@@ -12,6 +12,8 @@ class LocalLlamaEngine(private val context: Context) {
     private var llmInference: LlmInference? = null
     private var isInitialized = false
 
+    private var initError: String? = null
+
     init {
         initModelAsync()
     }
@@ -28,9 +30,14 @@ class LocalLlamaEngine(private val context: Context) {
                     .build()
                 llmInference = LlmInference.createFromOptions(context, options)
                 isInitialized = true
+                initError = null
+            } else {
+                initError = "Model file not found in storage."
             }
         } catch (e: Exception) {
             isInitialized = false
+            initError = "${e.javaClass.simpleName}: ${e.message}"
+            Log.e("TFC_DEBUG", "MediaPipe Init Failed: $initError", e)
         }
     }
 
@@ -62,7 +69,7 @@ class LocalLlamaEngine(private val context: Context) {
                 throw Exception("MediaPipe Inference Crash: ${e.message}")
             }
         } else {
-            throw Exception("Local model is NOT ready! isInitialized=$isInitialized, llmInference is null=${llmInference == null}")
+            throw Exception("Local model is NOT ready! InitError: $initError")
         }
     }
 
