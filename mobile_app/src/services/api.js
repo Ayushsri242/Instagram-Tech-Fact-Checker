@@ -38,13 +38,22 @@ export const analyzeReelApi = async (url) => {
   }
 };
 
-export const chatWithAiApi = async (reelId, userMessage, techName) => {
+export const chatWithAiApi = async (reel, userMessage) => {
   try {
-    console.log("NativeModules keys:", Object.keys(NativeModules));
-    console.log("TechFactChecker exists?", !!TechFactChecker);
+    const techName = reel.techName || "Unknown Tool";
     
     if (Platform.OS === 'android' && TechFactChecker) {
-      return await TechFactChecker.generateResponse(userMessage);
+      // Secretly inject context about the reel so the LLM acts as an expert
+      const injectedPrompt = `You are a strict, helpful Fact-Checking AI assistant. You just analyzed a video about ${techName}.
+Here are the findings from the video analysis:
+- Verdict: ${reel.verdict}
+- Summary: ${reel.summaryMarkdown}
+- Detected Tools: ${JSON.stringify(reel.tools.map(t => t.name))}
+
+Answer the user's question concisely based on this evidence.
+User's Question: ${userMessage}`;
+
+      return await TechFactChecker.generateResponse(injectedPrompt);
     }
 
     
