@@ -57,7 +57,7 @@ export default function ChatScreen({ route, navigation }) {
     await saveChatMessage(reelId, userMsg);
 
     try {
-      const replyText = await chatWithAiApi(reelId, textToSend, techName);
+      const replyText = await chatWithAiApi(reel, textToSend);
       const aiMsg = {
         id: (Date.now() + 1).toString(),
         sender: 'assistant',
