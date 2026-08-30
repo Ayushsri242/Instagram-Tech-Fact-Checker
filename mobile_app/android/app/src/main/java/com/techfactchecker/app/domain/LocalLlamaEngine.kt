@@ -2,6 +2,7 @@ package com.techfactchecker.app.domain
 
 import android.content.Context
 import android.os.Environment
+import android.util.Log
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
