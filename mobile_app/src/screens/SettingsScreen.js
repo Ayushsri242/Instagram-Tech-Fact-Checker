@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, NativeModules, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import { colors } from '../theme/colors';
 
@@ -11,11 +11,10 @@ export default function SettingsScreen() {
   // Define exactly where the native Kotlin engine expects it.
   // Note: FileSystem.documentDirectory ends with a slash.
   const modelDir = `${FileSystem.documentDirectory}models/`;
-  const modelPath = `${modelDir}llama-3.2-1b.bin`;
+  const modelPath = `${modelDir}gemma-2b-it-gpu-int4.bin`;
   
-  // Use a reliable model download URL (HuggingFace direct link)
-  // For safety and speed in this demo, we'll point to a quantized 1.3B or 1B model bin file if available.
-  const DOWNLOAD_URL = "https://huggingface.co/karpathy/tinyllamas/resolve/main/stories15M.bin"; // Example 60MB model for testing, change to real 2GB model in prod.
+  // Direct download link from Hugging Face Dataset
+  const DOWNLOAD_URL = "https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/gemma-2b-it-gpu-int4.bin";
 
   useEffect(() => {
     checkModel();
@@ -53,6 +52,11 @@ export default function SettingsScreen() {
       const { uri } = await downloadResumable.downloadAsync();
       console.log('Finished downloading to ', uri);
       setModelExists(true);
+      
+      // Tell native Kotlin engine to reload the model now that we have it
+      if (Platform.OS === 'android' && NativeModules.TechFactChecker) {
+        await NativeModules.TechFactChecker.reloadModel();
+      }
     } catch (e) {
       console.error(e);
       alert('Download failed');
