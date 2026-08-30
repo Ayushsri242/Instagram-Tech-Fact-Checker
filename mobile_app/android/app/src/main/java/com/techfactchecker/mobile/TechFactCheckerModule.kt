@@ -1,5 +1,6 @@
 package com.techfactchecker.mobile
 
+import android.graphics.BitmapFactory
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.util.Log
@@ -22,7 +23,6 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
 
     companion object {
         private const val TAG = "TFC_DEBUG"
-        // TODO: Replace with your Render URL after deployment
         private const val VIDEO_SERVICE_URL = "https://instagram-tech-fact-checker.onrender.com/extract"
     }
 
@@ -68,7 +68,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
             try {
                 Log.e(TAG, "STEP 1: Starting analyzeAndVerify with url=$url")
 
-                // 1. Call Render service to get direct video URL
+                // 1. Call Render service to get media info
                 Log.e(TAG, "STEP 2: Calling video extraction service...")
                 val jsonBody = JSONObject().put("url", url).toString()
                 val requestBody = jsonBody.toRequestBody("application/json".toMediaType())
@@ -79,55 +79,85 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
 
                 val extractResponse = httpClient.newCall(extractRequest).execute()
                 val responseBody = extractResponse.body?.string() ?: throw Exception("Empty response from video service")
-                Log.e(TAG, "STEP 2a: Service response: $responseBody")
+                Log.e(TAG, "STEP 2a: Service response: ${responseBody.take(200)}")
                 
                 val responseJson = JSONObject(responseBody)
                 if (responseJson.has("error")) {
                     throw Exception("Video service error: ${responseJson.getString("error")}")
                 }
-                val videoUrl = responseJson.getString("video_url")
-                Log.e(TAG, "STEP 3: Got direct video URL (${videoUrl.take(80)}...)")
 
-                // 2. Download video to temp file
-                val tempDir = File(reactContext.cacheDir, "video_tmp")
-                tempDir.mkdirs()
-                val outputFile = File(tempDir, "reel_${System.currentTimeMillis()}.mp4")
+                val mediaType = responseJson.optString("type", "video")
+                Log.e(TAG, "STEP 3: Media type = $mediaType")
 
-                Log.e(TAG, "STEP 4: Downloading video from CDN...")
-                val videoRequest = Request.Builder().url(videoUrl).build()
-                val videoResponse = httpClient.newCall(videoRequest).execute()
-                val videoBytes = videoResponse.body?.bytes() ?: throw Exception("Failed to download video")
-                FileOutputStream(outputFile).use { it.write(videoBytes) }
-                Log.e(TAG, "STEP 4 DONE: Downloaded ${videoBytes.size} bytes to ${outputFile.absolutePath}")
-
-                // 3. Extract Frames & Run OCR
-                Log.e(TAG, "STEP 5: Extracting frames...")
-                val retriever = MediaMetadataRetriever()
-                retriever.setDataSource(outputFile.absolutePath)
-                
-                val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                val durationMs = durationStr?.toLongOrNull() ?: 0L
-                Log.e(TAG, "STEP 5a: Video duration = ${durationMs}ms")
-                
                 val combinedText = StringBuilder()
                 val repos = mutableSetOf<String>()
                 val urls = mutableSetOf<String>()
-                
-                for (i in 1..4) {
-                    val timeUs = (durationMs * 1000 * i) / 5
-                    val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
-                    Log.e(TAG, "STEP 5b: Frame $i at ${timeUs}us, bitmap=${bitmap != null}")
-                    if (bitmap != null) {
-                        val ocrRes = ocrEngine.processImage(bitmap)
-                        Log.e(TAG, "STEP 5c: OCR frame $i text length=${ocrRes.fullText.length}")
-                        combinedText.append(ocrRes.fullText).append("\n")
-                        repos.addAll(ocrRes.detectedRepos)
-                        urls.addAll(ocrRes.detectedUrls)
+                var author = "Creator"
+                var caption = ""
+
+                if (mediaType == "image") {
+                    // Handle image/carousel post
+                    author = responseJson.optString("author", "Creator")
+                    caption = responseJson.optString("caption", "")
+                    combinedText.append(caption).append("\n")
+                    
+                    val imageUrls = responseJson.getJSONArray("image_urls")
+                    Log.e(TAG, "STEP 4: Downloading ${imageUrls.length()} images for OCR...")
+                    
+                    for (i in 0 until imageUrls.length()) {
+                        val imgUrl = imageUrls.getString(i)
+                        val imgRequest = Request.Builder().url(imgUrl).build()
+                        val imgResponse = httpClient.newCall(imgRequest).execute()
+                        val imgBytes = imgResponse.body?.bytes()
+                        if (imgBytes != null) {
+                            val bitmap = BitmapFactory.decodeByteArray(imgBytes, 0, imgBytes.size)
+                            if (bitmap != null) {
+                                val ocrRes = ocrEngine.processImage(bitmap)
+                                Log.e(TAG, "STEP 4a: OCR image $i text length=${ocrRes.fullText.length}")
+                                combinedText.append(ocrRes.fullText).append("\n")
+                                repos.addAll(ocrRes.detectedRepos)
+                                urls.addAll(ocrRes.detectedUrls)
+                            }
+                        }
                     }
+                } else {
+                    // Handle video/reel
+                    val videoUrl = responseJson.getString("video_url")
+                    Log.e(TAG, "STEP 4: Got direct video URL, downloading...")
+                    
+                    val tempDir = File(reactContext.cacheDir, "video_tmp")
+                    tempDir.mkdirs()
+                    val outputFile = File(tempDir, "reel_${System.currentTimeMillis()}.mp4")
+
+                    val videoRequest = Request.Builder().url(videoUrl).build()
+                    val videoResponse = httpClient.newCall(videoRequest).execute()
+                    val videoBytes = videoResponse.body?.bytes() ?: throw Exception("Failed to download video")
+                    FileOutputStream(outputFile).use { it.write(videoBytes) }
+                    Log.e(TAG, "STEP 4a: Downloaded ${videoBytes.size} bytes")
+
+                    val retriever = MediaMetadataRetriever()
+                    retriever.setDataSource(outputFile.absolutePath)
+                    
+                    val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    val durationMs = durationStr?.toLongOrNull() ?: 0L
+                    Log.e(TAG, "STEP 4b: Video duration = ${durationMs}ms")
+                    
+                    for (i in 1..4) {
+                        val timeUs = (durationMs * 1000 * i) / 5
+                        val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                        if (bitmap != null) {
+                            val ocrRes = ocrEngine.processImage(bitmap)
+                            Log.e(TAG, "STEP 4c: OCR frame $i text length=${ocrRes.fullText.length}")
+                            combinedText.append(ocrRes.fullText).append("\n")
+                            repos.addAll(ocrRes.detectedRepos)
+                            urls.addAll(ocrRes.detectedUrls)
+                        }
+                    }
+                    retriever.release()
+                    outputFile.delete()
                 }
-                retriever.release()
-                outputFile.delete()
-                Log.e(TAG, "STEP 6: OCR complete. Combined text length=${combinedText.length}")
+
+                Log.e(TAG, "STEP 5: OCR complete. Combined text length=${combinedText.length}")
 
                 val finalOcr = OcrResult(
                     fullText = combinedText.toString(),
@@ -136,19 +166,19 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     detectedUrls = urls.toList()
                 )
                 
-                // 4. Verify
-                Log.e(TAG, "STEP 7: Running FactCheckEngine...")
+                // Verify
+                Log.e(TAG, "STEP 6: Running FactCheckEngine...")
                 val result = factCheckEngine.analyzeAndVerify(
                     reelId = url.hashCode().toString(),
                     sourceUrl = url,
-                    title = "Instagram Reel",
-                    author = "Creator",
-                    rawTranscript = "Audio transcription bypassed for on-device limits. Relied on visual text.",
+                    title = "Instagram Post",
+                    author = author,
+                    rawTranscript = if (caption.isNotEmpty()) caption else "Visual text extracted via on-device OCR.",
                     ocrResult = finalOcr
                 )
-                Log.e(TAG, "STEP 7 DONE: verdict=${result.verdict}, techName=${result.techName}")
+                Log.e(TAG, "STEP 6 DONE: verdict=${result.verdict}, techName=${result.techName}")
                 
-                // 5. Return to JS
+                // Return to JS
                 val map = Arguments.createMap()
                 map.putString("reelId", result.reelId)
                 map.putString("sourceUrl", result.sourceUrl)
@@ -173,7 +203,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 }
                 map.putArray("tools", toolsArray)
                 
-                Log.e(TAG, "STEP 8: Resolving promise to JS")
+                Log.e(TAG, "STEP 7: Resolving promise to JS")
                 promise.resolve(map)
             } catch (e: Exception) {
                 Log.e(TAG, "FATAL CRASH: ${e.javaClass.name}: ${e.message}", e)
