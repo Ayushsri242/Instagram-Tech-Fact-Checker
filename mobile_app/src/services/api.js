@@ -57,14 +57,18 @@ export const chatWithAiApi = async (reel, userMessage) => {
     console.log(`[API] User Message: ${userMessage}`);
     
     if (Platform.OS === 'android' && TechFactChecker) {
-      const injectedPrompt = `You are a strict, helpful Fact-Checking AI assistant. You just analyzed a video about ${techName}.
+      // Format specifically for Gemma instruction-tuned (it) models
+      const injectedPrompt = `<start_of_turn>user
+You are a strict, helpful Fact-Checking AI assistant. You just analyzed a video about ${techName}.
 Here are the findings from the video analysis:
 - Verdict: ${reel.verdict}
 - Summary: ${reel.summaryMarkdown}
 - Detected Tools: ${JSON.stringify(reel.tools.map(t => t.name))}
 
-Answer the user's question concisely based on this evidence.
-User's Question: ${userMessage}`;
+Answer the user's question concisely based on this evidence. Do not write a prompt, just provide the answer.
+User's Question: ${userMessage}<end_of_turn>
+<start_of_turn>model
+`;
 
       console.log(`[API] Sent Prompt to Native MediaPipe Model (length: ${injectedPrompt.length})`);
       const response = await TechFactChecker.generateResponse(injectedPrompt);
