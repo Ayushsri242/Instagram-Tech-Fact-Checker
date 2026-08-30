@@ -56,12 +56,13 @@ class LocalLlamaEngine(private val context: Context) {
     suspend fun generateResponse(prompt: String): String = withContext(Dispatchers.Default) {
         if (isLocalModelReady()) {
             try {
-                return@withContext llmInference?.generateResponse(prompt) ?: fallbackGenerate(prompt)
+                return@withContext llmInference?.generateResponse(prompt) 
+                    ?: throw Exception("llmInference object is null but isLocalModelReady returned true!")
             } catch (e: Exception) {
-                return@withContext fallbackGenerate(prompt)
+                throw Exception("MediaPipe Inference Crash: ${e.message}")
             }
         } else {
-            return@withContext fallbackGenerate(prompt)
+            throw Exception("Local model is NOT ready! isInitialized=$isInitialized, llmInference is null=${llmInference == null}")
         }
     }
 
