@@ -17,7 +17,8 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         title: String,
         author: String,
         rawTranscript: String,
-        ocrResult: OcrResult
+        ocrResult: OcrResult,
+        llamaEngine: LocalLlamaEngine? = null
     ): FactCheckResult = withContext(Dispatchers.Default) {
         val evidenceList = mutableListOf<EvidenceSource>()
         val verifiedTools = mutableListOf<ToolClaim>()
@@ -48,26 +49,41 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             }
         }
 
-        // 3. Determine overall verdict
-        val verdict = when {
+        // 3. Determine default values
+        var verdict = when {
             verifiedTools.size >= 3 -> Verdict.TRUE
             verifiedTools.isNotEmpty() -> Verdict.PARTIALLY_TRUE
             evidenceList.isNotEmpty() -> Verdict.PARTIALLY_TRUE
             rawTranscript.contains("open knowledge format", ignoreCase = true) -> Verdict.HYPE
             else -> Verdict.PARTIALLY_TRUE
         }
-
-        val primaryTech = if (verifiedTools.size > 1) "${verifiedTools.size} Tech Libraries"
+        var primaryTech = if (verifiedTools.size > 1) "${verifiedTools.size} Tech Libraries"
         else verifiedTools.firstOrNull()?.name ?: "Tech Tool"
+        var summaryMarkdown = buildMarkdownReport(primaryTech, verdict, verifiedTools, evidenceList, rawTranscript, ocrResult.fullText)
 
-        val summaryMarkdown = buildMarkdownReport(
-            techName = primaryTech,
-            verdict = verdict,
-            verifiedTools = verifiedTools,
-            evidence = evidenceList,
-            transcript = rawTranscript,
-            ocrText = ocrResult.fullText
-        )
+        // 4. SMART Fact-Check via Local AI
+        if (llamaEngine != null && llamaEngine.isLocalModelReady()) {
+            try {
+                val llmPrompt = "<start_of_turn>user\nYou are an expert tech analyzer. Read this text extracted from a video/image:\n\nOCR TEXT:\n" + ocrResult.fullText.take(500) + "\n\nCAPTION:\n" + rawTranscript.take(500) + "\n\nBased ONLY on the text above, identify the main technology being discussed. Keep the name under 3 words. Then provide a 3-sentence summary of what the video is claiming about this technology. Format your response exactly like this:\nTECH_NAME: [name]\nSUMMARY: [summary]\n<end_of_turn>\n<start_of_turn>model\n"
+                
+                val aiResponse = llamaEngine.generateResponse(llmPrompt)
+                
+                if (aiResponse.contains("TECH_NAME:")) {
+                    val lines = aiResponse.split("\n")
+                    val parsedTechName = lines.find { it.startsWith("TECH_NAME:") }?.substringAfter("TECH_NAME:")?.trim()
+                    val parsedSummary = lines.find { it.startsWith("SUMMARY:") }?.substringAfter("SUMMARY:")?.trim()
+                    
+                    if (!parsedTechName.isNullOrBlank() && parsedTechName != "None" && parsedTechName != "[name]") {
+                        primaryTech = parsedTechName
+                    }
+                    if (!parsedSummary.isNullOrBlank() && parsedSummary != "[summary]") {
+                        summaryMarkdown = "### dY\"S AI Analysis\n$parsedSummary\n\n" + summaryMarkdown
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore and fallback to dumb extraction
+            }
+        }
 
         return@withContext FactCheckResult(
             reelId = reelId,
