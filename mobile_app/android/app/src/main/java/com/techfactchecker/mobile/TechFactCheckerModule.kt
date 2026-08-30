@@ -174,7 +174,8 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     title = "Instagram Post",
                     author = author,
                     rawTranscript = if (caption.isNotEmpty()) caption else "Visual text extracted via on-device OCR.",
-                    ocrResult = finalOcr
+                    ocrResult = finalOcr,
+                    llamaEngine = llamaEngine
                 )
                 Log.e(TAG, "STEP 6 DONE: verdict=${result.verdict}, techName=${result.techName}")
                 
