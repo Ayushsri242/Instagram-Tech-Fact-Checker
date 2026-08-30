@@ -11,10 +11,10 @@ export default function SettingsScreen() {
   // Define exactly where the native Kotlin engine expects it.
   // Note: FileSystem.documentDirectory ends with a slash.
   const modelDir = `${FileSystem.documentDirectory}models/`;
-  const modelPath = `${modelDir}gemma-2b-it-gpu-int4.bin`;
+  const modelPath = `${modelDir}gemma-2b-it-cpu-int4.bin`;
   
-  // Direct download link from Hugging Face Dataset
-  const DOWNLOAD_URL = "https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/gemma-2b-it-gpu-int4.bin";
+  // Direct download link from Hugging Face Dataset (CPU version)
+  const DOWNLOAD_URL = "https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/gemma-2b-it-cpu-int4.bin";
 
   useEffect(() => {
     checkModel();

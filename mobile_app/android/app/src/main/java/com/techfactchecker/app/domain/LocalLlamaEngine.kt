@@ -54,7 +54,7 @@ class LocalLlamaEngine(private val context: Context) {
             File(downloadDir, "models/llama-3.2-1b-instruct-int8.bin"),
             File(downloadDir, "models/gemma-2b-it-cpu-int4.bin"),
             File(downloadDir, "llama-3.2-1b.bin"),
-            File(context.filesDir, "models/gemma-2b-it-gpu-int4.bin")
+            File(context.filesDir, "models/gemma-2b-it-cpu-int4.bin")
         )
         return candidatePaths.find { it.exists() && it.length() > 50_000_000 }
     }
