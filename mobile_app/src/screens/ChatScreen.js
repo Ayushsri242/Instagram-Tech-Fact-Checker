@@ -66,10 +66,11 @@ export default function ChatScreen({ route, navigation }) {
       setMessages((prev) => [...prev, aiMsg]);
       await saveChatMessage(reelId, aiMsg);
     } catch (e) {
+      console.error("[ChatScreen] LLM Error:", e);
       const errorMsg = {
         id: (Date.now() + 1).toString(),
         sender: 'assistant',
-        text: 'Failed to generate answer. Please retry.',
+        text: `⚠️ LLM Error: ${e.message}`,
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
