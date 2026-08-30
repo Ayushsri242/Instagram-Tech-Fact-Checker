@@ -23,7 +23,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     companion object {
         private const val TAG = "TFC_DEBUG"
         // TODO: Replace with your Render URL after deployment
-        private const val VIDEO_SERVICE_URL = "https://tech-fact-checker-video.onrender.com/extract"
+        private const val VIDEO_SERVICE_URL = "https://instagram-tech-fact-checker.onrender.com/extract"
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
