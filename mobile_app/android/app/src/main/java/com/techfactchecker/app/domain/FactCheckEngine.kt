@@ -43,12 +43,15 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             }
         }
 
-        // 2. Search web for any unverified tools if needed
-        if (verifiedTools.isEmpty() && ocrResult.detectedUrls.isNotEmpty()) {
-            for (url in ocrResult.detectedUrls.take(2)) {
-                val results = webValidator.searchDuckDuckGo(url, maxResults = 2)
+        // 2. Search readable OCR/caption text, not raw OCR URLs.
+        if (verifiedTools.isEmpty()) {
+            val query = buildSearchQuery(ocrResult.fullText, rawTranscript)
+            if (query.isNotBlank()) {
+                val results = webValidator.searchDuckDuckGo(query, maxResults = 5)
                 evidenceList.addAll(results)
-                Log.i("TFC_DEBUG", "FACT_CHECK web: query=$url, results=${results.size}")
+                Log.i("TFC_DEBUG", "FACT_CHECK web: query=$query, results=${results.size}")
+            } else {
+                Log.w("TFC_DEBUG", "FACT_CHECK web skipped: no readable query text")
             }
         }
 
@@ -58,30 +61,39 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             verifiedTools.isNotEmpty() -> Verdict.PARTIALLY_TRUE
             evidenceList.isNotEmpty() -> Verdict.PARTIALLY_TRUE
             rawTranscript.contains("open knowledge format", ignoreCase = true) -> Verdict.HYPE
-            else -> Verdict.PARTIALLY_TRUE
+            else -> Verdict.UNKNOWN
         }
         var primaryTech = if (verifiedTools.size > 1) "${verifiedTools.size} Tech Libraries"
-        else verifiedTools.firstOrNull()?.name ?: "Tech Tool"
+        else verifiedTools.firstOrNull()?.name ?: "Unknown Technology"
         var summaryMarkdown = buildMarkdownReport(primaryTech, verdict, verifiedTools, evidenceList, rawTranscript, ocrResult.fullText)
+        var aiSummary = ""
 
         // 4. SMART Fact-Check via Local AI
         if (llamaEngine != null && llamaEngine.isLocalModelReady()) {
             try {
                 Log.i("TFC_DEBUG", "FACT_CHECK LLM: generating local summary")
-                val llmPrompt = "<start_of_turn>user\nYou are an expert tech analyzer. Read this text extracted from a video/image:\n\nOCR TEXT:\n" + ocrResult.fullText.take(500) + "\n\nCAPTION:\n" + rawTranscript.take(500) + "\n\nBased ONLY on the text above, identify the main technology being discussed. Keep the name under 3 words. Then provide a 3-sentence summary of what the video is claiming about this technology. Format your response exactly like this:\nTECH_NAME: [name]\nSUMMARY: [summary]\n<end_of_turn>\n<start_of_turn>model\n"
+                val evidenceText = evidenceList.take(5).joinToString("\n") { "- ${it.title}: ${it.snippet}" }
+                val llmPrompt = "<start_of_turn>user\nYou are a precise technology fact-check assistant. Compare the source claims with the supplied web evidence. Use ONLY supplied text. Never invent facts. If evidence is insufficient, verdict must be UNKNOWN. Return exactly three lines, no markdown or extra text:\nTECH_NAME: <name, max 4 words>\nVERDICT: <TRUE, PARTIALLY_TRUE, HYPE, MISLEADING, FAKE, or UNKNOWN>\nSUMMARY: <2-3 short sentences explaining the comparison and uncertainty>\n\nOCR TEXT:\n" + ocrResult.fullText.take(1200) + "\n\nCAPTION:\n" + rawTranscript.take(800) + "\n\nWEB EVIDENCE:\n" + evidenceText.take(1800) + "\n<end_of_turn>\n<start_of_turn>model\n"
                 
                 val aiResponse = llamaEngine.generateResponse(llmPrompt)
                 
-                if (aiResponse.contains("TECH_NAME:")) {
-                    val lines = aiResponse.split("\n")
-                    val parsedTechName = lines.find { it.startsWith("TECH_NAME:") }?.substringAfter("TECH_NAME:")?.trim()
-                    val parsedSummary = lines.find { it.startsWith("SUMMARY:") }?.substringAfter("SUMMARY:")?.trim()
+                if (aiResponse.isNotBlank()) {
+                    val lines = aiResponse.lines()
+                    val parsedTechName = lines.find { it.trim().startsWith("TECH_NAME:", ignoreCase = true) }
+                        ?.substringAfter(":")?.trim()?.takeIf { it.isNotBlank() }
+                    val parsedSummary = lines.find { it.trim().startsWith("SUMMARY:", ignoreCase = true) }
+                        ?.substringAfter(":")?.trim()?.takeIf { it.isNotBlank() }
+                    val parsedVerdict = lines.find { it.trim().startsWith("VERDICT:", ignoreCase = true) }
+                        ?.substringAfter(":")?.trim()?.let { Verdict.fromString(it) }
                     
-                    if (!parsedTechName.isNullOrBlank() && parsedTechName != "None" && parsedTechName != "[name]") {
+                    if (!parsedTechName.isNullOrBlank() && !parsedTechName.equals("None", true) && !parsedTechName.equals("[name]", true)) {
                         primaryTech = parsedTechName
                     }
-                    if (!parsedSummary.isNullOrBlank() && parsedSummary != "[summary]") {
-                        summaryMarkdown = "### dY\"S AI Analysis\n$parsedSummary\n\n" + summaryMarkdown
+                    if (!parsedSummary.isNullOrBlank() && !parsedSummary.equals("[summary]", true)) {
+                        aiSummary = parsedSummary
+                    }
+                    if (parsedVerdict != null && parsedVerdict != Verdict.UNKNOWN) {
+                        verdict = parsedVerdict
                     }
                 }
                 Log.i("TFC_DEBUG", "FACT_CHECK LLM: responseChars=${aiResponse.length}")
@@ -91,6 +103,8 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         } else {
             Log.w("TFC_DEBUG", "FACT_CHECK LLM skipped: local model not ready")
         }
+        summaryMarkdown = buildMarkdownReport(primaryTech, verdict, verifiedTools, evidenceList, rawTranscript, ocrResult.fullText)
+        if (aiSummary.isNotBlank()) summaryMarkdown = "### AI Analysis\n$aiSummary\n\n$summaryMarkdown"
 
         return@withContext FactCheckResult(
             reelId = reelId,
@@ -101,7 +115,7 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             verdict = verdict,
             pricingModel = if (verifiedTools.isNotEmpty()) "Open Source" else "Unknown",
             githubUrl = verifiedTools.firstOrNull()?.let { "https://github.com/${it.githubRepo}" },
-            factualReality = "Verified ${verifiedTools.size} live repositories from on-screen frames and transcript.",
+            factualReality = if (verifiedTools.isNotEmpty()) "Verified ${verifiedTools.size} live repositories from on-screen frames and transcript." else "No live repository was verified from the supplied evidence.",
             summaryMarkdown = summaryMarkdown,
             tools = verifiedTools,
             claims = verifiedTools.map { it.claim },
@@ -109,6 +123,15 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             rawTranscript = rawTranscript,
             ocrText = ocrResult.fullText
         )
+    }
+
+    private fun buildSearchQuery(ocrText: String, transcript: String): String {
+        return ("$transcript $ocrText")
+            .replace(Regex("https?://\\S+|www\\.\\S+", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("[^A-Za-z0-9+#._ -]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(240)
     }
 
     private fun buildMarkdownReport(
