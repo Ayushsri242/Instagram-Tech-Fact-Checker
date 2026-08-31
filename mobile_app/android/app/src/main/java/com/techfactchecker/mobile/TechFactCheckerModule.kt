@@ -79,7 +79,8 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
 
                 val extractResponse = httpClient.newCall(extractRequest).execute()
                 val responseBody = extractResponse.body?.string() ?: throw Exception("Empty response from video service")
-                Log.e(TAG, "STEP 2a: Service response: ${responseBody.take(200)}")
+                Log.i(TAG, "STEP 2a: Service HTTP=${extractResponse.code}, responseBytes=${responseBody.length}")
+                Log.d(TAG, "STEP 2b: Service response preview=${responseBody.take(200)}")
                 
                 val responseJson = JSONObject(responseBody)
                 if (responseJson.has("error")) {
@@ -102,18 +103,19 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     combinedText.append(caption).append("\n")
                     
                     val imageUrls = responseJson.getJSONArray("image_urls")
-                    Log.e(TAG, "STEP 4: Downloading ${imageUrls.length()} images for OCR...")
+                    Log.i(TAG, "STEP 4: Downloading ${imageUrls.length()} images for OCR")
                     
                     for (i in 0 until imageUrls.length()) {
                         val imgUrl = imageUrls.getString(i)
                         val imgRequest = Request.Builder().url(imgUrl).build()
                         val imgResponse = httpClient.newCall(imgRequest).execute()
                         val imgBytes = imgResponse.body?.bytes()
+                        Log.i(TAG, "STEP 4a: Image $i HTTP=${imgResponse.code}, bytes=${imgBytes?.size ?: 0}")
                         if (imgBytes != null) {
                             val bitmap = BitmapFactory.decodeByteArray(imgBytes, 0, imgBytes.size)
                             if (bitmap != null) {
                                 val ocrRes = ocrEngine.processImage(bitmap)
-                                Log.e(TAG, "STEP 4a: OCR image $i text length=${ocrRes.fullText.length}")
+                                Log.i(TAG, "STEP 4b: OCR image $i textLength=${ocrRes.fullText.length}, repos=${ocrRes.detectedRepos.size}, urls=${ocrRes.detectedUrls.size}")
                                 combinedText.append(ocrRes.fullText).append("\n")
                                 repos.addAll(ocrRes.detectedRepos)
                                 urls.addAll(ocrRes.detectedUrls)
@@ -132,8 +134,8 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     val videoRequest = Request.Builder().url(videoUrl).build()
                     val videoResponse = httpClient.newCall(videoRequest).execute()
                     val videoBytes = videoResponse.body?.bytes() ?: throw Exception("Failed to download video")
+                    Log.i(TAG, "STEP 4a: Video HTTP=${videoResponse.code}, bytes=${videoBytes.size}")
                     FileOutputStream(outputFile).use { it.write(videoBytes) }
-                    Log.e(TAG, "STEP 4a: Downloaded ${videoBytes.size} bytes")
 
                     val retriever = MediaMetadataRetriever()
                     retriever.setDataSource(outputFile.absolutePath)
@@ -142,22 +144,25 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     val durationMs = durationStr?.toLongOrNull() ?: 0L
                     Log.e(TAG, "STEP 4b: Video duration = ${durationMs}ms")
                     
+                    var framesProcessed = 0
                     for (i in 1..4) {
                         val timeUs = (durationMs * 1000 * i) / 5
                         val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
                         if (bitmap != null) {
                             val ocrRes = ocrEngine.processImage(bitmap)
-                            Log.e(TAG, "STEP 4c: OCR frame $i text length=${ocrRes.fullText.length}")
+                            framesProcessed++
+                            Log.i(TAG, "STEP 4c: OCR frame $i textLength=${ocrRes.fullText.length}, repos=${ocrRes.detectedRepos.size}, urls=${ocrRes.detectedUrls.size}")
                             combinedText.append(ocrRes.fullText).append("\n")
                             repos.addAll(ocrRes.detectedRepos)
                             urls.addAll(ocrRes.detectedUrls)
                         }
                     }
+                    Log.i(TAG, "STEP 4d: Frames processed=$framesProcessed/$4")
                     retriever.release()
                     outputFile.delete()
                 }
 
-                Log.e(TAG, "STEP 5: OCR complete. Combined text length=${combinedText.length}")
+                Log.i(TAG, "STEP 5: OCR complete. textLength=${combinedText.length}, repos=${repos.size}, urls=${urls.size}")
 
                 val finalOcr = OcrResult(
                     fullText = combinedText.toString(),
@@ -167,13 +172,14 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 )
                 
                 // Verify
-                Log.e(TAG, "STEP 6: Running FactCheckEngine...")
+                val transcript = if (caption.isNotEmpty()) caption else ""
+                Log.i(TAG, "STEP 6: Running FactCheckEngine. transcriptSource=${if (transcript.isEmpty()) "none" else "caption"}, transcriptLength=${transcript.length}")
                 val result = factCheckEngine.analyzeAndVerify(
                     reelId = url.hashCode().toString(),
                     sourceUrl = url,
                     title = "Instagram Post",
                     author = author,
-                    rawTranscript = if (caption.isNotEmpty()) caption else "Visual text extracted via on-device OCR.",
+                    rawTranscript = transcript,
                     ocrResult = finalOcr,
                     llamaEngine = llamaEngine
                 )
