@@ -7,6 +7,7 @@ import com.techfactchecker.app.data.model.ToolClaim
 import com.techfactchecker.app.data.model.Verdict
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.util.Log
 
 class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
     private val gson = Gson()
@@ -20,6 +21,7 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         ocrResult: OcrResult,
         llamaEngine: LocalLlamaEngine? = null
     ): FactCheckResult = withContext(Dispatchers.Default) {
+        Log.i("TFC_DEBUG", "FACT_CHECK start: reelId=$reelId, ocrChars=${ocrResult.fullText.length}, repos=${ocrResult.detectedRepos.size}, urls=${ocrResult.detectedUrls.size}, transcriptChars=${rawTranscript.length}")
         val evidenceList = mutableListOf<EvidenceSource>()
         val verifiedTools = mutableListOf<ToolClaim>()
 
@@ -46,6 +48,7 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             for (url in ocrResult.detectedUrls.take(2)) {
                 val results = webValidator.searchDuckDuckGo(url, maxResults = 2)
                 evidenceList.addAll(results)
+                Log.i("TFC_DEBUG", "FACT_CHECK web: query=$url, results=${results.size}")
             }
         }
 
@@ -64,6 +67,7 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         // 4. SMART Fact-Check via Local AI
         if (llamaEngine != null && llamaEngine.isLocalModelReady()) {
             try {
+                Log.i("TFC_DEBUG", "FACT_CHECK LLM: generating local summary")
                 val llmPrompt = "<start_of_turn>user\nYou are an expert tech analyzer. Read this text extracted from a video/image:\n\nOCR TEXT:\n" + ocrResult.fullText.take(500) + "\n\nCAPTION:\n" + rawTranscript.take(500) + "\n\nBased ONLY on the text above, identify the main technology being discussed. Keep the name under 3 words. Then provide a 3-sentence summary of what the video is claiming about this technology. Format your response exactly like this:\nTECH_NAME: [name]\nSUMMARY: [summary]\n<end_of_turn>\n<start_of_turn>model\n"
                 
                 val aiResponse = llamaEngine.generateResponse(llmPrompt)
@@ -80,9 +84,12 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
                         summaryMarkdown = "### dY\"S AI Analysis\n$parsedSummary\n\n" + summaryMarkdown
                     }
                 }
+                Log.i("TFC_DEBUG", "FACT_CHECK LLM: responseChars=${aiResponse.length}")
             } catch (e: Exception) {
-                // Ignore and fallback to dumb extraction
+                Log.e("TFC_DEBUG", "FACT_CHECK LLM failed; using deterministic report", e)
             }
+        } else {
+            Log.w("TFC_DEBUG", "FACT_CHECK LLM skipped: local model not ready")
         }
 
         return@withContext FactCheckResult(

@@ -200,6 +200,7 @@ dependencies {
     implementation 'org.jsoup:jsoup:1.17.2'
     implementation 'com.google.code.gson:gson:2.10.1'
     implementation 'com.google.mediapipe:tasks-genai:0.10.14'
+    implementation 'com.github.k2-fsa:sherpa-onnx:v1.13.4'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 
 }

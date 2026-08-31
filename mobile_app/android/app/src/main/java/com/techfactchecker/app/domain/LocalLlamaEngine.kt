@@ -21,8 +21,11 @@ class LocalLlamaEngine(private val context: Context) {
 
     private fun initModelAsync() {
         try {
+            Log.i("TFC_DEBUG", "LLM init: searching model files")
+            Log.i("TFC_DEBUG", "LLM init: filesDir=${context.filesDir.absolutePath}")
             val modelFile = findModelFile()
             if (modelFile != null && modelFile.exists()) {
+                Log.i("TFC_DEBUG", "LLM init: found ${modelFile.absolutePath}, bytes=${modelFile.length()}")
                 val options = LlmInference.LlmInferenceOptions.builder()
                     .setModelPath(modelFile.absolutePath)
                     .setMaxTokens(512)
@@ -32,8 +35,10 @@ class LocalLlamaEngine(private val context: Context) {
                 llmInference = LlmInference.createFromOptions(context, options)
                 isInitialized = true
                 initError = null
+                Log.i("TFC_DEBUG", "LLM init: MediaPipe ready")
             } else {
                 initError = "Model file not found in storage."
+                Log.w("TFC_DEBUG", "LLM init: $initError")
             }
         } catch (e: Exception) {
             isInitialized = false
