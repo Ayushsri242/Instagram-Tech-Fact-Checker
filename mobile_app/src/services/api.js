@@ -1,104 +1,132 @@
-import { NativeModules, Platform } from 'react-native';
+import axios from 'axios';
+import { NativeModules } from 'react-native';
+import { getGroqApiKey } from './secrets';
 
 const { TechFactChecker } = NativeModules;
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODELS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.6-27b'];
+
+const callGroqJson = async (apiKey, messages) => {
+  let lastError;
+  for (const model of GROQ_MODELS) {
+    try {
+      const response = await axios.post(
+        GROQ_URL,
+        { model, messages, temperature: 0.1, response_format: { type: 'json_object' } },
+        { timeout: 90000, headers: { Authorization: 'Bearer ' + apiKey } }
+      );
+      return JSON.parse(response.data.choices[0].message.content.trim());
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('All Groq models failed.');
+};
+
+const callGroqText = async (apiKey, messages) => {
+  let lastError;
+  for (const model of GROQ_MODELS) {
+    try {
+      const response = await axios.post(
+        GROQ_URL,
+        { model, messages, temperature: 0.3 },
+        { timeout: 60000, headers: { Authorization: 'Bearer ' + apiKey } }
+      );
+      return response.data.choices[0].message.content;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('All Groq models failed.');
+};
+
+const extractClaims = (apiKey, transcript, ocrText) => {
+  const prompt = [
+    'Analyze this tech video/reel/carousel using transcript and OCR.',
+    'Transcript:', transcript,
+    'OCR:', ocrText,
+    'Return ONLY JSON:',
+    '{"tech_name":"main tool/title","tools":[{"name":"Tool Name","github_repo":"owner/repo or null","pip_command":"pip install ... or null","claim":"core claim"}],"claimed_features":["claim"],"search_queries":["precise query"]}',
+  ].join('\n');
+  return callGroqJson(apiKey, [
+    { role: 'system', content: 'You are an expert technical entity and claim extraction system. Output strictly valid JSON.' },
+    { role: 'user', content: prompt },
+  ]);
+};
+
+const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence) => {
+  const evidenceText = evidence.map((item) => [
+    'Title: ' + (item.title || ''),
+    'URL: ' + (item.url || ''),
+    'Snippet: ' + (item.snippet || ''),
+  ].join('\n')).join('\n\n');
+  const prompt = [
+    'You are a senior Applied AI and Software Engineer fact-checking a social-media tech post.',
+    'Compare transcript, OCR, claims, and web evidence. Practical utility matters.',
+    'Verdict must be TRUE, PARTIALLY_TRUE, HYPE, MISLEADING, or FAKE.',
+    'Transcript:', transcript,
+    'OCR:', ocrText,
+    'Extracted claims:', JSON.stringify(claimsData),
+    'Web evidence:', evidenceText,
+    'Return ONLY JSON:',
+    '{"tech_name":"string","verdict":"TRUE","pricing_model":"Open Source","github_url":"https://github.com/... or null","factual_reality":"2-4 sentence explanation","summary_markdown":"markdown report with Verdict, What Was Claimed, Practical Reality, Gotchas, References","sources":["url"]}',
+  ].join('\n');
+  return callGroqJson(apiKey, [
+    { role: 'system', content: 'You are a precise, objective AI technical fact checker. Output strictly valid JSON.' },
+    { role: 'user', content: prompt },
+  ]);
+};
+
+const normalizeTools = (tools) => (tools || []).map((tool) => ({
+  name: tool.name || 'Tool',
+  githubRepo: tool.github_repo || null,
+  pipCommand: tool.pip_command || null,
+  isVerified: Boolean(tool.github_repo),
+}));
 
 export const analyzeReelApi = async (url) => {
-  try {
-    console.log(`\n======================================`);
-    console.log(`[API] Run Fact Check Pressed`);
-    console.log(`[API] URL: ${url}`);
-    
-    if (Platform.OS === 'android' && TechFactChecker) {
-      console.log(`[API] Calling Native Module...`);
-      const result = await TechFactChecker.analyzeAndVerify(url);
-      console.log(`[API] Received Native Module Result successfully!`);
-      return result;
-    }
-    
-    // Fallback if running on iOS or NativeModule not linked
-    const shortcode = url.split('/').filter(Boolean).pop() || 'sample_reel';
-    return {
-      reelId: shortcode,
-      sourceUrl: url,
-      title: `Instagram Post (${shortcode})`,
-      author: 'Instagram Creator',
-      techName: 'Tech Library / Tool',
-      verdict: 'PARTIALLY_TRUE',
-      pricingModel: 'Open Source',
-      githubUrl: 'https://github.com',
-      factualReality: 'Analyzed on-screen visual claims and audio transcript.',
-      summaryMarkdown: '### 🎯 Verdict: **PARTIALLY_TRUE**\n\n- Verified open-source libraries and code components.\n- Check documentation before running in production.',
-      tools: [
-        {
-          name: 'Tech Lib',
-          githubRepo: 'owner/repo',
-          pipCommand: 'pip install tech-lib',
-          isVerified: true
-        }
-      ],
-      claims: ['Open-source framework shown in reel'],
-      rawTranscript: 'Sample audio transcript extracted on-device.'
-    };
-  } catch (error) {
-    console.error("\n[API ERROR] Native Module Fact Check Error:");
-    console.error(error);
-    console.error("======================================\n");
-    throw error;
-  }
+  const apiKey = await getGroqApiKey();
+  if (!apiKey) throw new Error('Add your Groq API key in Setup first.');
+  if (!TechFactChecker) throw new Error('Native mobile module is unavailable. Rebuild the Android dev app.');
+
+  const media = await TechFactChecker.analyzeAndVerify(url);
+  const transcript = media.rawTranscript || '';
+  const ocrText = media.ocrText || '';
+  const claimsData = await extractClaims(apiKey, transcript, ocrText);
+  const queries = (claimsData.search_queries || []).slice(0, 10);
+  const evidence = queries.length ? await TechFactChecker.gatherEvidence(queries) : (media.sources || []);
+  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence);
+
+  return {
+    ...media,
+    techName: report.tech_name || claimsData.tech_name || media.techName,
+    verdict: report.verdict || 'UNKNOWN',
+    pricingModel: report.pricing_model || 'Unknown',
+    githubUrl: report.github_url || null,
+    factualReality: report.factual_reality || '',
+    summaryMarkdown: report.summary_markdown || '',
+    tools: normalizeTools(claimsData.tools),
+    claims: claimsData.claimed_features || [],
+    sources: evidence,
+  };
 };
 
 export const chatWithAiApi = async (reel, userMessage, conversation = []) => {
-  try {
-    const techName = reel.techName || "Unknown Tool";
-    
-    console.log(`\n======================================`);
-    console.log(`[API] Ask AI Button Pressed`);
-    console.log(`[API] Tech Name: ${techName}`);
-    console.log(`[API] User Message: ${userMessage}`);
-    
-    if (Platform.OS === 'android' && TechFactChecker) {
-      const evidence = [
-        `TECH_NAME: ${techName}`,
-        `VERDICT: ${reel.verdict || 'UNKNOWN'}`,
-        `SUMMARY: ${(reel.summaryMarkdown || '').slice(0, 700)}`,
-        `OCR: ${(reel.ocrText || '').slice(0, 600)}`,
-        `TRANSCRIPT: ${(reel.rawTranscript || '').slice(0, 400)}`,
-        `CLAIMS: ${JSON.stringify(reel.claims || []).slice(0, 300)}`,
-        `SOURCES: ${JSON.stringify((reel.sources || []).slice(0, 2)).slice(0, 500)}`,
-      ].join('\n');
-      const recentChat = conversation.slice(-4).map((m) =>
-        `${m.sender === 'user' ? 'USER' : 'MODEL'}: ${m.text}`
-      ).join('\n').slice(0, 700);
-
-      // Gemma IT format. Keep prompt bounded for on-device RAM.
-      const injectedPrompt = `<start_of_turn>user
-You answer questions about one analyzed Instagram post. Use only the evidence below. Answer the CURRENT QUESTION directly and concisely. Do not repeat the generic summary. If the evidence does not contain the answer, say: "This is not stated in the analyzed post." Never invent names, numbers, or patterns.
-
-EVIDENCE:
-${evidence}
-
-RECENT CHAT:
-${recentChat || 'None'}
-
-CURRENT QUESTION: ${userMessage}<end_of_turn>
-<start_of_turn>model
-`;
-
-      console.log(`[API] Sent Prompt to Native MediaPipe Model (length: ${injectedPrompt.length})`);
-      const response = await TechFactChecker.generateResponse(injectedPrompt);
-      console.log(`[API] Received Native Model Response successfully!`);
-      return response;
-    }
-
-    // Fallback if not Android
-    if (userMessage.toLowerCase().includes('install')) {
-      return `To install ${techName}, run:\n\`\`\`bash\npip install ${techName.toLowerCase().replace(/\s+/g, '-')}\n\`\`\``;
-    }
-    return `${techName} is verified from on-screen evidence. You can inspect its GitHub repository or clone it locally to test.`;
-  } catch (error) {
-    console.error("\n[API ERROR] Native Module LLM Error:");
-    console.error(error);
-    console.error("======================================\n");
-    throw error;
-  }
+  const apiKey = await getGroqApiKey();
+  if (!apiKey) throw new Error('Add your Groq API key in Setup first.');
+  const recentChat = conversation.slice(-8).map((message) =>
+    (message.sender === 'user' ? 'User: ' : 'Assistant: ') + message.text
+  ).join('\n');
+  const context = [
+    'You are an expert AI and mobile engineer answering questions about one verified Instagram post.',
+    'Tech: ' + (reel.techName || 'Unknown Technology'),
+    'Transcript: ' + (reel.rawTranscript || ''),
+    'Verified fact-check: ' + (reel.summaryMarkdown || reel.factualReality || ''),
+    'Evidence: ' + JSON.stringify(reel.sources || []),
+    'Answer concisely and technically. State uncertainty when evidence does not support an answer.',
+  ].join('\n\n');
+  return callGroqText(apiKey, [
+    { role: 'system', content: context },
+    { role: 'user', content: recentChat + '\n\nCurrent question: ' + userMessage },
+  ]);
 };

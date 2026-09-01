@@ -90,6 +90,17 @@ export default function ResultScreen({ route, navigation }) {
           </View>
         )}
 
+        {reel.sources && reel.sources.length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Sources</Text>
+            {reel.sources.map((source, idx) => (
+              <TouchableOpacity key={idx} onPress={() => Linking.openURL(source.url)}>
+                <Text style={styles.sourceLink}>{source.title || source.url}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
         {/* Collapsible Transcript */}
         <View style={styles.card}>
           <TouchableOpacity
@@ -194,6 +205,13 @@ const styles = StyleSheet.create({
     color: colors.accentBlue,
     fontSize: 12,
     marginTop: 4,
+    textDecorationLine: 'underline',
+  },
+  sourceLink: {
+    color: colors.accentBlue,
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 6,
     textDecorationLine: 'underline',
   },
   transcriptHeader: {

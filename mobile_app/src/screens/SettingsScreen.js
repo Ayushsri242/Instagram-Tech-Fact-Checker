@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, NativeModules, Platform } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, NativeModules, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import { colors } from '../theme/colors';
+import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey } from '../services/secrets';
 
 export default function SettingsScreen() {
   const [modelExists, setModelExists] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [groqApiKey, setGroqApiKey] = useState('');
+  const [hasGroqApiKey, setHasGroqApiKey] = useState(false);
 
   // Define exactly where the native Kotlin engine expects it.
   // Note: FileSystem.documentDirectory ends with a slash.
@@ -23,7 +26,40 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     checkModel();
+    checkGroqApiKey();
   }, []);
+
+  const checkGroqApiKey = async () => {
+    const savedKey = await getGroqApiKey();
+    setHasGroqApiKey(Boolean(savedKey));
+  };
+
+  const saveGroqKey = async () => {
+    if (!groqApiKey.trim()) {
+      alert('Paste a Groq API key first.');
+      return;
+    }
+    try {
+      await saveGroqApiKey(groqApiKey);
+      setGroqApiKey('');
+      setHasGroqApiKey(true);
+      alert('Groq API key saved on this device.');
+    } catch (e) {
+      console.error('Failed to save Groq API key', e);
+      alert('Could not save Groq API key.');
+    }
+  };
+
+  const removeGroqKey = async () => {
+    try {
+      await deleteGroqApiKey();
+      setGroqApiKey('');
+      setHasGroqApiKey(false);
+    } catch (e) {
+      console.error('Failed to delete Groq API key', e);
+      alert('Could not delete Groq API key.');
+    }
+  };
 
   const checkModel = async () => {
     try {
@@ -82,6 +118,36 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.card}>
+        <Text style={styles.title}>Groq API Setup</Text>
+        <Text style={styles.desc}>
+          Paste your Groq API key. It is encrypted and saved only in this app on this phone.
+        </Text>
+        <TextInput
+          style={styles.input}
+          value={groqApiKey}
+          onChangeText={setGroqApiKey}
+          placeholder="gsk_..."
+          placeholderTextColor={colors.textMuted}
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+        />
+        <Text style={styles.keyStatus}>
+          Status: {hasGroqApiKey ? 'Saved on device' : 'Not saved'}
+        </Text>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity style={styles.downloadBtn} onPress={saveGroqKey}>
+            <Text style={styles.btnText}>Save Groq Key</Text>
+          </TouchableOpacity>
+          {hasGroqApiKey && (
+            <TouchableOpacity style={styles.deleteBtn} onPress={removeGroqKey}>
+              <Text style={styles.btnText}>Delete</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      <View style={styles.card}>
         <Text style={styles.title}>Local AI Model Setup</Text>
         <Text style={styles.desc}>
           To run chats completely offline, you need to download the Local LLaMA model file (2GB).
@@ -123,16 +189,26 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background, padding: 16 },
-  card: { backgroundColor: colors.surface, padding: 20, borderRadius: 12 },
+  card: { backgroundColor: colors.surface, padding: 20, borderRadius: 12, marginBottom: 16 },
   title: { color: colors.textPrimary, fontSize: 20, fontWeight: 'bold', marginBottom: 8 },
   desc: { color: colors.textSecondary, fontSize: 14, lineHeight: 20, marginBottom: 20 },
   statusBox: { backgroundColor: colors.background, padding: 12, borderRadius: 8, marginBottom: 20 },
   statusText: { color: colors.textPrimary, fontSize: 16, fontWeight: '500' },
+  input: {
+    backgroundColor: colors.background,
+    borderColor: colors.cardBorder,
+    borderWidth: 1,
+    borderRadius: 8,
+    color: colors.textPrimary,
+    marginBottom: 12,
+    padding: 12,
+  },
+  keyStatus: { color: colors.textSecondary, fontSize: 13, marginBottom: 12 },
   progressContainer: { marginTop: 10 },
   progressText: { color: colors.textPrimary, marginBottom: 8, fontSize: 14 },
   progressBarBg: { height: 10, backgroundColor: colors.background, borderRadius: 5, overflow: 'hidden' },
   progressBarFill: { height: '100%', backgroundColor: colors.primary },
-  buttonRow: { flexDirection: 'row', justifyContent: 'center' },
+  buttonRow: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
   downloadBtn: { backgroundColor: colors.primary, padding: 14, borderRadius: 8, flex: 1, alignItems: 'center' },
   deleteBtn: { backgroundColor: colors.error, padding: 14, borderRadius: 8, flex: 1, alignItems: 'center' },
   btnText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
