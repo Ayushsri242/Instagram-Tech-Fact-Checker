@@ -35,7 +35,7 @@ class AudioTranscriber(private val modelDir: File) {
                 numThreads = 2,
                 provider = "cpu"
             )
-            val recognizer = OfflineRecognizer(
+            val recognizer = OfflineRecognizer(null,
                 OfflineRecognizerConfig(modelConfig = model, decodingMethod = "greedy_search")
             )
             val stream = recognizer.createStream()
