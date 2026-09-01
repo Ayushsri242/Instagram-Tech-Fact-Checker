@@ -60,15 +60,15 @@ export const chatWithAiApi = async (reel, userMessage, conversation = []) => {
       const evidence = [
         `TECH_NAME: ${techName}`,
         `VERDICT: ${reel.verdict || 'UNKNOWN'}`,
-        `SUMMARY: ${(reel.summaryMarkdown || '').slice(0, 1800)}`,
-        `OCR: ${(reel.ocrText || '').slice(0, 1800)}`,
-        `TRANSCRIPT: ${(reel.rawTranscript || '').slice(0, 1000)}`,
-        `CLAIMS: ${JSON.stringify(reel.claims || []).slice(0, 800)}`,
-        `SOURCES: ${JSON.stringify((reel.sources || []).slice(0, 4)).slice(0, 1200)}`,
+        `SUMMARY: ${(reel.summaryMarkdown || '').slice(0, 700)}`,
+        `OCR: ${(reel.ocrText || '').slice(0, 600)}`,
+        `TRANSCRIPT: ${(reel.rawTranscript || '').slice(0, 400)}`,
+        `CLAIMS: ${JSON.stringify(reel.claims || []).slice(0, 300)}`,
+        `SOURCES: ${JSON.stringify((reel.sources || []).slice(0, 2)).slice(0, 500)}`,
       ].join('\n');
       const recentChat = conversation.slice(-4).map((m) =>
         `${m.sender === 'user' ? 'USER' : 'MODEL'}: ${m.text}`
-      ).join('\n').slice(0, 1400);
+      ).join('\n').slice(0, 700);
 
       // Gemma IT format. Keep prompt bounded for on-device RAM.
       const injectedPrompt = `<start_of_turn>user
