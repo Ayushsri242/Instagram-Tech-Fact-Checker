@@ -15,6 +15,11 @@ export default function SettingsScreen() {
   
   // Direct download link from Hugging Face Dataset (CPU version)
   const DOWNLOAD_URL = "https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/gemma-2b-it-cpu-int4.bin";
+  const STT_FILES = [
+    ['tiny-encoder.int8.onnx', 'https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/fact-checker-stt/whisper-tiny/tiny-encoder.int8.onnx'],
+    ['tiny-decoder.int8.onnx', 'https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/fact-checker-stt/whisper-tiny/tiny-decoder.int8.onnx'],
+    ['tiny-tokens.txt', 'https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/fact-checker-stt/whisper-tiny/tiny-tokens.txt'],
+  ];
 
   useEffect(() => {
     checkModel();
@@ -52,10 +57,14 @@ export default function SettingsScreen() {
       const { uri } = await downloadResumable.downloadAsync();
       console.log('Finished downloading to ', uri);
       setModelExists(true);
+      await FileSystem.makeDirectoryAsync(`${modelDir}whisper-tiny/`, { intermediates: true });
       
       // Tell native Kotlin engine to reload the model now that we have it
       if (Platform.OS === 'android' && NativeModules.TechFactChecker) {
         await NativeModules.TechFactChecker.reloadModel();
+      }
+      for (const [name, url] of STT_FILES) {
+        await FileSystem.downloadAsync(url, `${modelDir}whisper-tiny/${name}`);
       }
     } catch (e) {
       console.error(e);

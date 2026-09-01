@@ -47,7 +47,7 @@ export const analyzeReelApi = async (url) => {
   }
 };
 
-export const chatWithAiApi = async (reel, userMessage) => {
+export const chatWithAiApi = async (reel, userMessage, conversation = []) => {
   try {
     const techName = reel.techName || "Unknown Tool";
     
@@ -57,16 +57,30 @@ export const chatWithAiApi = async (reel, userMessage) => {
     console.log(`[API] User Message: ${userMessage}`);
     
     if (Platform.OS === 'android' && TechFactChecker) {
-      // Format specifically for Gemma instruction-tuned (it) models
-      const injectedPrompt = `<start_of_turn>user
-You are a strict, helpful Fact-Checking AI assistant. You just analyzed a video about ${techName}.
-Here are the findings from the video analysis:
-- Verdict: ${reel.verdict}
-- Summary: ${reel.summaryMarkdown}
-- Detected Tools: ${JSON.stringify(reel.tools.map(t => t.name))}
+      const evidence = [
+        `TECH_NAME: ${techName}`,
+        `VERDICT: ${reel.verdict || 'UNKNOWN'}`,
+        `SUMMARY: ${(reel.summaryMarkdown || '').slice(0, 1800)}`,
+        `OCR: ${(reel.ocrText || '').slice(0, 1800)}`,
+        `TRANSCRIPT: ${(reel.rawTranscript || '').slice(0, 1000)}`,
+        `CLAIMS: ${JSON.stringify(reel.claims || []).slice(0, 800)}`,
+        `SOURCES: ${JSON.stringify((reel.sources || []).slice(0, 4)).slice(0, 1200)}`,
+      ].join('\n');
+      const recentChat = conversation.slice(-4).map((m) =>
+        `${m.sender === 'user' ? 'USER' : 'MODEL'}: ${m.text}`
+      ).join('\n').slice(0, 1400);
 
-Answer the user's question concisely based on this evidence. Do not write a prompt, just provide the answer.
-User's Question: ${userMessage}<end_of_turn>
+      // Gemma IT format. Keep prompt bounded for on-device RAM.
+      const injectedPrompt = `<start_of_turn>user
+You answer questions about one analyzed Instagram post. Use only the evidence below. Answer the CURRENT QUESTION directly and concisely. Do not repeat the generic summary. If the evidence does not contain the answer, say: "This is not stated in the analyzed post." Never invent names, numbers, or patterns.
+
+EVIDENCE:
+${evidence}
+
+RECENT CHAT:
+${recentChat || 'None'}
+
+CURRENT QUESTION: ${userMessage}<end_of_turn>
 <start_of_turn>model
 `;
 

@@ -9,6 +9,7 @@ import com.techfactchecker.app.domain.FactCheckEngine
 import com.techfactchecker.app.domain.LocalLlamaEngine
 import com.techfactchecker.app.domain.OcrEngine
 import com.techfactchecker.app.domain.OcrResult
+import com.techfactchecker.app.domain.AudioTranscriber
 import kotlinx.coroutines.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -30,6 +31,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     private val factCheckEngine = FactCheckEngine()
     private val llamaEngine = LocalLlamaEngine(reactContext)
     private val ocrEngine = OcrEngine()
+    private val audioTranscriber = AudioTranscriber(File(reactContext.filesDir, "models/whisper-tiny"))
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
@@ -158,8 +160,11 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                         }
                     }
                     Log.i(TAG, "STEP 4d: Frames processed=$framesProcessed/$4")
+                    val transcriptFromAudio = audioTranscriber.transcribe(outputFile)
+                    Log.i(TAG, "STEP 4e: Audio transcript chars=${transcriptFromAudio.length}")
                     retriever.release()
                     outputFile.delete()
+                    caption = listOf(caption, transcriptFromAudio).filter { it.isNotBlank() }.joinToString("\n")
                 }
 
                 Log.i(TAG, "STEP 5: OCR complete. textLength=${combinedText.length}, repos=${repos.size}, urls=${urls.size}")
@@ -172,7 +177,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 )
                 
                 // Verify
-                val transcript = if (caption.isNotEmpty()) caption else ""
+                val transcript = caption
                 Log.i(TAG, "STEP 6: Running FactCheckEngine. transcriptSource=${if (transcript.isEmpty()) "none" else "caption"}, transcriptLength=${transcript.length}")
                 val result = factCheckEngine.analyzeAndVerify(
                     reelId = url.hashCode().toString(),
@@ -198,6 +203,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 map.putString("factualReality", result.factualReality)
                 map.putString("summaryMarkdown", result.summaryMarkdown)
                 map.putString("rawTranscript", result.rawTranscript)
+                map.putString("ocrText", result.ocrText)
                 
                 val toolsArray = Arguments.createArray()
                 result.tools.forEach { tool ->
@@ -209,6 +215,20 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     toolsArray.pushMap(toolMap)
                 }
                 map.putArray("tools", toolsArray)
+
+                val claimsArray = Arguments.createArray()
+                result.claims.forEach { claimsArray.pushString(it) }
+                map.putArray("claims", claimsArray)
+
+                val sourcesArray = Arguments.createArray()
+                result.sources.forEach { source ->
+                    val sourceMap = Arguments.createMap()
+                    sourceMap.putString("title", source.title)
+                    sourceMap.putString("url", source.url)
+                    sourceMap.putString("snippet", source.snippet)
+                    sourcesArray.pushMap(sourceMap)
+                }
+                map.putArray("sources", sourcesArray)
                 
                 Log.e(TAG, "STEP 7: Resolving promise to JS")
                 promise.resolve(map)
