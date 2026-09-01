@@ -10,6 +10,7 @@ import com.techfactchecker.app.domain.LocalLlamaEngine
 import com.techfactchecker.app.domain.OcrEngine
 import com.techfactchecker.app.domain.OcrResult
 import com.techfactchecker.app.domain.AudioTranscriber
+import com.techfactchecker.app.domain.WebValidator
 import kotlinx.coroutines.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -29,6 +30,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val factCheckEngine = FactCheckEngine()
+    private val webValidator = WebValidator()
     private val llamaEngine = LocalLlamaEngine(reactContext)
     private val ocrEngine = OcrEngine()
     private val audioTranscriber = AudioTranscriber(File(reactContext.filesDir, "models/whisper-tiny"))
@@ -60,6 +62,44 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 promise.resolve(response)
             } catch (e: Exception) {
                 promise.reject("LLM_ERROR", e.message)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun gatherEvidence(queries: ReadableArray, promise: Promise) {
+        scope.launch {
+            try {
+                val seenUrls = mutableSetOf<String>()
+                val evidence = Arguments.createArray()
+                val repoPattern = Regex("\\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\\b")
+
+                suspend fun addEvidence(title: String, url: String, snippet: String) {
+                    if (url.isBlank() || !seenUrls.add(url)) return
+                    val item = Arguments.createMap()
+                    item.putString("title", title)
+                    item.putString("url", url)
+                    item.putString("snippet", snippet)
+                    evidence.pushMap(item)
+                }
+
+                for (index in 0 until queries.size()) {
+                    val query = queries.getString(index)?.trim().orEmpty()
+                    if (query.isBlank()) continue
+
+                    for (match in repoPattern.findAll(query)) {
+                        webValidator.verifyGitHubRepo(match.groupValues[1])?.let {
+                            addEvidence(it.title, it.url, it.snippet)
+                        }
+                    }
+                    for (result in webValidator.searchDuckDuckGo(query, maxResults = 4)) {
+                        addEvidence(result.title, result.url, result.snippet)
+                    }
+                }
+                promise.resolve(evidence)
+            } catch (e: Exception) {
+                Log.e(TAG, "Evidence search failed: " + e.message, e)
+                promise.reject("EVIDENCE_ERROR", e.message, e)
             }
         }
     }
@@ -186,7 +226,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     author = author,
                     rawTranscript = transcript,
                     ocrResult = finalOcr,
-                    llamaEngine = llamaEngine
+                    llamaEngine = null
                 )
                 Log.e(TAG, "STEP 6 DONE: verdict=${result.verdict}, techName=${result.techName}")
                 
