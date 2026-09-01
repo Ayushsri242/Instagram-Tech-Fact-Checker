@@ -73,8 +73,9 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         if (llamaEngine != null && llamaEngine.isLocalModelReady()) {
             try {
                 Log.i("TFC_DEBUG", "FACT_CHECK LLM: generating local summary")
-                val evidenceText = evidenceList.take(5).joinToString("\n") { "- ${it.title}: ${it.snippet}" }
-                val llmPrompt = "<start_of_turn>user\nYou are a precise technology fact-check assistant. Compare the source claims with the supplied web evidence. Use ONLY supplied text. Never invent facts. If evidence is insufficient, verdict must be UNKNOWN. Return exactly three lines, no markdown or extra text:\nTECH_NAME: <name, max 4 words>\nVERDICT: <TRUE, PARTIALLY_TRUE, HYPE, MISLEADING, FAKE, or UNKNOWN>\nSUMMARY: <2-3 short sentences explaining the comparison and uncertainty>\n\nOCR TEXT:\n" + ocrResult.fullText.take(1200) + "\n\nCAPTION:\n" + rawTranscript.take(800) + "\n\nWEB EVIDENCE:\n" + evidenceText.take(1800) + "\n<end_of_turn>\n<start_of_turn>model\n"
+                val evidenceText = evidenceList.take(3).joinToString("\n") { "- ${it.title}: ${it.snippet}" }
+                val llmPrompt = "<start_of_turn>user\nFact-check only the supplied source and web evidence. Never invent facts. If evidence is insufficient, use UNKNOWN. Return exactly three lines:\nTECH_NAME: <max 4 words>\nVERDICT: <TRUE, PARTIALLY_TRUE, HYPE, MISLEADING, FAKE, or UNKNOWN>\nSUMMARY: <2 short sentences>\nOCR:\n" + ocrResult.fullText.take(500) + "\nCAPTION:\n" + rawTranscript.take(300) + "\nWEB:\n" + evidenceText.take(700) + "<end_of_turn>\n<start_of_turn>model\n"
+                Log.i("TFC_DEBUG", "FACT_CHECK LLM: promptChars=${llmPrompt.length}")
                 
                 val aiResponse = llamaEngine.generateResponse(llmPrompt)
                 
@@ -143,7 +144,7 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
     ): String {
         if (llamaEngine == null || !llamaEngine.isLocalModelReady()) return fallback
         return try {
-            val prompt = "<start_of_turn>user\nCreate one precise DuckDuckGo search query for the technology claim in this Instagram post. Use only the supplied text. Remove usernames, URLs, OCR noise, and instructions. Return exactly one line: SEARCH_QUERY: <query>\n\nOCR:\n${ocrText.take(1000)}\n\nTRANSCRIPT:\n${transcript.take(800)}<end_of_turn>\n<start_of_turn>model\n"
+            val prompt = "<start_of_turn>user\nCreate one precise DuckDuckGo query. Use only supplied text. Remove URLs and OCR noise. Return exactly one line: SEARCH_QUERY: <query>\nOCR:\n${ocrText.take(500)}\nTRANSCRIPT:\n${transcript.take(300)}<end_of_turn>\n<start_of_turn>model\n"
             val response = llamaEngine.generateResponse(prompt)
             response.lines().firstOrNull { it.trim().startsWith("SEARCH_QUERY:", true) }
                 ?.substringAfter(":")?.trim()?.takeIf { it.length >= 8 }?.take(240) ?: fallback
