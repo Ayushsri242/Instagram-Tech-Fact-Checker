@@ -23,23 +23,21 @@ class AudioTranscriber(private val modelDir: File) {
         return try {
             val (samples, sampleRate) = decodeAudio(videoFile)
             if (samples.isEmpty()) return ""
-            val whisper = OfflineWhisperModelConfig.builder()
-                .setEncoder(encoder.absolutePath)
-                .setDecoder(decoder.absolutePath)
-                .setLanguage("auto")
-                .setTask("transcribe")
-                .build()
-            val model = OfflineModelConfig.builder()
-                .setWhisper(whisper)
-                .setTokens(tokens.absolutePath)
-                .setNumThreads(2)
-                .setProvider("cpu")
-                .build()
+            val whisper = OfflineWhisperModelConfig(
+                encoder = encoder.absolutePath,
+                decoder = decoder.absolutePath,
+                language = "",
+                task = "transcribe"
+            )
+            val model = OfflineModelConfig(
+                whisper = whisper,
+                tokens = tokens.absolutePath,
+                numThreads = 2,
+                provider = "cpu"
+            )
             val recognizer = OfflineRecognizer(
-                OfflineRecognizerConfig.builder()
-                    .setOfflineModelConfig(model)
-                    .setDecodingMethod("greedy_search")
-                    .build()
+                OfflineRecognizerConfig(modelConfig = model, decodingMethod = "greedy_search")
+            )
             val stream = recognizer.createStream()
             stream.acceptWaveform(samples, sampleRate)
             recognizer.decode(stream)
