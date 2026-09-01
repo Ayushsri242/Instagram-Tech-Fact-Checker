@@ -45,7 +45,8 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
 
         // 2. Search readable OCR/caption text, not raw OCR URLs.
         if (verifiedTools.isEmpty()) {
-            val query = buildSearchQuery(ocrResult.fullText, rawTranscript)
+            val fallbackQuery = buildSearchQuery(ocrResult.fullText, rawTranscript)
+            val query = generateSearchQuery(llamaEngine, ocrResult.fullText, rawTranscript, fallbackQuery)
             if (query.isNotBlank()) {
                 val results = webValidator.searchDuckDuckGo(query, maxResults = 5)
                 evidenceList.addAll(results)
@@ -132,6 +133,24 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             .replace(Regex("\\s+"), " ")
             .trim()
             .take(240)
+    }
+
+    private suspend fun generateSearchQuery(
+        llamaEngine: LocalLlamaEngine?,
+        ocrText: String,
+        transcript: String,
+        fallback: String
+    ): String {
+        if (llamaEngine == null || !llamaEngine.isLocalModelReady()) return fallback
+        return try {
+            val prompt = "<start_of_turn>user\nCreate one precise DuckDuckGo search query for the technology claim in this Instagram post. Use only the supplied text. Remove usernames, URLs, OCR noise, and instructions. Return exactly one line: SEARCH_QUERY: <query>\n\nOCR:\n${ocrText.take(1000)}\n\nTRANSCRIPT:\n${transcript.take(800)}<end_of_turn>\n<start_of_turn>model\n"
+            val response = llamaEngine.generateResponse(prompt)
+            response.lines().firstOrNull { it.trim().startsWith("SEARCH_QUERY:", true) }
+                ?.substringAfter(":")?.trim()?.takeIf { it.length >= 8 }?.take(240) ?: fallback
+        } catch (e: Exception) {
+            Log.w("TFC_DEBUG", "FACT_CHECK query LLM failed; using fallback", e)
+            fallback
+        }
     }
 
     private fun buildMarkdownReport(
