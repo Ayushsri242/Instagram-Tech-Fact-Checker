@@ -6,6 +6,7 @@ import android.media.MediaMetadataRetriever
 import android.util.Log
 import com.facebook.react.bridge.*
 import com.techfactchecker.app.domain.FactCheckEngine
+import com.techfactchecker.app.domain.InstagramExtractor
 import com.techfactchecker.app.domain.LocalLlamaEngine
 import com.techfactchecker.app.domain.OcrEngine
 import com.techfactchecker.app.domain.OcrResult
@@ -33,6 +34,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     private val webValidator = WebValidator()
     private val llamaEngine = LocalLlamaEngine(reactContext)
     private val ocrEngine = OcrEngine()
+    private val instagramExtractor = InstagramExtractor(reactContext)
     private val audioTranscriber = AudioTranscriber(File(reactContext.filesDir, "models/whisper-tiny"))
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
@@ -110,45 +112,76 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
             try {
                 Log.e(TAG, "STEP 1: Starting analyzeAndVerify with url=$url")
 
-                // 1. Call Render service to get media info
-                Log.e(TAG, "STEP 2: Calling video extraction service...")
-                val jsonBody = JSONObject().put("url", url).toString()
-                val requestBody = jsonBody.toRequestBody("application/json".toMediaType())
-                val extractRequest = Request.Builder()
-                    .url(VIDEO_SERVICE_URL)
-                    .post(requestBody)
-                    .build()
-
-                val extractResponse = httpClient.newCall(extractRequest).execute()
-                val responseBody = extractResponse.body?.string() ?: throw Exception("Empty response from video service")
-                Log.i(TAG, "STEP 2a: Service HTTP=${extractResponse.code}, responseBytes=${responseBody.length}")
-                Log.d(TAG, "STEP 2b: Service response preview=${responseBody.take(200)}")
-                
-                val responseJson = JSONObject(responseBody)
-                if (responseJson.has("error")) {
-                    throw Exception("Video service error: ${responseJson.getString("error")}")
-                }
-
-                val mediaType = responseJson.optString("type", "video")
-                Log.e(TAG, "STEP 3: Media type = $mediaType")
-
+                // 1. Media extraction: on-device WebView first, Render cloud only as fallback.
                 val combinedText = StringBuilder()
                 val repos = mutableSetOf<String>()
                 val urls = mutableSetOf<String>()
+                var mediaSource: String
+                var mediaType = "video"
+                var videoUrlValue = ""
+                val imageUrlList = mutableListOf<String>()
                 var author = "Creator"
                 var caption = ""
 
-                if (mediaType == "image") {
-                    // Handle image/carousel post
+                Log.e(TAG, "STEP 2: Extracting media on-device via offscreen WebView...")
+                val webResult = try {
+                    instagramExtractor.extract(url, currentActivity)
+                } catch (e: Exception) {
+                    Log.e(TAG, "STEP 2a: WebView extractor threw: ${e.message}", e)
+                    null
+                }
+
+                if (webResult != null) {
+                    mediaSource = "WEBVIEW"
+                    mediaType = webResult.type
+                    videoUrlValue = webResult.videoUrl ?: ""
+                    imageUrlList.addAll(webResult.imageUrls)
+                    author = webResult.author
+                    caption = webResult.caption
+                    Log.e(TAG, "STEP 2b: SOURCE=WEBVIEW via=${webResult.via} type=$mediaType images=${imageUrlList.size}")
+                } else {
+                    mediaSource = "RENDER"
+                    Log.e(TAG, "STEP 2b: SOURCE=RENDER (WebView returned nothing, calling cloud service)")
+                    val jsonBody = JSONObject().put("url", url).toString()
+                    val requestBody = jsonBody.toRequestBody("application/json".toMediaType())
+                    val extractRequest = Request.Builder()
+                        .url(VIDEO_SERVICE_URL)
+                        .post(requestBody)
+                        .build()
+
+                    val extractResponse = httpClient.newCall(extractRequest).execute()
+                    val responseBody = extractResponse.body?.string() ?: throw Exception("Empty response from video service")
+                    Log.i(TAG, "STEP 2c: Render HTTP=${extractResponse.code}, responseBytes=${responseBody.length}")
+                    Log.d(TAG, "STEP 2d: Render response preview=${responseBody.take(200)}")
+
+                    val responseJson = JSONObject(responseBody)
+                    if (responseJson.has("error")) {
+                        throw Exception("Video service error: ${responseJson.getString("error")}")
+                    }
+
+                    mediaType = responseJson.optString("type", "video")
                     author = responseJson.optString("author", "Creator")
                     caption = responseJson.optString("caption", "")
+                    if (mediaType == "image") {
+                        val renderImages = responseJson.getJSONArray("image_urls")
+                        for (i in 0 until renderImages.length()) {
+                            imageUrlList.add(renderImages.getString(i))
+                        }
+                    } else {
+                        videoUrlValue = responseJson.getString("video_url")
+                    }
+                }
+
+                Log.e(TAG, "STEP 3: Media type = $mediaType (SOURCE=$mediaSource)")
+
+                if (mediaType == "image") {
+                    // Handle image/carousel post
                     combinedText.append(caption).append("\n")
-                    
-                    val imageUrls = responseJson.getJSONArray("image_urls")
-                    Log.i(TAG, "STEP 4: Downloading ${imageUrls.length()} images for OCR")
-                    
-                    for (i in 0 until imageUrls.length()) {
-                        val imgUrl = imageUrls.getString(i)
+
+                    Log.i(TAG, "STEP 4: Downloading ${imageUrlList.size} images for OCR (SOURCE=$mediaSource)")
+
+                    for (i in imageUrlList.indices) {
+                        val imgUrl = imageUrlList[i]
                         val imgRequest = Request.Builder().url(imgUrl).build()
                         val imgResponse = httpClient.newCall(imgRequest).execute()
                         val imgBytes = imgResponse.body?.bytes()
@@ -166,8 +199,9 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     }
                 } else {
                     // Handle video/reel
-                    val videoUrl = responseJson.getString("video_url")
-                    Log.e(TAG, "STEP 4: Got direct video URL, downloading...")
+                    val videoUrl = videoUrlValue
+                    if (videoUrl.isBlank()) throw Exception("No video URL recovered (SOURCE=$mediaSource)")
+                    Log.e(TAG, "STEP 4: Got direct video URL from SOURCE=$mediaSource, downloading...")
                     
                     val tempDir = File(reactContext.cacheDir, "video_tmp")
                     tempDir.mkdirs()
