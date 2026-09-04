@@ -12,22 +12,8 @@ import android.util.Log
 class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
     private val gson = Gson()
 
-    private companion object {
-        val BOILERPLATE_TOKENS = setOf(
-            "apache", "mit", "bsd", "gpl", "agpl", "lgpl", "mpl", "licence", "license",
-            "2.0", "3.0", "v2", "v3", "readme", "github", "gitlab", "star", "stars",
-            "fork", "forks", "issue", "issues", "pull", "requests", "request", "commit",
-            "commits", "branch", "contributor", "contributors", "copyright", "open",
-            "source", "unknown", "none", "null", "documentation", "docs", "the", "a",
-            "an", "and", "or", "of", "for", "tool", "tools", "app", "application",
-            "project", "repository", "repo", "code", "software", "library", "framework",
-            "name", "product", "technology", "tech"
-        )
-    }
-
-    /** Stage-1 output: what the post actually claims, and how to go check it. */
+    /** Stage-1 output: what the post claims, and how to go check it. */
     private data class Structured(
-        val techName: String?,
         val claims: List<String>,
         val queries: List<String>
     )
@@ -39,7 +25,9 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         author: String,
         rawTranscript: String,
         ocrResult: OcrResult,
-        llamaEngine: LocalLlamaEngine? = null
+        llamaEngine: LocalLlamaEngine? = null,
+        caption: String = "",
+        speech: String = ""
     ): FactCheckResult = withContext(Dispatchers.Default) {
         Log.i("TFC_DEBUG", "FACT_CHECK start: reelId=$reelId, ocrChars=${ocrResult.fullText.length}, repos=${ocrResult.detectedRepos.size}, urls=${ocrResult.detectedUrls.size}, transcriptChars=${rawTranscript.length}")
         Log.i("TFC_DEBUG", "FACT_CHECK transcript preview=${rawTranscript.take(220)}")
@@ -71,26 +59,62 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         }
 
         var structured: Structured? = null
+        var decidedTech: String? = null
+        var abstainReason: String? = null
 
         if (offline) {
-            // STAGE 1 - structure the noisy OCR/caption into claims + search queries.
-            structured = stageStructure(llamaEngine!!, ocrResult.fullText, rawTranscript)
-            Log.i("TFC_DEBUG", "FACT_CHECK stage1: tech=${structured?.techName}, claims=${structured?.claims?.size}, queries=${structured?.queries?.size}")
+            // Split the inputs back apart. The caller used to hand us one merged
+            // blob, which made it impossible to tell a dead transcript from a
+            // dead OCR pass - and impossible to ignore only the dead one.
+            val captionPart = caption.ifBlank { if (speech.isBlank()) rawTranscript else "" }
+            val speechPart = speech
 
-            // STAGE 2 - web agent runs every query the model asked for.
-            val baseQueries = structured?.queries?.takeIf { it.isNotEmpty() }
-                ?: listOf(buildSearchQuery(ocrResult.fullText, rawTranscript))
-            // Anchor every query to the product name, otherwise a vague query
-            // pulls back evidence about something else entirely.
-            val tech = structured?.techName
-            val queries = baseQueries.map { query ->
-                if (tech != null && !query.contains(tech, ignoreCase = true)) "$tech $query" else query
+            val decision = SourceEvidence.decide(
+                caption = captionPart,
+                speech = speechPart,
+                ocrText = ocrResult.fullText,
+                detectedRepos = ocrResult.detectedRepos,
+                detectedUrls = ocrResult.detectedUrls
+            )
+
+            // The name is chosen by code from corroborating evidence. The model
+            // never gets to pick it: given junk input it will always invent
+            // something confident rather than admit it does not know.
+            decidedTech = decision.techName?.let {
+                resolveDispute(it, decision, captionPart, speechPart, ocrResult.fullText)
             }
-            for (query in queries.take(3)) {
-                if (query.isBlank()) continue
-                val results = webValidator.searchDuckDuckGo(query, maxResults = 4)
-                evidenceList.addAll(results)
-                Log.i("TFC_DEBUG", "FACT_CHECK stage2: query=$query, results=${results.size}")
+
+            // Only feed the model sources that passed their health check.
+            val usableSpeech = if (decision.speech.usable) speechPart else ""
+            val usableOcr = if (decision.ocr.usable) ocrResult.fullText else ""
+            val spokenText = listOf(captionPart, usableSpeech).filter { it.isNotBlank() }.joinToString("\n")
+
+            if (decidedTech == null) {
+                // Nothing corroborated. Searching the raw transcript at this point
+                // is what once turned a broken transcript into a report on a song.
+                abstainReason = "Could not identify the product discussed in this post. " +
+                    "Speech: ${decision.speech.reason}. On-screen text: ${decision.ocr.reason}."
+                Log.w("TFC_DEBUG", "FACT_CHECK abstain: $abstainReason")
+            } else {
+                Log.i("TFC_DEBUG", "FACT_CHECK tech decided by evidence: $decidedTech")
+
+                // STAGE 1 - the model structures claims and queries only.
+                structured = stageStructure(llamaEngine!!, decidedTech, usableOcr, spokenText)
+                Log.i("TFC_DEBUG", "FACT_CHECK stage1: claims=${structured?.claims?.size}, queries=${structured?.queries?.size}")
+
+                // STAGE 2 - every query is anchored to the decided name. Raw
+                // transcript text is never used as a query any more.
+                val baseQueries = structured?.queries?.takeIf { it.isNotEmpty() }
+                    ?: listOf("$decidedTech review", "$decidedTech github")
+                val queries = baseQueries.map { query ->
+                    if (!query.contains(decidedTech, ignoreCase = true)) "$decidedTech $query" else query
+                }
+                for (query in queries.take(3)) {
+                    if (query.isBlank()) continue
+                    val results = webValidator.searchDuckDuckGo(query, maxResults = 4)
+                    evidenceList.addAll(results)
+                    Log.i("TFC_DEBUG", "FACT_CHECK stage2: query=$query, results=${results.size}")
+                }
             }
         } else {
             // Online mode keeps the original cheap behaviour: only search when
@@ -109,25 +133,28 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
 
         // Deterministic defaults, used as-is online and as a floor offline.
         var verdict = when {
+            offline && decidedTech == null -> Verdict.UNKNOWN
             verifiedTools.size >= 3 -> Verdict.TRUE
             verifiedTools.isNotEmpty() -> Verdict.PARTIALLY_TRUE
             evidenceList.isNotEmpty() -> Verdict.PARTIALLY_TRUE
             rawTranscript.contains("open knowledge format", ignoreCase = true) -> Verdict.HYPE
             else -> Verdict.UNKNOWN
         }
-        var primaryTech = if (verifiedTools.size > 1) "${verifiedTools.size} Tech Libraries"
-        else verifiedTools.firstOrNull()?.name ?: structured?.techName ?: "Unknown Technology"
+        var primaryTech = decidedTech
+            ?: if (verifiedTools.size > 1) "${verifiedTools.size} Tech Libraries"
+            else verifiedTools.firstOrNull()?.name ?: "Unknown Technology"
         var aiSummary = ""
 
-        if (offline) {
+        if (offline && decidedTech != null) {
             // STAGE 3 - compare the structured claims against the gathered evidence.
-            val compared = stageCompare(llamaEngine!!, structured, ocrResult.fullText, rawTranscript, evidenceList)
+            val compared = stageCompare(llamaEngine!!, decidedTech, structured, ocrResult.fullText, rawTranscript, evidenceList)
             if (compared != null) {
-                compared.first?.let { primaryTech = it }
-                compared.second?.let { if (it != Verdict.UNKNOWN) verdict = it }
-                compared.third?.let { aiSummary = it }
+                compared.first?.let { if (it != Verdict.UNKNOWN) verdict = it }
+                compared.second?.let { aiSummary = it }
             }
             Log.i("TFC_DEBUG", "FACT_CHECK stage3: tech=$primaryTech, verdict=$verdict, summaryChars=${aiSummary.length}")
+        } else if (offline) {
+            aiSummary = abstainReason ?: "Could not identify the product discussed in this post."
         }
 
         val claimList = structured?.claims?.takeIf { it.isNotEmpty() } ?: verifiedTools.map { it.claim }
@@ -155,67 +182,90 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         )
     }
 
+    // ------------------------------------------------------------ tie-breaking
+
+    /**
+     * When the top two candidates score within a point of each other the local
+     * evidence genuinely cannot separate them, so ask the web. The winner is the
+     * one whose search results echo back distinctive words from the other
+     * sources: a real product page talks about what the creator was talking about.
+     */
+    private suspend fun resolveDispute(
+        leader: String,
+        decision: SourceEvidence.Decision,
+        caption: String,
+        speech: String,
+        ocrText: String
+    ): String {
+        val top = decision.candidates.take(2)
+        if (top.size < 2) return leader
+        val first = top[0]
+        val second = top[1]
+        if (first.score - second.score > 1 || second.score < 3) return leader
+
+        val cross = listOf(
+            if (decision.ocr.usable) ocrText else "",
+            if (decision.speech.usable) speech else "",
+            caption
+        ).joinToString(" ")
+        val crossTokens = cross.lowercase()
+            .split(Regex("[^a-z0-9]+"))
+            .filter { it.length > 3 && it !in SourceEvidence.BOILERPLATE_TOKENS }
+            .distinct()
+            .take(40)
+        if (crossTokens.isEmpty()) return leader
+
+        var bestName = leader
+        var bestHits = -1
+        for (candidate in top) {
+            val results = webValidator.searchDuckDuckGo(candidate.name, maxResults = 3)
+            val blob = results.joinToString(" ") { "${it.title} ${it.snippet}" }.lowercase()
+            val hits = crossTokens.count { blob.contains(it) }
+            Log.i("TFC_DEBUG", "FACT_CHECK tiebreak: ${candidate.name} corroborated=$hits/${crossTokens.size}")
+            if (hits > bestHits) {
+                bestHits = hits
+                bestName = candidate.name
+            }
+        }
+        if (bestName != leader) Log.i("TFC_DEBUG", "FACT_CHECK tiebreak: $leader -> $bestName")
+        return bestName
+    }
+
     // ---------------------------------------------------------------- stage 1
 
     private suspend fun stageStructure(
         llamaEngine: LocalLlamaEngine,
+        techName: String,
         ocrText: String,
-        transcript: String
+        spokenText: String
     ): Structured? {
         return try {
             val prompt = buildString {
                 append("<start_of_turn>user\n")
-                append("You extract structured facts from a tech social-media post.\n")
-                append("TECH must be the product the post is promoting.\n")
-                append("The SPOKEN words come from the creator and are authoritative for that name.\n")
-                append("The OCR is screen text and is full of noise: never answer with a licence\n")
-                append("name (Apache, MIT, GPL), a GitHub UI label (stars, forks, issues, README),\n")
-                append("a file name, or a URL. Those are never the product.\n")
-                append("Use ONLY the supplied text. Never invent names.\n")
-                append("Every word of TECH must be copied from the text below.\n\n")
-                // No worked example here on purpose: a 1B model copies the example
-                // verbatim instead of doing the task. Placeholders only.
-                append("Reply with exactly these five lines and nothing else:\n")
-                append("TECH: <product name copied from the text, or NONE>\n")
-                append("CLAIM1: <one concrete claim the post makes>\n")
+                append("A social-media post is promoting a product called \"").append(techName).append("\".\n")
+                append("Read the post text below and write down what it claims about ")
+                append(techName).append(".\n")
+                append("Use ONLY the supplied text. Never invent facts.\n")
+                append("If a source section is empty, ignore it.\n\n")
+                append("Reply with exactly these four lines and nothing else:\n")
+                append("CLAIM1: <one concrete claim the post makes about ").append(techName).append(">\n")
                 append("CLAIM2: <another claim, or NONE>\n")
                 append("QUERY1: <short web search query that would verify CLAIM1>\n")
                 append("QUERY2: <short web search query that would verify CLAIM2, or NONE>\n\n")
-                append("SPOKEN WORDS AND CAPTION (authoritative):\n").append(transcript.take(900)).append("\n\n")
-                append("OCR (noisy screen text):\n").append(ocrText.take(900)).append("\n")
+                append("WHAT THE CREATOR WROTE OR SAID:\n").append(spokenText.take(900)).append("\n\n")
+                append("TEXT VISIBLE ON SCREEN:\n").append(ocrText.take(900)).append("\n")
                 append("<end_of_turn>\n<start_of_turn>model\n")
             }
             val response = llamaEngine.generateResponse(prompt)
             Log.i("TFC_DEBUG", "FACT_CHECK stage1 raw=${response.take(300)}")
 
-            val sourceText = "$transcript $ocrText"
-            val rawTech = lineValue(response, "TECH")
-                ?.let { sanitizeName(it) }
-                ?.takeIf { !it.equals("NONE", true) }
-
-            val reason = when {
-                rawTech == null -> null
-                isBoilerplate(rawTech) -> "boilerplate"
-                !appearsInSource(rawTech, sourceText) -> "not in source"
-                else -> null
-            }
-            if (reason != null) {
-                Log.w("TFC_DEBUG", "FACT_CHECK stage1 rejected TECH=$rawTech ($reason)")
-            }
-
-            // An ungrounded name means the model echoed the instructions rather
-            // than reading the post, so its claims and queries are untrustworthy
-            // too. Drop the whole answer and let the deterministic query run.
-            if (reason != null) return null
-
             val claims = listOfNotNull(lineValue(response, "CLAIM1"), lineValue(response, "CLAIM2"))
                 .filter { !it.equals("NONE", true) && it.length > 4 }
             val queries = listOfNotNull(lineValue(response, "QUERY1"), lineValue(response, "QUERY2"))
-                .filter { !it.equals("NONE", true) && it.length >= 8 && !isBoilerplate(it) }
+                .filter { !it.equals("NONE", true) && it.length >= 8 && !SourceEvidence.isBoilerplate(it) }
                 .map { it.take(200) }
 
-            if (rawTech == null && claims.isEmpty() && queries.isEmpty()) null
-            else Structured(rawTech, claims, queries)
+            if (claims.isEmpty() && queries.isEmpty()) null else Structured(claims, queries)
         } catch (e: Exception) {
             Log.w("TFC_DEBUG", "FACT_CHECK stage1 failed: ${e.message}")
             null
@@ -224,16 +274,16 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
 
     // ---------------------------------------------------------------- stage 3
 
+    /** Returns verdict + summary. The product name is not the model's to choose. */
     private suspend fun stageCompare(
         llamaEngine: LocalLlamaEngine,
+        techName: String,
         structured: Structured?,
         ocrText: String,
         transcript: String,
         evidence: List<EvidenceSource>
-    ): Triple<String?, Verdict?, String?>? {
+    ): Pair<Verdict?, String?>? {
         return try {
-            // Prefer what the creator actually said over raw OCR when stage 1
-            // produced nothing usable.
             val claimsText = structured?.claims?.takeIf { it.isNotEmpty() }
                 ?.joinToString("\n") { "- $it" }
                 ?: listOf(transcript.take(400), ocrText.take(300))
@@ -245,65 +295,35 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
 
             val prompt = buildString {
                 append("<start_of_turn>user\n")
-                append("You are a technical fact-checker. Compare the post's claims against the web evidence.\n")
+                append("You are a technical fact-checker. The product is \"").append(techName).append("\".\n")
+                append("Compare the post's claims against the web evidence.\n")
                 append("Use ONLY the evidence below. Never invent facts. If the evidence does not cover the claims, answer UNKNOWN.\n")
-                append("Reply with exactly these three lines and nothing else:\n")
-                append("TECH_NAME: <at most 4 words>\n")
+                append("Reply with exactly these two lines and nothing else:\n")
                 append("VERDICT: <TRUE|PARTIALLY_TRUE|HYPE|MISLEADING|FAKE|UNKNOWN>\n")
-                append("SUMMARY: <two sentences explaining the verdict>\n\n")
+                append("SUMMARY: <two sentences about ").append(techName).append(" explaining the verdict>\n\n")
                 append("CLAIMS:\n").append(claimsText).append("\n\n")
-                append("WHAT THE CREATOR SAID:\n").append(transcript.take(400)).append("\n\n")
                 append("WEB EVIDENCE:\n").append(evidenceText.ifBlank { "(none found)" }).append("\n")
                 append("<end_of_turn>\n<start_of_turn>model\n")
             }
             val response = llamaEngine.generateResponse(prompt)
             Log.i("TFC_DEBUG", "FACT_CHECK stage3 raw=${response.take(300)}")
 
-            // Same grounding rule as stage 1: the name must exist in the post or
-            // in the evidence we actually retrieved, never invented here.
-            val grounding = "$transcript $ocrText " + evidence.joinToString(" ") { "${it.title} ${it.snippet}" }
-            val tech = lineValue(response, "TECH_NAME")
-                ?.let { sanitizeName(it) }
-                ?.takeIf {
-                    it.isNotBlank() && !it.equals("None", true) &&
-                        !it.equals("[name]", true) && !isBoilerplate(it) &&
-                        appearsInSource(it, grounding)
-                }
             val verdict = lineValue(response, "VERDICT")?.let { Verdict.fromString(it) }
-            val summary = lineValue(response, "SUMMARY")
+            var summary = lineValue(response, "SUMMARY")
                 ?.takeIf { it.isNotBlank() && !it.equals("[summary]", true) }
 
-            Triple(tech, verdict, summary)
+            // A summary that never mentions the product is about something else -
+            // exactly the failure that produced a report on a pop song.
+            if (summary != null && !SourceEvidence.contains(summary, techName)) {
+                Log.w("TFC_DEBUG", "FACT_CHECK stage3 summary rejected: does not mention $techName")
+                summary = null
+            }
+
+            Pair(verdict, summary)
         } catch (e: Exception) {
             Log.e("TFC_DEBUG", "FACT_CHECK stage3 failed; using deterministic report", e)
             null
         }
-    }
-
-    /**
-     * OCR of a GitHub page is mostly licence text, UI labels and counts. A 1B
-     * model happily answers "Apache License 2.0" when asked to name the product,
-     * so reject any answer made up entirely of that vocabulary. Multi-word names
-     * survive as long as one token is distinctive ("GitHub Copilot" is fine).
-     */
-    /**
-     * The product name must actually occur in the post. This catches both
-     * hallucination and the 1B model's habit of echoing whatever example or
-     * vocabulary it saw in the instructions. Compared with punctuation and
-     * spacing stripped, so "ForgeCode" still matches a spoken "forge code".
-     */
-    private fun appearsInSource(value: String, source: String): Boolean {
-        val squash = { s: String -> s.lowercase().replace(Regex("[^a-z0-9]"), "") }
-        val needle = squash(value)
-        return needle.length >= 3 && squash(source).contains(needle)
-    }
-
-    private fun isBoilerplate(value: String): Boolean {
-        val tokens = value.lowercase()
-            .split(Regex("[^a-z0-9.+#]+"))
-            .filter { it.isNotBlank() }
-        if (tokens.isEmpty()) return true
-        return tokens.all { it in BOILERPLATE_TOKENS }
     }
 
     /**
@@ -326,17 +346,6 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             ?.substringAfter(":")
             ?.trim()
             ?.trim('*', '"', '`')
-            ?.takeIf { it.isNotBlank() }
-    }
-
-    /** A product name is one short line, never a paragraph or a stray field. */
-    private fun sanitizeName(value: String): String? {
-        return value.lineSequence().firstOrNull()
-            ?.trim()
-            ?.trim('*', '"', '`', '.', ',')
-            ?.split(Regex("\\s+"))
-            ?.take(4)
-            ?.joinToString(" ")
             ?.takeIf { it.isNotBlank() }
     }
 

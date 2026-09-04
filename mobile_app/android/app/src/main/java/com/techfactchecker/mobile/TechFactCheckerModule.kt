@@ -122,6 +122,9 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 val imageUrlList = mutableListOf<String>()
                 var author = "Creator"
                 var caption = ""
+                // Kept separate from the caption: each source is health-checked on
+                // its own, and a dead transcript must not poison a good caption.
+                var audioTranscript = ""
 
                 Log.e(TAG, "STEP 2: Extracting media on-device via offscreen WebView...")
                 val webResult = try {
@@ -238,6 +241,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     Log.i(TAG, "STEP 4e: Audio transcript chars=${transcriptFromAudio.length}")
                     retriever.release()
                     outputFile.delete()
+                    audioTranscript = transcriptFromAudio
                     caption = listOf(caption, transcriptFromAudio).filter { it.isNotBlank() }.joinToString("\n")
                 }
 
@@ -260,7 +264,9 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     author = author,
                     rawTranscript = transcript,
                     ocrResult = finalOcr,
-                    llamaEngine = if (useLocalLlm) llamaEngine else null
+                    llamaEngine = if (useLocalLlm) llamaEngine else null,
+                    caption = caption.removeSuffix(audioTranscript).trim(),
+                    speech = audioTranscript
                 )
                 Log.e(TAG, "STEP 6 DONE: verdict=${result.verdict}, techName=${result.techName}")
                 
