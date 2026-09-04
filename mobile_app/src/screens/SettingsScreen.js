@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, NativeModules, Platform, Switch } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, NativeModules, Platform, Switch, ScrollView } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import { colors } from '../theme/colors';
 import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey } from '../services/secrets';
@@ -132,6 +132,7 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
       <View style={styles.card}>
         <Text style={styles.title}>Groq API Setup</Text>
         <Text style={styles.desc}>
@@ -215,12 +216,14 @@ export default function SettingsScreen() {
           </View>
         )}
       </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background, padding: 16 },
+  container: { flex: 1, backgroundColor: colors.background },
+  scrollContent: { padding: 16, paddingBottom: 48 },
   card: { backgroundColor: colors.surface, padding: 20, borderRadius: 12, marginBottom: 16 },
   title: { color: colors.textPrimary, fontSize: 20, fontWeight: 'bold', marginBottom: 8 },
   desc: { color: colors.textSecondary, fontSize: 14, lineHeight: 20, marginBottom: 20 },
