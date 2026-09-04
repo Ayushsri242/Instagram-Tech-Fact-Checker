@@ -30,8 +30,8 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         speech: String = ""
     ): FactCheckResult = withContext(Dispatchers.Default) {
         Log.i("TFC_DEBUG", "FACT_CHECK start: reelId=$reelId, ocrChars=${ocrResult.fullText.length}, repos=${ocrResult.detectedRepos.size}, urls=${ocrResult.detectedUrls.size}, transcriptChars=${rawTranscript.length}")
-        Log.i("TFC_DEBUG", "FACT_CHECK transcript preview=${rawTranscript.take(220)}")
-        Log.i("TFC_DEBUG", "FACT_CHECK ocr preview=${ocrResult.fullText.take(220)}")
+        Log.i("TFC_DEBUG", "FACT_CHECK transcript=${rawTranscript.take(700)}")
+        Log.i("TFC_DEBUG", "FACT_CHECK ocr=${ocrResult.fullText.take(700)}")
         val evidenceList = mutableListOf<EvidenceSource>()
         val verifiedTools = mutableListOf<ToolClaim>()
 
@@ -41,6 +41,7 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         Log.i("TFC_DEBUG", "FACT_CHECK mode: ${if (offline) "OFFLINE_3STAGE" else "ONLINE_DETERMINISTIC"}")
 
         // 0. Direct verify all detected GitHub slugs (cheap, no LLM needed).
+        Log.i("TFC_DEBUG", "FACT_CHECK slugs detected=${ocrResult.detectedRepos}")
         for (slug in ocrResult.detectedRepos) {
             val ev = webValidator.verifyGitHubRepo(slug)
             if (ev != null) {
@@ -58,6 +59,8 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             }
         }
 
+        Log.i("TFC_DEBUG", "FACT_CHECK slugs verified=${verifiedTools.mapNotNull { it.githubRepo }}")
+
         var structured: Structured? = null
         var decidedTech: String? = null
         var abstainReason: String? = null
@@ -73,7 +76,10 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
                 caption = captionPart,
                 speech = speechPart,
                 ocrText = ocrResult.fullText,
-                detectedRepos = ocrResult.detectedRepos,
+                // Only slugs that GitHub actually confirmed. A raw OCR slug is
+                // often a fragment ("dev/cli", ".../ain") and scoring those as
+                // hard evidence let "ain" beat the real product name.
+                detectedRepos = verifiedTools.mapNotNull { it.githubRepo },
                 detectedUrls = ocrResult.detectedUrls
             )
 
@@ -116,6 +122,15 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
                     Log.i("TFC_DEBUG", "FACT_CHECK stage2: query=$query, results=${results.size}")
                 }
 
+                // The model's queries can be nonsense ("ain What does 4D refer?").
+                // Fall back to the bare product name rather than proceeding with
+                // no evidence at all.
+                if (evidenceList.isEmpty()) {
+                    Log.w("TFC_DEBUG", "FACT_CHECK stage2: all queries empty, retrying with bare name")
+                    evidenceList.addAll(webValidator.searchDuckDuckGo(decidedTech, maxResults = 4))
+                    Log.i("TFC_DEBUG", "FACT_CHECK stage2: fallback query=$decidedTech, results=${evidenceList.size}")
+                }
+
                 // Scrape page text once, for the best few results overall.
                 // Doing it per query would multiply into a long stall.
                 val enriched = webValidator.enrichWithPageText(evidenceList.toList(), limit = 3)
@@ -154,10 +169,18 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
 
         if (offline && decidedTech != null) {
             // STAGE 3 - compare the structured claims against the gathered evidence.
-            val compared = stageCompare(llamaEngine!!, decidedTech, structured, ocrResult.fullText, rawTranscript, evidenceList)
-            if (compared != null) {
-                compared.first?.let { if (it != Verdict.UNKNOWN) verdict = it }
-                compared.second?.let { aiSummary = it }
+            if (evidenceList.isEmpty()) {
+                // A fact-check with nothing to check against is not a verdict.
+                verdict = Verdict.UNKNOWN
+                aiSummary = "Identified $decidedTech from the post, but no web evidence " +
+                    "could be retrieved to verify its claims."
+                Log.w("TFC_DEBUG", "FACT_CHECK stage3 skipped: no evidence gathered")
+            } else {
+                val compared = stageCompare(llamaEngine!!, decidedTech, structured, ocrResult.fullText, rawTranscript, evidenceList)
+                if (compared != null) {
+                    compared.first?.let { if (it != Verdict.UNKNOWN) verdict = it }
+                    compared.second?.let { aiSummary = it }
+                }
             }
             Log.i("TFC_DEBUG", "FACT_CHECK stage3: tech=$primaryTech, verdict=$verdict, summaryChars=${aiSummary.length}")
         } else if (offline) {

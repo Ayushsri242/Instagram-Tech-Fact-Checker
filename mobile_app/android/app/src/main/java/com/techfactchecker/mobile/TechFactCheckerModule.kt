@@ -275,7 +275,8 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 
                 // Verify
                 val transcript = caption
-                Log.i(TAG, "STEP 6: Running FactCheckEngine. transcriptSource=${if (transcript.isEmpty()) "none" else "caption"}, transcriptLength=${transcript.length}")
+                val captionOnly = caption.removeSuffix(audioTranscript).trim()
+                Log.i(TAG, "STEP 6: Running FactCheckEngine. captionChars=${captionOnly.length}, speechChars=${audioTranscript.length}, transcriptLength=${transcript.length}")
                 val result = factCheckEngine.analyzeAndVerify(
                     reelId = url.hashCode().toString(),
                     sourceUrl = url,
@@ -284,7 +285,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     rawTranscript = transcript,
                     ocrResult = finalOcr,
                     llamaEngine = if (useLocalLlm) llamaEngine else null,
-                    caption = caption.removeSuffix(audioTranscript).trim(),
+                    caption = captionOnly,
                     speech = audioTranscript
                 )
                 Log.e(TAG, "STEP 6 DONE: verdict=${result.verdict}, techName=${result.techName}")
