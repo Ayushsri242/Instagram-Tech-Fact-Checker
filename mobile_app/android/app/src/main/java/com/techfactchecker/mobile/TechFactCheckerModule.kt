@@ -27,6 +27,9 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     companion object {
         private const val TAG = "TFC_DEBUG"
         private const val VIDEO_SERVICE_URL = "https://instagram-tech-fact-checker.onrender.com/extract"
+
+        /** Frames sampled per video, matching the web pipeline's 10. */
+        private const val FRAME_SAMPLES = 10
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -73,16 +76,12 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
         scope.launch {
             try {
                 val seenUrls = mutableSetOf<String>()
-                val evidence = Arguments.createArray()
+                val collected = mutableListOf<com.techfactchecker.app.data.model.EvidenceSource>()
                 val repoPattern = Regex("\\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\\b")
 
-                suspend fun addEvidence(title: String, url: String, snippet: String) {
-                    if (url.isBlank() || !seenUrls.add(url)) return
-                    val item = Arguments.createMap()
-                    item.putString("title", title)
-                    item.putString("url", url)
-                    item.putString("snippet", snippet)
-                    evidence.pushMap(item)
+                fun collect(source: com.techfactchecker.app.data.model.EvidenceSource) {
+                    if (source.url.isBlank() || !seenUrls.add(source.url)) return
+                    collected.add(source)
                 }
 
                 for (index in 0 until queries.size()) {
@@ -90,13 +89,26 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     if (query.isBlank()) continue
 
                     for (match in repoPattern.findAll(query)) {
-                        webValidator.verifyGitHubRepo(match.groupValues[1])?.let {
-                            addEvidence(it.title, it.url, it.snippet)
-                        }
+                        webValidator.verifyGitHubRepo(match.groupValues[1])?.let { collect(it) }
                     }
                     for (result in webValidator.searchDuckDuckGo(query, maxResults = 4)) {
-                        addEvidence(result.title, result.url, result.snippet)
+                        collect(result)
                     }
+                }
+
+                // Scrape page text once, for the best few results overall. Doing
+                // it per query would multiply into a long stall on a 10-query run.
+                val enriched = webValidator.enrichWithPageText(collected, limit = 4)
+                Log.i(TAG, "Evidence: results=${enriched.size}, pageContext=${enriched.count { it.pagePreview.isNotBlank() }}")
+
+                val evidence = Arguments.createArray()
+                for (source in enriched) {
+                    val item = Arguments.createMap()
+                    item.putString("title", source.title)
+                    item.putString("url", source.url)
+                    item.putString("snippet", source.snippet)
+                    item.putString("pagePreview", source.pagePreview)
+                    evidence.pushMap(item)
                 }
                 promise.resolve(evidence)
             } catch (e: Exception) {
@@ -223,20 +235,27 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     val durationMs = durationStr?.toLongOrNull() ?: 0L
                     Log.e(TAG, "STEP 4b: Video duration = ${durationMs}ms")
                     
+                    // Ten evenly spaced frames, matching the web pipeline's
+                    // ffmpeg fps=0.5 sampling. Four was too few: on a 28s reel
+                    // three of the four came back completely blank.
                     var framesProcessed = 0
-                    for (i in 1..4) {
-                        val timeUs = (durationMs * 1000 * i) / 5
+                    val seenLines = mutableSetOf<String>()
+                    for (i in 1..FRAME_SAMPLES) {
+                        val timeUs = (durationMs * 1000 * i) / (FRAME_SAMPLES + 1)
                         val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
                         if (bitmap != null) {
                             val ocrRes = ocrEngine.processImage(bitmap)
                             framesProcessed++
-                            Log.i(TAG, "STEP 4c: OCR frame $i textLength=${ocrRes.fullText.length}, repos=${ocrRes.detectedRepos.size}, urls=${ocrRes.detectedUrls.size}")
-                            combinedText.append(ocrRes.fullText).append("\n")
+                            // Frames repeat the same on-screen text, so dedupe by
+                            // line rather than pasting the same block ten times.
+                            val fresh = ocrRes.lines.filter { seenLines.add(it.lowercase()) }
+                            Log.i(TAG, "STEP 4c: OCR frame $i textLength=${ocrRes.fullText.length}, newLines=${fresh.size}, repos=${ocrRes.detectedRepos.size}, urls=${ocrRes.detectedUrls.size}")
+                            if (fresh.isNotEmpty()) combinedText.append(fresh.joinToString(" | ")).append("\n")
                             repos.addAll(ocrRes.detectedRepos)
                             urls.addAll(ocrRes.detectedUrls)
                         }
                     }
-                    Log.i(TAG, "STEP 4d: Frames processed=$framesProcessed/$4")
+                    Log.i(TAG, "STEP 4d: Frames processed=$framesProcessed/$FRAME_SAMPLES, uniqueLines=${seenLines.size}")
                     val transcriptFromAudio = audioTranscriber.transcribe(outputFile)
                     Log.i(TAG, "STEP 4e: Audio transcript chars=${transcriptFromAudio.length}")
                     retriever.release()

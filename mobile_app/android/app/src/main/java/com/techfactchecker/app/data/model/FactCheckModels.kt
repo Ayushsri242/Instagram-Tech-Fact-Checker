@@ -26,7 +26,10 @@ data class ToolClaim(
 data class EvidenceSource(
     val title: String,
     val url: String,
-    val snippet: String
+    val snippet: String,
+    // First ~1200 chars of the actual page. A search snippet is two lines of
+    // marketing; the page itself is what makes a verdict defensible.
+    val pagePreview: String = ""
 )
 
 data class FactCheckResult(
