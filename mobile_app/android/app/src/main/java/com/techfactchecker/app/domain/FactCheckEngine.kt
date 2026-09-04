@@ -304,7 +304,8 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
                 .filter { !it.equals("NONE", true) && it.length > 4 }
             val queries = listOfNotNull(lineValue(response, "QUERY1"), lineValue(response, "QUERY2"))
                 .filter { !it.equals("NONE", true) && it.length >= 8 && !SourceEvidence.isBoilerplate(it) }
-                .map { it.take(200) }
+                // Gemma sometimes leaves a stray escape at the end of a line.
+                .map { it.trim().trimEnd('\\', '"', '.').take(200) }
 
             if (claims.isEmpty() && queries.isEmpty()) null else Structured(claims, queries)
         } catch (e: Exception) {
