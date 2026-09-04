@@ -42,6 +42,8 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         llamaEngine: LocalLlamaEngine? = null
     ): FactCheckResult = withContext(Dispatchers.Default) {
         Log.i("TFC_DEBUG", "FACT_CHECK start: reelId=$reelId, ocrChars=${ocrResult.fullText.length}, repos=${ocrResult.detectedRepos.size}, urls=${ocrResult.detectedUrls.size}, transcriptChars=${rawTranscript.length}")
+        Log.i("TFC_DEBUG", "FACT_CHECK transcript preview=${rawTranscript.take(220)}")
+        Log.i("TFC_DEBUG", "FACT_CHECK ocr preview=${ocrResult.fullText.take(220)}")
         val evidenceList = mutableListOf<EvidenceSource>()
         val verifiedTools = mutableListOf<ToolClaim>()
 
@@ -169,14 +171,16 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
                 append("The OCR is screen text and is full of noise: never answer with a licence\n")
                 append("name (Apache, MIT, GPL), a GitHub UI label (stars, forks, issues, README),\n")
                 append("a file name, or a URL. Those are never the product.\n")
-                append("Use ONLY the supplied text. Never invent names.\n\n")
-                append("Example reply:\n")
-                append("TECH: Ollama\n")
-                append("CLAIM1: Runs large language models locally with one command\n")
-                append("CLAIM2: NONE\n")
-                append("QUERY1: Ollama run LLM locally single command\n")
-                append("QUERY2: NONE\n\n")
-                append("Reply with exactly those five lines and nothing else.\n\n")
+                append("Use ONLY the supplied text. Never invent names.\n")
+                append("Every word of TECH must be copied from the text below.\n\n")
+                // No worked example here on purpose: a 1B model copies the example
+                // verbatim instead of doing the task. Placeholders only.
+                append("Reply with exactly these five lines and nothing else:\n")
+                append("TECH: <product name copied from the text, or NONE>\n")
+                append("CLAIM1: <one concrete claim the post makes>\n")
+                append("CLAIM2: <another claim, or NONE>\n")
+                append("QUERY1: <short web search query that would verify CLAIM1>\n")
+                append("QUERY2: <short web search query that would verify CLAIM2, or NONE>\n\n")
                 append("SPOKEN WORDS AND CAPTION (authoritative):\n").append(transcript.take(900)).append("\n\n")
                 append("OCR (noisy screen text):\n").append(ocrText.take(900)).append("\n")
                 append("<end_of_turn>\n<start_of_turn>model\n")
@@ -184,26 +188,34 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             val response = llamaEngine.generateResponse(prompt)
             Log.i("TFC_DEBUG", "FACT_CHECK stage1 raw=${response.take(300)}")
 
+            val sourceText = "$transcript $ocrText"
             val rawTech = lineValue(response, "TECH")
                 ?.let { sanitizeName(it) }
                 ?.takeIf { !it.equals("NONE", true) }
-            val rejected = rawTech != null && isBoilerplate(rawTech)
-            if (rejected) {
-                Log.w("TFC_DEBUG", "FACT_CHECK stage1 rejected boilerplate TECH=$rawTech")
+
+            val reason = when {
+                rawTech == null -> null
+                isBoilerplate(rawTech) -> "boilerplate"
+                !appearsInSource(rawTech, sourceText) -> "not in source"
+                else -> null
             }
-            val tech = if (rejected) null else rawTech
+            if (reason != null) {
+                Log.w("TFC_DEBUG", "FACT_CHECK stage1 rejected TECH=$rawTech ($reason)")
+            }
+
+            // An ungrounded name means the model echoed the instructions rather
+            // than reading the post, so its claims and queries are untrustworthy
+            // too. Drop the whole answer and let the deterministic query run.
+            if (reason != null) return null
 
             val claims = listOfNotNull(lineValue(response, "CLAIM1"), lineValue(response, "CLAIM2"))
                 .filter { !it.equals("NONE", true) && it.length > 4 }
-
-            // If the name was rejected, any query built around it is worthless too.
             val queries = listOfNotNull(lineValue(response, "QUERY1"), lineValue(response, "QUERY2"))
                 .filter { !it.equals("NONE", true) && it.length >= 8 && !isBoilerplate(it) }
-                .filter { q -> !(rejected && rawTech != null && q.contains(rawTech, ignoreCase = true)) }
                 .map { it.take(200) }
 
-            if (tech == null && claims.isEmpty() && queries.isEmpty()) null
-            else Structured(tech, claims, queries)
+            if (rawTech == null && claims.isEmpty() && queries.isEmpty()) null
+            else Structured(rawTech, claims, queries)
         } catch (e: Exception) {
             Log.w("TFC_DEBUG", "FACT_CHECK stage1 failed: ${e.message}")
             null
@@ -220,9 +232,13 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         evidence: List<EvidenceSource>
     ): Triple<String?, Verdict?, String?>? {
         return try {
+            // Prefer what the creator actually said over raw OCR when stage 1
+            // produced nothing usable.
             val claimsText = structured?.claims?.takeIf { it.isNotEmpty() }
                 ?.joinToString("\n") { "- $it" }
-                ?: ocrText.take(500)
+                ?: listOf(transcript.take(400), ocrText.take(300))
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n")
             val evidenceText = evidence.take(5)
                 .joinToString("\n") { "- ${it.title}: ${it.snippet.take(220)}" }
                 .take(1600)
@@ -243,11 +259,15 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             val response = llamaEngine.generateResponse(prompt)
             Log.i("TFC_DEBUG", "FACT_CHECK stage3 raw=${response.take(300)}")
 
+            // Same grounding rule as stage 1: the name must exist in the post or
+            // in the evidence we actually retrieved, never invented here.
+            val grounding = "$transcript $ocrText " + evidence.joinToString(" ") { "${it.title} ${it.snippet}" }
             val tech = lineValue(response, "TECH_NAME")
                 ?.let { sanitizeName(it) }
                 ?.takeIf {
                     it.isNotBlank() && !it.equals("None", true) &&
-                        !it.equals("[name]", true) && !isBoilerplate(it)
+                        !it.equals("[name]", true) && !isBoilerplate(it) &&
+                        appearsInSource(it, grounding)
                 }
             val verdict = lineValue(response, "VERDICT")?.let { Verdict.fromString(it) }
             val summary = lineValue(response, "SUMMARY")
@@ -266,6 +286,18 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
      * so reject any answer made up entirely of that vocabulary. Multi-word names
      * survive as long as one token is distinctive ("GitHub Copilot" is fine).
      */
+    /**
+     * The product name must actually occur in the post. This catches both
+     * hallucination and the 1B model's habit of echoing whatever example or
+     * vocabulary it saw in the instructions. Compared with punctuation and
+     * spacing stripped, so "ForgeCode" still matches a spoken "forge code".
+     */
+    private fun appearsInSource(value: String, source: String): Boolean {
+        val squash = { s: String -> s.lowercase().replace(Regex("[^a-z0-9]"), "") }
+        val needle = squash(value)
+        return needle.length >= 3 && squash(source).contains(needle)
+    }
+
     private fun isBoilerplate(value: String): Boolean {
         val tokens = value.lowercase()
             .split(Regex("[^a-z0-9.+#]+"))
