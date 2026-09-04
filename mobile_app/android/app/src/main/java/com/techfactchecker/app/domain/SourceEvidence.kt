@@ -243,10 +243,29 @@ object SourceEvidence {
 
     fun squash(s: String): String = s.lowercase().replace(Regex("[^a-z0-9]"), "")
 
-    /** Punctuation-insensitive containment, so "ForgeCode" matches "forge code". */
+    /**
+     * Punctuation-insensitive containment that still respects word boundaries,
+     * so "ForgeCode" matches a spoken "forge code" but "ain" does not match
+     * inside "again". Plain substring matching on the squashed text handed a
+     * three-letter OCR fragment a corroboration bonus it had not earned.
+     */
     fun contains(haystack: String, needle: String): Boolean {
         val n = squash(needle)
-        return n.length >= 3 && squash(haystack).contains(n)
+        if (n.length < 3) return false
+        val tokens = haystack.lowercase()
+            .split(Regex("[^a-z0-9]+"))
+            .filter { it.isNotBlank() }
+        // Compare against runs of up to four whole tokens, so a name split
+        // across words still matches while a mid-word fragment cannot.
+        for (start in tokens.indices) {
+            val builder = StringBuilder()
+            for (end in start until minOf(start + 4, tokens.size)) {
+                builder.append(tokens[end])
+                if (builder.length > n.length) break
+                if (builder.toString() == n) return true
+            }
+        }
+        return false
     }
 
     fun isBoilerplate(value: String): Boolean {
