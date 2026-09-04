@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { NativeModules } from 'react-native';
 import { getGroqApiKey } from './secrets';
+import { getOfflineMode } from './storage';
 
 const { TechFactChecker } = NativeModules;
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
@@ -85,11 +86,20 @@ const normalizeTools = (tools) => (tools || []).map((tool) => ({
 }));
 
 export const analyzeReelApi = async (url) => {
+  if (!TechFactChecker) throw new Error('Native mobile module is unavailable. Rebuild the Android dev app.');
+  const offline = await getOfflineMode();
+
+  // Offline: the native 3-stage Gemma pipeline already produced the verdict,
+  // the evidence and the markdown report. Nothing leaves the device.
+  if (offline) {
+    const localResult = await TechFactChecker.analyzeAndVerify(url, true);
+    return { ...localResult, offline: true };
+  }
+
   const apiKey = await getGroqApiKey();
   if (!apiKey) throw new Error('Add your Groq API key in Setup first.');
-  if (!TechFactChecker) throw new Error('Native mobile module is unavailable. Rebuild the Android dev app.');
 
-  const media = await TechFactChecker.analyzeAndVerify(url);
+  const media = await TechFactChecker.analyzeAndVerify(url, false);
   const transcript = media.rawTranscript || '';
   const ocrText = media.ocrText || '';
   const claimsData = await extractClaims(apiKey, transcript, ocrText);
@@ -112,8 +122,9 @@ export const analyzeReelApi = async (url) => {
 };
 
 export const chatWithAiApi = async (reel, userMessage, conversation = []) => {
-  const apiKey = await getGroqApiKey();
-  if (!apiKey) throw new Error('Add your Groq API key in Setup first.');
+  const offline = await getOfflineMode();
+  const apiKey = offline ? null : await getGroqApiKey();
+  if (!offline && !apiKey) throw new Error('Add your Groq API key in Setup first.');
   const recentChat = conversation.slice(-8).map((message) =>
     (message.sender === 'user' ? 'User: ' : 'Assistant: ') + message.text
   ).join('\n');
@@ -125,6 +136,15 @@ export const chatWithAiApi = async (reel, userMessage, conversation = []) => {
     'Evidence: ' + JSON.stringify(reel.sources || []),
     'Answer concisely and technically. State uncertainty when evidence does not support an answer.',
   ].join('\n\n');
+  if (offline) {
+    if (!TechFactChecker) throw new Error('Native mobile module is unavailable.');
+    const prompt =
+      '<start_of_turn>user\n' + context + '\n\n' + recentChat +
+      '\n\nCurrent question: ' + userMessage +
+      '<end_of_turn>\n<start_of_turn>model\n';
+    return TechFactChecker.generateResponse(prompt);
+  }
+
   return callGroqText(apiKey, [
     { role: 'system', content: context },
     { role: 'user', content: recentChat + '\n\nCurrent question: ' + userMessage },

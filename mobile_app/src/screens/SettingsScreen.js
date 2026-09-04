@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, NativeModules, Platform } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, NativeModules, Platform, Switch } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import { colors } from '../theme/colors';
 import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey } from '../services/secrets';
+import { getOfflineMode, setOfflineMode } from '../services/storage';
 
 export default function SettingsScreen() {
   const [modelExists, setModelExists] = useState(false);
@@ -10,14 +11,16 @@ export default function SettingsScreen() {
   const [progress, setProgress] = useState(0);
   const [groqApiKey, setGroqApiKey] = useState('');
   const [hasGroqApiKey, setHasGroqApiKey] = useState(false);
+  const [offlineMode, setOfflineModeState] = useState(false);
 
   // Define exactly where the native Kotlin engine expects it.
   // Note: FileSystem.documentDirectory ends with a slash.
   const modelDir = `${FileSystem.documentDirectory}models/`;
-  const modelPath = `${modelDir}gemma-2b-it-cpu-int4.bin`;
+  const MODEL_FILE = 'Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task';
+  const modelPath = `${modelDir}${MODEL_FILE}`;
   
   // Direct download link from Hugging Face Dataset (CPU version)
-  const DOWNLOAD_URL = "https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/gemma-2b-it-cpu-int4.bin";
+  const DOWNLOAD_URL = `https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/${MODEL_FILE}`;
   const STT_FILES = [
     ['tiny-encoder.int8.onnx', 'https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/fact-checker-stt/whisper-tiny/tiny-encoder.int8.onnx'],
     ['tiny-decoder.int8.onnx', 'https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/fact-checker-stt/whisper-tiny/tiny-decoder.int8.onnx'],
@@ -27,6 +30,7 @@ export default function SettingsScreen() {
   useEffect(() => {
     checkModel();
     checkGroqApiKey();
+    getOfflineMode().then(setOfflineModeState);
   }, []);
 
   const checkGroqApiKey = async () => {
@@ -59,6 +63,15 @@ export default function SettingsScreen() {
       console.error('Failed to delete Groq API key', e);
       alert('Could not delete Groq API key.');
     }
+  };
+
+  const toggleOffline = async (value) => {
+    if (value && !modelExists) {
+      alert('Download the local model below before switching to offline mode.');
+      return;
+    }
+    setOfflineModeState(value);
+    await setOfflineMode(value);
   };
 
   const checkModel = async () => {
@@ -113,6 +126,8 @@ export default function SettingsScreen() {
   const deleteModel = async () => {
     await FileSystem.deleteAsync(modelPath, { idempotent: true });
     setModelExists(false);
+    setOfflineModeState(false);
+    await setOfflineMode(false);
   };
 
   return (
@@ -148,10 +163,27 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.card}>
+        <Text style={styles.title}>Analysis Mode</Text>
+        <Text style={styles.desc}>
+          Online uses Groq and is faster and more accurate. Offline runs the
+          3-stage pipeline entirely on this phone with Gemma 3 - no API key,
+          no data leaves the device, but slower and less precise.
+        </Text>
+        <View style={styles.toggleRow}>
+          <Text style={styles.statusText}>
+            Mode: <Text style={{ color: offlineMode ? colors.warning : colors.success }}>
+              {offlineMode ? 'Offline (on-device Gemma)' : 'Online (Groq)'}
+            </Text>
+          </Text>
+          <Switch value={offlineMode} onValueChange={toggleOffline} />
+        </View>
+      </View>
+
+      <View style={styles.card}>
         <Text style={styles.title}>Local AI Model Setup</Text>
         <Text style={styles.desc}>
-          To run chats completely offline, you need to download the Local LLaMA model file (2GB).
-          If you don't download it, the app will fall back to cloud APIs.
+          Optional. Only needed for Offline mode: Gemma 3 1B (529 MB) plus the
+          Whisper speech model. Skip this if you stay on Online mode.
         </Text>
 
         <View style={styles.statusBox}>
@@ -209,6 +241,7 @@ const styles = StyleSheet.create({
   progressBarBg: { height: 10, backgroundColor: colors.background, borderRadius: 5, overflow: 'hidden' },
   progressBarFill: { height: '100%', backgroundColor: colors.primary },
   buttonRow: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   downloadBtn: { backgroundColor: colors.primary, padding: 14, borderRadius: 8, flex: 1, alignItems: 'center' },
   deleteBtn: { backgroundColor: colors.error, padding: 14, borderRadius: 8, flex: 1, alignItems: 'center' },
   btnText: { color: 'white', fontWeight: 'bold', fontSize: 16 },

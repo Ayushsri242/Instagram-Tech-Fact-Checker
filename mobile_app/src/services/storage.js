@@ -64,3 +64,23 @@ export const getChatHistory = async (reelId) => {
     return [];
   }
 };
+
+const OFFLINE_MODE_KEY = '@tech_fact_checker_offline_mode';
+
+// Offline = run the on-device Gemma pipeline instead of Groq. Default is
+// online, so users who never download the 529 MB model are unaffected.
+export const getOfflineMode = async () => {
+  try {
+    return (await AsyncStorage.getItem(OFFLINE_MODE_KEY)) === 'true';
+  } catch (e) {
+    return false;
+  }
+};
+
+export const setOfflineMode = async (enabled) => {
+  try {
+    await AsyncStorage.setItem(OFFLINE_MODE_KEY, enabled ? 'true' : 'false');
+  } catch (e) {
+    console.error('Failed to save offline mode:', e);
+  }
+};
