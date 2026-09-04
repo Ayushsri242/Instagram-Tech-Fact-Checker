@@ -24,14 +24,35 @@ class AudioTranscriber(private val modelDir: File) {
         val encoding: Int
     )
 
+    /** Whisper sizes we know how to load, best first. */
+    private val modelPrefixes = listOf("small", "base", "tiny")
+
+    /**
+     * Picks the largest Whisper model actually present. tiny hears the sentence
+     * structure but gets every proper noun wrong, which is fatal here because
+     * the product name is the whole job - so a bigger model, once downloaded,
+     * should be used without any further code change.
+     */
+    private fun findModelSet(): Triple<File, File, File>? {
+        for (prefix in modelPrefixes) {
+            val encoder = File(modelDir, "$prefix-encoder.int8.onnx")
+            val decoder = File(modelDir, "$prefix-decoder.int8.onnx")
+            val tokens = File(modelDir, "$prefix-tokens.txt")
+            if (encoder.exists() && decoder.exists() && tokens.exists()) {
+                Log.i("TFC_DEBUG", "STT model: using '$prefix' (encoder=${encoder.length()} decoder=${decoder.length()})")
+                return Triple(encoder, decoder, tokens)
+            }
+        }
+        return null
+    }
+
     fun transcribe(videoFile: File): String {
-        val encoder = File(modelDir, "tiny-encoder.int8.onnx")
-        val decoder = File(modelDir, "tiny-decoder.int8.onnx")
-        val tokens = File(modelDir, "tiny-tokens.txt")
-        if (!encoder.exists() || !decoder.exists() || !tokens.exists()) {
+        val modelSet = findModelSet()
+        if (modelSet == null) {
             Log.w("TFC_DEBUG", "STT skipped: Whisper model files missing")
             return ""
         }
+        val (encoder, decoder, tokens) = modelSet
         return try {
             val pcm = decodeAudio(videoFile)
             if (pcm.samples.isEmpty()) return ""

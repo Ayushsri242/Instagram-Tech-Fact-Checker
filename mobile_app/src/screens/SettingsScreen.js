@@ -22,15 +22,22 @@ export default function SettingsScreen() {
   
   // Direct download link from Hugging Face Dataset (CPU version)
   const DOWNLOAD_URL = `https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/${MODEL_FILE}`;
-  const STT_BASE = 'https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/fact-checker-sttwhisper-tiny';
+  // sherpa-onnx publishes these itself, so there is nothing to re-host.
+  // Whisper base, not tiny: tiny transcribes the sentence structure correctly
+  // but gets every proper noun wrong ("forge code" -> "4D", "Claude" -> "Cloud"),
+  // and the product name is the entire point of the analysis.
+  const STT_BASE = 'https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base/resolve/main';
   // [filename, minimum plausible size]. A 404 from HF is a 15-byte body that
   // downloadAsync writes to disk without throwing; sherpa-onnx then calls
   // exit(-1) natively on the unparseable file and kills the whole app.
   const STT_FILES = [
-    ['tiny-encoder.int8.onnx', 10000000],
-    ['tiny-decoder.int8.onnx', 80000000],
-    ['tiny-tokens.txt', 500000],
+    ['base-encoder.int8.onnx', 25000000],   // actual 29.1 MB
+    ['base-decoder.int8.onnx', 110000000],  // actual 130.7 MB
+    ['base-tokens.txt', 700000],            // actual 0.8 MB
   ];
+  // Superseded by base. Deleted after a successful base download so the old
+  // ~90 MB is not left sitting on the device forever.
+  const LEGACY_STT_FILES = ['tiny-encoder.int8.onnx', 'tiny-decoder.int8.onnx', 'tiny-tokens.txt'];
 
   useEffect(() => {
     checkModel();
@@ -134,6 +141,10 @@ export default function SettingsScreen() {
         await FileSystem.deleteAsync(path, { idempotent: true });
         throw new Error(`Speech model ${name} failed (HTTP ${res.status}, ${info.size || 0} bytes).`);
       }
+    }
+    // Only now, with base confirmed on disk, reclaim the old tiny files.
+    for (const name of LEGACY_STT_FILES) {
+      await FileSystem.deleteAsync(`${modelDir}whisper-tiny/${name}`, { idempotent: true });
     }
     setSttExists(true);
   };
