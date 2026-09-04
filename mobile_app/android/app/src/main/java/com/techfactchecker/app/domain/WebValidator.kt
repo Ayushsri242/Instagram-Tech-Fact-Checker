@@ -64,6 +64,35 @@ class WebValidator {
         return@withContext null
     }
 
+    /**
+     * Pulls readable text off a result page. The web pipeline feeds this to the
+     * model as page context and it is the single biggest quality difference
+     * between a snippet-only verdict and a grounded one.
+     */
+    suspend fun fetchPageText(url: String, maxChars: Int = 1200): String = withContext(Dispatchers.IO) {
+        try {
+            val doc = Jsoup.connect(url)
+                .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .timeout(4000)
+                .ignoreContentType(true)
+                .get()
+            doc.select("script, style, nav, footer, header, noscript").remove()
+            val text = doc.body()?.text()?.replace(Regex("\\s+"), " ")?.trim() ?: ""
+            return@withContext text.take(maxChars)
+        } catch (e: Exception) {
+            return@withContext ""
+        }
+    }
+
+    /** Adds page context to the first [limit] results, leaving the rest untouched. */
+    suspend fun enrichWithPageText(
+        sources: List<EvidenceSource>,
+        limit: Int = 3
+    ): List<EvidenceSource> = sources.mapIndexed { index, source ->
+        if (index >= limit || source.pagePreview.isNotBlank()) source
+        else source.copy(pagePreview = fetchPageText(source.url))
+    }
+
     suspend fun searchDuckDuckGo(query: String, maxResults: Int = 3): List<EvidenceSource> = withContext(Dispatchers.IO) {
         val results = mutableListOf<EvidenceSource>()
         try {

@@ -41,18 +41,57 @@ const callGroqText = async (apiKey, messages) => {
   throw lastError || new Error('All Groq models failed.');
 };
 
-const extractClaims = (apiKey, transcript, ocrText) => {
+// Mirrors verify.extract_claims_and_queries in the Python pipeline. The short
+// version of this prompt missed listicle carousels and never asked for repo
+// slugs, which is where most of the checkable evidence actually lives.
+const extractClaims = async (apiKey, transcript, ocrText) => {
   const prompt = [
-    'Analyze this tech video/reel/carousel using transcript and OCR.',
-    'Transcript:', transcript,
-    'OCR:', ocrText,
-    'Return ONLY JSON:',
-    '{"tech_name":"main tool/title","tools":[{"name":"Tool Name","github_repo":"owner/repo or null","pip_command":"pip install ... or null","claim":"core claim"}],"claimed_features":["claim"],"search_queries":["precise query"]}',
+    'Analyze this content from a tech video/Instagram reel/carousel post.',
+    'You are given both the Audio Transcript (or post caption) and all On-Screen Text detected from the video frames/slides.',
+    '',
+    'Audio Transcript / Caption:',
+    transcript,
+    '',
+    'On-Screen Text / Visuals Detected from Frames/Slides:',
+    ocrText,
+    '',
+    'Task:',
+    '1. Determine if this post is about a SINGLE tool/technique or MULTIPLE tools/libraries (e.g. "5 LLM Libraries", listicle carousel).',
+    '2. Extract all distinct tools/libraries/frameworks mentioned or shown on screen. Look specifically for GitHub repo names (e.g. owner/repo), pip package names, and domain URLs.',
+    '3. Generate precise DuckDuckGo search queries. If GitHub repo or pip package names are present, include queries like "owner/repo github" or "pip install packagename".',
+    '',
+    'Respond ONLY with valid JSON in this exact structure:',
+    '{"tech_name":"Primary title or main tool name","is_multi_tool":true,"tools":[{"name":"Tool Name","github_repo":"owner/repo or null","pip_command":"pip install ... or null","claim":"Core feature or claim stated"}],"claimed_features":["claim 1","claim 2"],"search_queries":["query 1","query 2"]}',
   ].join('\n');
-  return callGroqJson(apiKey, [
+
+  const data = await callGroqJson(apiKey, [
     { role: 'system', content: 'You are an expert technical entity and claim extraction system. Output strictly valid JSON.' },
     { role: 'user', content: prompt },
   ]);
+
+  // Deterministic query enrichment, same as the Python side. A repo slug read
+  // off the screen is checkable evidence and must not depend on the model
+  // remembering to ask about it.
+  const queries = data.search_queries || [];
+  const slugPattern = /\b([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)\b/g;
+  let match = slugPattern.exec(ocrText || '');
+  while (match !== null) {
+    const slug = match[1];
+    if (!slug.startsWith('http') && !slug.startsWith('pip/') && !slug.startsWith('api/')) {
+      if (!queries.includes(slug + ' github')) queries.unshift(slug + ' github');
+    }
+    match = slugPattern.exec(ocrText || '');
+  }
+  (data.tools || []).forEach((tool) => {
+    if (tool.github_repo && tool.github_repo !== 'null' && !queries.includes(tool.github_repo + ' github')) {
+      queries.unshift(tool.github_repo + ' github');
+    }
+    if (tool.name && !queries.includes(tool.name + ' python library github')) {
+      queries.push(tool.name + ' python library github');
+    }
+  });
+  data.search_queries = queries.slice(0, 10);
+  return data;
 };
 
 const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence) => {
@@ -60,15 +99,34 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence) 
     'Title: ' + (item.title || ''),
     'URL: ' + (item.url || ''),
     'Snippet: ' + (item.snippet || ''),
+    // Scraped page text, matching research.fetch_url_text. Without it the model
+    // is reasoning from two lines of search-result marketing.
+    'Page Context: ' + (item.pagePreview || '').slice(0, 400),
   ].join('\n')).join('\n\n');
   const prompt = [
-    'You are a senior Applied AI and Software Engineer fact-checking a social-media tech post.',
-    'Compare transcript, OCR, claims, and web evidence. Practical utility matters.',
-    'Verdict must be TRUE, PARTIALLY_TRUE, HYPE, MISLEADING, or FAKE.',
-    'Transcript:', transcript,
-    'OCR:', ocrText,
-    'Extracted claims:', JSON.stringify(claimsData),
-    'Web evidence:', evidenceText,
+    'You are a senior Applied AI and Software Engineer acting as a practical, objective Fact-Checker for social media tech videos and posts.',
+    'Analyze the claims made in the transcript/caption and on-screen visuals against the collected real-world web evidence.',
+    '',
+    'Audio/Caption:', transcript,
+    '',
+    'Visual/OCR Text:', ocrText,
+    '',
+    'Extracted Claims & Tools:', JSON.stringify(claimsData),
+    '',
+    'Web Evidence Gathered:', evidenceText,
+    '',
+    'Evaluation Principles:',
+    '- If MULTI-TOOL list (e.g. 5 tools): check each tool against evidence. If real GitHub repositories / pip packages exist, the verdict should reflect their collective authenticity. In the summary, give a concise bulleted breakdown for EVERY tool with its repo, practical utility, and caveats.',
+    '- If SINGLE-TOOL: evaluate the single tool deeply.',
+    '- Practical Utility First: if a shorthand trick or prompt (e.g. "/eli5") actually produces the claimed result in practice because the AI understands the intent, mark it TRUE or PARTIALLY_TRUE and explain prompt semantics vs native command.',
+    '- TRUE: tools/repos exist, are open-source / usable, and work as demonstrated.',
+    '- PARTIALLY_TRUE: real tools/repos exist, but with minor technical caveats (early alpha, semantic shortcut, setup prerequisites).',
+    '- HYPE: the underlying concept exists, but marketing claims ("100% replaces everything", "zero effort") are exaggerated.',
+    '- MISLEADING: omits critical limitations, severe pricing catches, or misrepresents functionality.',
+    '- FAKE: completely fabricated tools, non-existent repos, or scams.',
+    '',
+    'summary_markdown must contain: 🎯 Verdict, 🔍 What Was Claimed (bullets), 💡 Practical Reality & Tool Breakdown (name, repo link, pip command, what it does), ⚠️ Gotchas / Caveats, 🔗 References.',
+    '',
     'Return ONLY JSON:',
     '{"tech_name":"string","verdict":"TRUE","pricing_model":"Open Source","github_url":"https://github.com/... or null","factual_reality":"2-4 sentence explanation","summary_markdown":"markdown report with Verdict, What Was Claimed, Practical Reality, Gotchas, References","sources":["url"]}',
   ].join('\n');

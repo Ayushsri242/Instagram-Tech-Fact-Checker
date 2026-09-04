@@ -39,6 +39,26 @@ object SourceEvidence {
         "stackoverflow", "facebook", "discord", "notion", "substack", "bit"
     )
 
+    /**
+     * Function words. A product name never contains one, but a sloppy Whisper
+     * transcript produces plenty of "Cloud and" / "on terminal" phrases that
+     * otherwise score like real names.
+     */
+    private val STOPWORDS = setOf(
+        "a", "an", "and", "or", "the", "this", "that", "these", "those", "is",
+        "are", "was", "were", "be", "been", "it", "its", "on", "in", "at", "to",
+        "of", "for", "from", "with", "by", "as", "but", "so", "if", "than",
+        "then", "when", "while", "you", "your", "we", "our", "they", "he",
+        "she", "i", "me", "my", "not", "no", "can", "will", "just", "like",
+        "about", "into", "out", "up", "down", "over", "very", "more", "most"
+    )
+
+    /** URL path tails that are never the product name. */
+    private val JUNK_PATH_SEGMENTS = setOf(
+        "cli", "install", "main", "master", "blob", "tree", "docs", "doc",
+        "releases", "release", "latest", "index", "readme", "sh", "bin"
+    )
+
     data class Health(val usable: Boolean, val reason: String)
 
     data class Candidate(
@@ -128,15 +148,20 @@ object SourceEvidence {
         }
 
         // Repository names and domains survive OCR noise well and are unambiguous.
-        for (slug in detectedRepos) add(slug.substringAfterLast('/'), 4, "repo")
-        for (url in detectedUrls) add(domainLabel(url), 4, "domain")
+        // A name that is literally a repository or a registered domain on screen
+        // is hard evidence. Loose speech is not, so it must not outrank this.
+        for (slug in detectedRepos) {
+            val tail = slug.substringAfterLast('/')
+            if (tail.lowercase() !in JUNK_PATH_SEGMENTS) add(tail, 6, "repo")
+        }
+        for (url in detectedUrls) add(domainLabel(url), 6, "domain")
         // A domain can also be spoken or sit in the caption without being parsed
         // as a URL, so sweep the raw text for bare hostnames too.
         for (text in listOf(usableOcr, spoken)) {
             // OCR routinely inserts spaces around the dot ("forgecode. dev/cli"),
             // which is why OcrEngine's stricter URL pattern found nothing here.
             for (m in Regex("([A-Za-z][A-Za-z0-9-]{2,24})\\s*\\.\\s*(?:com|io|ai|dev|app|org|net|sh|co)\\b", RegexOption.IGNORE_CASE).findAll(text)) {
-                add(m.groupValues[1], 4, "domain")
+                add(m.groupValues[1], 6, "domain")
             }
         }
 
@@ -148,7 +173,7 @@ object SourceEvidence {
         // "Forge: AI-Enhanced Terminal Development" - a heading naming the product.
         for (line in usableOcr.lines()) {
             val m = Regex("^\\s*([A-Za-z][A-Za-z0-9+.#-]{2,20})\\s*:").find(line) ?: continue
-            add(m.groupValues[1], 2, "heading")
+            add(m.groupValues[1], 3, "heading")
         }
 
         // Hashtags are author-supplied labels, noisy but deliberate.
@@ -239,6 +264,9 @@ object SourceEvidence {
         if (name.length < 3 || name.length > 40) return null
         if (!name.first().isLetter()) return null
         if (name.any { !it.isLetterOrDigit() && it != ' ' && it != '-' && it != '.' && it != '+' && it != '#' }) return null
+        val words = name.lowercase().split(' ').filter { it.isNotBlank() }
+        if (words.any { it in STOPWORDS }) return null
+        if (words.size == 1 && words[0] in JUNK_PATH_SEGMENTS) return null
         return name
     }
 

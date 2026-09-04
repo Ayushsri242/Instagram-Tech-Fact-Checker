@@ -115,6 +115,13 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
                     evidenceList.addAll(results)
                     Log.i("TFC_DEBUG", "FACT_CHECK stage2: query=$query, results=${results.size}")
                 }
+
+                // Scrape page text once, for the best few results overall.
+                // Doing it per query would multiply into a long stall.
+                val enriched = webValidator.enrichWithPageText(evidenceList.toList(), limit = 3)
+                evidenceList.clear()
+                evidenceList.addAll(enriched)
+                Log.i("TFC_DEBUG", "FACT_CHECK stage2: pageContext=${enriched.count { it.pagePreview.isNotBlank() }}/${enriched.size}")
             }
         } else {
             // Online mode keeps the original cheap behaviour: only search when
@@ -202,6 +209,9 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
         val first = top[0]
         val second = top[1]
         if (first.score - second.score > 1 || second.score < 3) return leader
+        // A repo or domain read off the screen is hard evidence; do not let a
+        // fuzzy web-snippet count overturn it in favour of transcript chatter.
+        if (first.why.contains("repo") || first.why.contains("domain")) return leader
 
         val cross = listOf(
             if (decision.ocr.usable) ocrText else "",
@@ -289,9 +299,15 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
                 ?: listOf(transcript.take(400), ocrText.take(300))
                     .filter { it.isNotBlank() }
                     .joinToString("\n")
+            // Page context, not just the search snippet: this is what lets a
+            // small model say something specific instead of hedging.
             val evidenceText = evidence.take(5)
-                .joinToString("\n") { "- ${it.title}: ${it.snippet.take(220)}" }
-                .take(1600)
+                .joinToString("\n") { source ->
+                    val context = source.pagePreview.take(400)
+                    "- ${source.title}: ${source.snippet.take(220)}" +
+                        if (context.isNotBlank()) "\n  Page: $context" else ""
+                }
+                .take(2400)
 
             val prompt = buildString {
                 append("<start_of_turn>user\n")
