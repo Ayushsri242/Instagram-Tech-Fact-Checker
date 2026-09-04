@@ -181,6 +181,14 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
                     compared.first?.let { if (it != Verdict.UNKNOWN) verdict = it }
                     compared.second?.let { aiSummary = it }
                 }
+                if (aiSummary.isBlank()) {
+                    // Both model attempts failed. Say what we actually did rather
+                    // than showing an empty analysis section.
+                    aiSummary = "Identified $decidedTech from the post and checked it against " +
+                        "${evidenceList.size} web sources. The local model could not produce a " +
+                        "reliable summary, so the verdict below comes from the evidence gathered."
+                    Log.w("TFC_DEBUG", "FACT_CHECK stage3: falling back to deterministic summary")
+                }
             }
             Log.i("TFC_DEBUG", "FACT_CHECK stage3: tech=$primaryTech, verdict=$verdict, summaryChars=${aiSummary.length}")
         } else if (offline) {
@@ -348,14 +356,14 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             Log.i("TFC_DEBUG", "FACT_CHECK stage3 raw=${response.take(300)}")
 
             val verdict = lineValue(response, "VERDICT")?.let { Verdict.fromString(it) }
-            var summary = lineValue(response, "SUMMARY")
-                ?.takeIf { it.isNotBlank() && !it.equals("[summary]", true) }
+            var summary = validSummary(lineValue(response, "SUMMARY"), techName)
 
-            // A summary that never mentions the product is about something else -
-            // exactly the failure that produced a report on a pop song.
-            if (summary != null && !SourceEvidence.contains(summary, techName)) {
-                Log.w("TFC_DEBUG", "FACT_CHECK stage3 summary rejected: does not mention $techName")
-                summary = null
+            // A 1B model regularly answers the first requested line and stops.
+            // Asking again for the summary alone is far more reliable than
+            // rewording a two-line instruction it has already ignored.
+            if (summary == null) {
+                Log.w("TFC_DEBUG", "FACT_CHECK stage3: no summary in reply, retrying summary alone")
+                summary = validSummary(stageSummaryOnly(llamaEngine, techName, claimsText, evidenceText), techName)
             }
 
             Pair(verdict, summary)
@@ -363,6 +371,74 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
             Log.e("TFC_DEBUG", "FACT_CHECK stage3 failed; using deterministic report", e)
             null
         }
+    }
+
+    /**
+     * Second attempt at the summary, asking for prose only. No key prefix, no
+     * second field - just the sentences, which is the one thing a small model
+     * reliably produces.
+     */
+    private suspend fun stageSummaryOnly(
+        llamaEngine: LocalLlamaEngine,
+        techName: String,
+        claimsText: String,
+        evidenceText: String
+    ): String? {
+        return try {
+            val prompt = buildString {
+                append("<start_of_turn>user
+")
+                append("Write exactly two sentences about ").append(techName).append(".
+")
+                append("Say whether the web evidence below supports the claims made about it.
+")
+                append("Use ONLY the evidence. Do not invent facts. Do not add any heading or label.
+")
+                append("Mention ").append(techName).append(" by name.
+
+")
+                append("CLAIMS:
+").append(claimsText).append("
+
+")
+                append("WEB EVIDENCE:
+").append(evidenceText.ifBlank { "(none found)" }).append("
+")
+                append("<end_of_turn>
+<start_of_turn>model
+")
+            }
+            val reply = normalizeNewlines(llamaEngine.generateResponse(prompt)).trim()
+            Log.i("TFC_DEBUG", "FACT_CHECK stage3 summary retry raw=${reply.take(220)}")
+            reply.lines()
+                .map { it.trim().removePrefix("*").removePrefix("#").trim() }
+                .filter { it.isNotBlank() }
+                .joinToString(" ")
+                .removePrefix("SUMMARY:")
+                .trim()
+                .takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            Log.w("TFC_DEBUG", "FACT_CHECK stage3 summary retry failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * A summary that never mentions the product is about something else - that
+     * is what produced the report on a pop song - and a one-clause fragment is
+     * not worth showing either.
+     */
+    private fun validSummary(raw: String?, techName: String): String? {
+        val summary = raw?.trim()?.takeIf { it.isNotBlank() && !it.equals("[summary]", true) } ?: return null
+        if (summary.length < 40) {
+            Log.w("TFC_DEBUG", "FACT_CHECK stage3 summary rejected: too short (${summary.length})")
+            return null
+        }
+        if (!SourceEvidence.contains(summary, techName)) {
+            Log.w("TFC_DEBUG", "FACT_CHECK stage3 summary rejected: does not mention $techName")
+            return null
+        }
+        return summary
     }
 
     /**
