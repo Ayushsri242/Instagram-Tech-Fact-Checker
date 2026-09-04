@@ -386,27 +386,14 @@ class FactCheckEngine(private val webValidator: WebValidator = WebValidator()) {
     ): String? {
         return try {
             val prompt = buildString {
-                append("<start_of_turn>user
-")
-                append("Write exactly two sentences about ").append(techName).append(".
-")
-                append("Say whether the web evidence below supports the claims made about it.
-")
-                append("Use ONLY the evidence. Do not invent facts. Do not add any heading or label.
-")
-                append("Mention ").append(techName).append(" by name.
-
-")
-                append("CLAIMS:
-").append(claimsText).append("
-
-")
-                append("WEB EVIDENCE:
-").append(evidenceText.ifBlank { "(none found)" }).append("
-")
-                append("<end_of_turn>
-<start_of_turn>model
-")
+                append("<start_of_turn>user\n")
+                append("Write exactly two sentences about ").append(techName).append(".\n")
+                append("Say whether the web evidence below supports the claims made about it.\n")
+                append("Use ONLY the evidence. Do not invent facts. Do not add any heading or label.\n")
+                append("Mention ").append(techName).append(" by name.\n\n")
+                append("CLAIMS:\n").append(claimsText).append("\n\n")
+                append("WEB EVIDENCE:\n").append(evidenceText.ifBlank { "(none found)" }).append("\n")
+                append("<end_of_turn>\n<start_of_turn>model\n")
             }
             val reply = normalizeNewlines(llamaEngine.generateResponse(prompt)).trim()
             Log.i("TFC_DEBUG", "FACT_CHECK stage3 summary retry raw=${reply.take(220)}")
