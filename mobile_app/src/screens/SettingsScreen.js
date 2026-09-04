@@ -7,6 +7,7 @@ import { getOfflineMode, setOfflineMode } from '../services/storage';
 
 export default function SettingsScreen() {
   const [modelExists, setModelExists] = useState(false);
+  const [sttExists, setSttExists] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [groqApiKey, setGroqApiKey] = useState('');
@@ -21,10 +22,14 @@ export default function SettingsScreen() {
   
   // Direct download link from Hugging Face Dataset (CPU version)
   const DOWNLOAD_URL = `https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/${MODEL_FILE}`;
+  const STT_BASE = 'https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/fact-checker-sttwhisper-tiny';
+  // [filename, minimum plausible size]. A 404 from HF is a 15-byte body that
+  // downloadAsync writes to disk without throwing; sherpa-onnx then calls
+  // exit(-1) natively on the unparseable file and kills the whole app.
   const STT_FILES = [
-    ['tiny-encoder.int8.onnx', 'https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/fact-checker-stt/whisper-tiny/tiny-encoder.int8.onnx'],
-    ['tiny-decoder.int8.onnx', 'https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/fact-checker-stt/whisper-tiny/tiny-decoder.int8.onnx'],
-    ['tiny-tokens.txt', 'https://huggingface.co/datasets/Ayush-242/fact-checker-model/resolve/main/fact-checker-stt/whisper-tiny/tiny-tokens.txt'],
+    ['tiny-encoder.int8.onnx', 10000000],
+    ['tiny-decoder.int8.onnx', 80000000],
+    ['tiny-tokens.txt', 500000],
   ];
 
   useEffect(() => {
@@ -83,8 +88,66 @@ export default function SettingsScreen() {
       
       const fileInfo = await FileSystem.getInfoAsync(modelPath);
       setModelExists(fileInfo.exists && fileInfo.size > 100000);
+      await purgeBadSttFiles();
+      setSttExists(await checkStt());
     } catch (e) {
       console.log("Error checking model", e);
+    }
+  };
+
+  // Self-heal: a previously failed download leaves a tiny junk file that
+  // crashes the native STT engine. Remove anything implausibly small.
+  const purgeBadSttFiles = async () => {
+    for (const [name, minSize] of STT_FILES) {
+      const path = `${modelDir}whisper-tiny/${name}`;
+      try {
+        const info = await FileSystem.getInfoAsync(path);
+        if (info.exists && info.size < minSize) {
+          console.warn(`Removing truncated STT file ${name} (${info.size} bytes)`);
+          await FileSystem.deleteAsync(path, { idempotent: true });
+        }
+      } catch (e) {
+        // Nothing to clean up.
+      }
+    }
+  };
+
+  const checkStt = async () => {
+    for (const [name, minSize] of STT_FILES) {
+      try {
+        const info = await FileSystem.getInfoAsync(`${modelDir}whisper-tiny/${name}`);
+        if (!info.exists || info.size < minSize) return false;
+      } catch (e) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const downloadStt = async () => {
+    await FileSystem.makeDirectoryAsync(`${modelDir}whisper-tiny/`, { intermediates: true });
+    for (const [name, minSize] of STT_FILES) {
+      const path = `${modelDir}whisper-tiny/${name}`;
+      const res = await FileSystem.downloadAsync(`${STT_BASE}/${name}`, path);
+      const info = await FileSystem.getInfoAsync(path);
+      if (res.status !== 200 || !info.exists || info.size < minSize) {
+        await FileSystem.deleteAsync(path, { idempotent: true });
+        throw new Error(`Speech model ${name} failed (HTTP ${res.status}, ${info.size || 0} bytes).`);
+      }
+    }
+    setSttExists(true);
+  };
+
+  const downloadSttOnly = async () => {
+    setIsDownloading(true);
+    try {
+      await downloadStt();
+      alert('Speech model downloaded.');
+    } catch (e) {
+      console.error(e);
+      alert(`Download failed: ${e.message || e}`);
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -112,12 +175,10 @@ export default function SettingsScreen() {
       if (Platform.OS === 'android' && NativeModules.TechFactChecker) {
         await NativeModules.TechFactChecker.reloadModel();
       }
-      for (const [name, url] of STT_FILES) {
-        await FileSystem.downloadAsync(url, `${modelDir}whisper-tiny/${name}`);
-      }
+      await downloadStt();
     } catch (e) {
       console.error(e);
-      alert('Download failed');
+      alert(`Download failed: ${e.message || e}`);
     } finally {
       setIsDownloading(false);
     }
@@ -192,6 +253,9 @@ export default function SettingsScreen() {
             Status: <Text style={{ color: modelExists ? colors.success : colors.warning }}>
               {modelExists ? 'Downloaded & Ready' : 'Not Found'}
             </Text>
+            {'\n'}Speech: <Text style={{ color: sttExists ? colors.success : colors.warning }}>
+              {sttExists ? 'Ready' : 'Not downloaded (speech step will be skipped)'}
+            </Text>
           </Text>
         </View>
 
@@ -209,9 +273,16 @@ export default function SettingsScreen() {
                 <Text style={styles.btnText}>Download Local Model</Text>
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity style={styles.deleteBtn} onPress={deleteModel}>
-                <Text style={styles.btnText}>Delete Model</Text>
-              </TouchableOpacity>
+              <>
+                {!sttExists && (
+                  <TouchableOpacity style={styles.downloadBtn} onPress={downloadSttOnly}>
+                    <Text style={styles.btnText}>Download Speech Model</Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity style={styles.deleteBtn} onPress={deleteModel}>
+                  <Text style={styles.btnText}>Delete Model</Text>
+                </TouchableOpacity>
+              </>
             )}
           </View>
         )}
