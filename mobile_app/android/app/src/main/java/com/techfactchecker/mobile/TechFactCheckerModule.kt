@@ -107,10 +107,10 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun analyzeAndVerify(url: String, promise: Promise) {
+    fun analyzeAndVerify(url: String, useLocalLlm: Boolean, promise: Promise) {
         scope.launch {
             try {
-                Log.e(TAG, "STEP 1: Starting analyzeAndVerify with url=$url")
+                Log.e(TAG, "STEP 1: Starting analyzeAndVerify with url=$url, useLocalLlm=$useLocalLlm")
 
                 // 1. Media extraction: on-device WebView first, Render cloud only as fallback.
                 val combinedText = StringBuilder()
@@ -260,7 +260,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     author = author,
                     rawTranscript = transcript,
                     ocrResult = finalOcr,
-                    llamaEngine = null
+                    llamaEngine = if (useLocalLlm) llamaEngine else null
                 )
                 Log.e(TAG, "STEP 6 DONE: verdict=${result.verdict}, techName=${result.techName}")
                 
