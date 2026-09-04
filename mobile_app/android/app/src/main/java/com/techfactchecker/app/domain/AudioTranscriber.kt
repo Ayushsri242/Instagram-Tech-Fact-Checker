@@ -24,6 +24,15 @@ class AudioTranscriber(private val modelDir: File) {
         val encoding: Int
     )
 
+    private companion object {
+        /**
+         * Window length for chunked decoding. Short enough that a repetition
+         * loop cannot swallow the whole clip, long enough to keep sentence
+         * context. Whisper's own window is 30s and sherpa pads shorter input.
+         */
+        const val CHUNK_SECONDS = 12
+    }
+
     /** Whisper sizes we know how to load, best first. */
     private val modelPrefixes = listOf("small", "base", "tiny")
 
@@ -85,11 +94,7 @@ class AudioTranscriber(private val modelDir: File) {
             val recognizer = OfflineRecognizer(null,
                 OfflineRecognizerConfig(modelConfig = model, decodingMethod = "greedy_search")
             )
-            val stream = recognizer.createStream()
-            stream.acceptWaveform(pcm.samples, pcm.sampleRate)
-            recognizer.decode(stream)
-            val text = recognizer.getResult(stream).text.trim()
-            stream.release()
+            val text = transcribeInChunks(recognizer, pcm)
             recognizer.release()
             Log.i("TFC_DEBUG", "STT complete: chars=${text.length}, sampleRate=${pcm.sampleRate}")
             text
@@ -97,6 +102,78 @@ class AudioTranscriber(private val modelDir: File) {
             Log.e("TFC_DEBUG", "STT failed: ${e.message}", e)
             ""
         }
+    }
+
+    /**
+     * Transcribes the audio in short windows instead of one 28-second pass.
+     *
+     * sherpa-onnx only offers greedy decoding for Whisper. faster-whisper (the
+     * web pipeline) survives the same audio because it adds beam search, a
+     * temperature fallback and a compression-ratio check that detects a
+     * repetition loop and retries. We have none of that, and on Hinglish audio
+     * Whisper drifts, starts feeding its own output back, and emits the same
+     * word for the rest of the clip - base produced "Claude Codec dindshad
+     * pureon awal awal awal..." for 26 straight seconds.
+     *
+     * A fresh window resets that state, so a loop costs one chunk instead of
+     * the whole transcript, and each chunk is checked before being kept.
+     */
+    private fun transcribeInChunks(recognizer: OfflineRecognizer, pcm: Pcm): String {
+        val chunkSamples = pcm.sampleRate * CHUNK_SECONDS
+        val minSamples = pcm.sampleRate                 // ignore a trailing sliver under 1s
+        val kept = mutableListOf<String>()
+        var start = 0
+        var index = 0
+        var dropped = 0
+
+        while (start < pcm.samples.size) {
+            val end = minOf(start + chunkSamples, pcm.samples.size)
+            if (end - start < minSamples) break
+            index++
+
+            val slice = pcm.samples.copyOfRange(start, end)
+            val stream = recognizer.createStream()
+            val text = try {
+                stream.acceptWaveform(slice, pcm.sampleRate)
+                recognizer.decode(stream)
+                recognizer.getResult(stream).text.trim()
+            } finally {
+                stream.release()
+            }
+
+            when {
+                text.isBlank() ->
+                    Log.i("TFC_DEBUG", "STT chunk $index: empty")
+                isLooped(text) -> {
+                    dropped++
+                    Log.w("TFC_DEBUG", "STT chunk $index: dropped as repetition loop: ${text.take(80)}")
+                }
+                else -> {
+                    kept.add(text)
+                    Log.i("TFC_DEBUG", "STT chunk $index: kept ${text.length} chars: ${text.take(80)}")
+                }
+            }
+            start = end
+        }
+
+        Log.i("TFC_DEBUG", "STT chunks: total=$index kept=${kept.size} dropped=$dropped")
+        return kept.joinToString(" ")
+    }
+
+    /**
+     * True when a chunk is mostly the same word or phrase over and over. Kept
+     * separate from SourceEvidence.speechHealth because a legitimately short
+     * chunk must not be thrown away for being short.
+     */
+    private fun isLooped(text: String): Boolean {
+        val words = text.lowercase().split(Regex("[^a-z0-9']+")).filter { it.isNotBlank() }
+        if (words.size < 8) return false
+        if (words.distinct().size.toFloat() / words.size < 0.40f) return true
+        if (words.size >= 12) {
+            val shingles = (0..words.size - 3).map { words.subList(it, it + 3).joinToString(" ") }
+            if (shingles.distinct().size.toFloat() / shingles.size < 0.50f) return true
+        }
+        return false
     }
 
     private fun encodingName(enc: Int): String = when (enc) {
