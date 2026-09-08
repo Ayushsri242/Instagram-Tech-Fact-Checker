@@ -147,6 +147,16 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 // Kept separate from the caption: each source is health-checked on
                 // its own, and a dead transcript must not poison a good caption.
                 var audioTranscript = ""
+                // Native-side diagnostics travel to the JS run log and end up as
+                // CSV columns. Reading them out of logcat does not work: the
+                // buffer rolls within minutes, and a batch of five posts is
+                // analysed long after the last run. Everything needed to name
+                // the failing stage has to survive in the file.
+                var slidesJson = 0
+                var slidesDom = 0
+                var extractVia = ""
+                var candidateUrls = listOf<String>()
+                val ocrLens = mutableListOf<Int>()
 
                 Log.e(TAG, "STEP 2: Extracting media on-device via offscreen WebView...")
                 val webResult = try {
@@ -163,6 +173,10 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     imageUrlList.addAll(webResult.imageUrls)
                     author = webResult.author
                     caption = webResult.caption
+                    slidesJson = webResult.slidesJson
+                    slidesDom = webResult.slidesDom
+                    extractVia = webResult.via
+                    candidateUrls = webResult.candidates
                     Log.e(TAG, "STEP 2b: SOURCE=WEBVIEW via=${webResult.via} type=$mediaType images=${imageUrlList.size}")
                 } else {
                     mediaSource = "RENDER"
@@ -216,6 +230,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                             if (bitmap != null) {
                                 val ocrRes = ocrEngine.processImage(bitmap)
                                 Log.i(TAG, "STEP 4b: OCR image $i textLength=${ocrRes.fullText.length}, repos=${ocrRes.detectedRepos.size}, urls=${ocrRes.detectedUrls.size}")
+                                ocrLens.add(ocrRes.fullText.length)
                                 combinedText.append(ocrRes.fullText).append("\n")
                                 repos.addAll(ocrRes.detectedRepos)
                                 urls.addAll(ocrRes.detectedUrls)
@@ -260,6 +275,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                             // line rather than pasting the same block ten times.
                             val fresh = ocrRes.lines.filter { seenLines.add(it.lowercase()) }
                             Log.i(TAG, "STEP 4c: OCR frame $i textLength=${ocrRes.fullText.length}, newLines=${fresh.size}, repos=${ocrRes.detectedRepos.size}, urls=${ocrRes.detectedUrls.size}")
+                            ocrLens.add(ocrRes.fullText.length)
                             if (fresh.isNotEmpty()) combinedText.append(fresh.joinToString(" | ")).append("\n")
                             repos.addAll(ocrRes.detectedRepos)
                             urls.addAll(ocrRes.detectedUrls)
@@ -314,6 +330,27 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 map.putString("summaryMarkdown", result.summaryMarkdown)
                 map.putString("rawTranscript", result.rawTranscript)
                 map.putString("ocrText", result.ocrText)
+                // The JS run log used to read `media.caption` and
+                // `media.speechChars`, neither of which the bridge ever sent, so
+                // two CSV columns were blank on every run in three test sets and
+                // read as "STT produced nothing" rather than "nobody wired it".
+                map.putString("caption", captionOnly)
+                map.putInt("speechChars", audioTranscript.length)
+                map.putString("mediaSource", mediaSource)
+                map.putString("mediaType", mediaType)
+                map.putString("extractVia", extractVia)
+                map.putInt("slidesJson", slidesJson)
+                map.putInt("slidesDom", slidesDom)
+                map.putInt("imagesUsed", imageUrlList.size)
+                map.putString("sttStats", audioTranscriber.lastStats)
+                map.putString("ocrLens", ocrLens.joinToString(","))
+                // Cross-post contamination: the embed renders suggested posts
+                // beside the real one and their images share the CDN path shape,
+                // so the distinguishing field has to be read off real runs.
+                map.putString(
+                    "candidates",
+                    candidateUrls.take(12).joinToString(" | ") { it.take(160) }
+                )
                 
                 val toolsArray = Arguments.createArray()
                 result.tools.forEach { tool ->

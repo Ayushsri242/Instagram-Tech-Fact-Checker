@@ -76,7 +76,14 @@ class InstagramExtractor(private val context: Context) {
         val imageUrls: List<String>,
         val caption: String,
         val author: String,
-        val via: String
+        val via: String,
+        // Carousel coverage, carried up to the run log rather than left in
+        // logcat. A 9-slide post that yields 4 images produced two confident
+        // denials of tools that were sitting on the slides nobody loaded, and
+        // the logcat buffer had rolled by the time the batch was analysed.
+        val slidesJson: Int = 0,
+        val slidesDom: Int = 0,
+        val candidates: List<String> = emptyList()
     ) {
         val isEmpty: Boolean get() = videoUrl.isNullOrBlank() && imageUrls.isEmpty()
     }
@@ -165,7 +172,8 @@ class InstagramExtractor(private val context: Context) {
                 imageUrls = if (video != null) emptyList() else images,
                 caption = "",
                 author = "Creator",
-                via = "TIER_A_SNIFF"
+                via = "TIER_A_SNIFF",
+                candidates = images
             )
         }
 
@@ -332,7 +340,10 @@ class InstagramExtractor(private val context: Context) {
             imageUrls = if (hasVideo) emptyList() else imageUrls,
             caption = caption,
             author = author,
-            via = "TIER_B_HTML"
+            via = "TIER_B_HTML",
+            slidesJson = fromJson.size,
+            slidesDom = fromDom.size,
+            candidates = imageUrls
         )
     }
 
