@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, NativeModules, Platform, Switch, ScrollView } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import { colors } from '../theme/colors';
-import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey } from '../services/secrets';
+import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey, saveApiProvider, saveApiModel, getApiProvider, getApiModel } from '../services/secrets';
 import { getOfflineMode, setOfflineMode } from '../services/storage';
+import { detectProvider } from '../services/api';
 
 export default function SettingsScreen() {
   const [modelExists, setModelExists] = useState(false);
@@ -11,6 +12,8 @@ export default function SettingsScreen() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [groqApiKey, setGroqApiKey] = useState('');
+  const [manualProvider, setManualProvider] = useState('');
+  const [manualModel, setManualModel] = useState('');
   const [hasGroqApiKey, setHasGroqApiKey] = useState(false);
   const [offlineMode, setOfflineModeState] = useState(false);
 
@@ -47,33 +50,44 @@ export default function SettingsScreen() {
 
   const checkGroqApiKey = async () => {
     const savedKey = await getGroqApiKey();
+    const savedProv = await getApiProvider();
+    const savedMod = await getApiModel();
+    if (savedProv) setManualProvider(savedProv);
+    if (savedMod) setManualModel(savedMod);
     setHasGroqApiKey(Boolean(savedKey));
   };
 
   const saveGroqKey = async () => {
-    if (!groqApiKey.trim()) {
-      alert('Paste a Groq API key first.');
+    if (!groqApiKey.trim() && !hasGroqApiKey) {
+      alert('Paste an API key first.');
       return;
     }
     try {
-      await saveGroqApiKey(groqApiKey);
+      if (groqApiKey.trim()) await saveGroqApiKey(groqApiKey);
+      await saveApiProvider(manualProvider);
+      await saveApiModel(manualModel);
       setGroqApiKey('');
       setHasGroqApiKey(true);
-      alert('Groq API key saved on this device.');
+      alert('API Config saved on this device!');
     } catch (e) {
-      console.error('Failed to save Groq API key', e);
-      alert('Could not save Groq API key.');
+      console.error('Failed to save API Config', e);
+      alert('Could not save API Config.');
     }
   };
 
   const removeGroqKey = async () => {
     try {
       await deleteGroqApiKey();
+      await saveApiProvider('');
+      await saveApiModel('');
       setGroqApiKey('');
+      setManualProvider('');
+      setManualModel('');
       setHasGroqApiKey(false);
+      alert('API Config deleted.');
     } catch (e) {
-      console.error('Failed to delete Groq API key', e);
-      alert('Could not delete Groq API key.');
+      console.error('Failed to delete API Config', e);
+      alert('Could not delete API Config.');
     }
   };
 
@@ -205,35 +219,63 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-      <View style={styles.card}>
-        <Text style={styles.title}>Groq API Setup</Text>
-        <Text style={styles.desc}>
-          Paste your Groq API key. It is encrypted and saved only in this app on this phone.
-        </Text>
-        <TextInput
-          style={styles.input}
-          value={groqApiKey}
-          onChangeText={setGroqApiKey}
-          placeholder="gsk_..."
-          placeholderTextColor={colors.textMuted}
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-        />
-        <Text style={styles.keyStatus}>
-          Status: {hasGroqApiKey ? 'Saved on device' : 'Not saved'}
-        </Text>
-        <View style={styles.buttonRow}>
-          <TouchableOpacity style={styles.downloadBtn} onPress={saveGroqKey}>
-            <Text style={styles.btnText}>Save Groq Key</Text>
-          </TouchableOpacity>
-          {hasGroqApiKey && (
-            <TouchableOpacity style={styles.deleteBtn} onPress={removeGroqKey}>
-              <Text style={styles.btnText}>Delete</Text>
+        <View style={styles.card}>
+          <Text style={styles.title}>API Key Setup</Text>
+          <Text style={styles.desc}>
+            Paste your API key. Groq, OpenRouter, NVIDIA, OpenAI, Google,
+            Mistral and Cohere are detected automatically.
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={groqApiKey}
+            onChangeText={setGroqApiKey}
+            placeholder="gsk_..., sk-or-v1-..., nvapi-..."
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+          />
+          <Text style={styles.keyStatus}>
+            Status: {hasGroqApiKey ? 'Saved on device' : 'Not saved'} | Detected:{' '}
+            {detectProvider(groqApiKey) || (groqApiKey ? 'Unknown - set an override below' : '-')}
+          </Text>
+
+          <Text style={[styles.desc, { marginTop: 12 }]}>
+            Provider Override (Optional - only if unknown above):
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={manualProvider}
+            onChangeText={setManualProvider}
+            placeholder="e.g. Mistral, Cohere (Leave blank for Auto)"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <Text style={[styles.desc, { marginTop: 8 }]}>
+            Model Name Override (Optional):
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={manualModel}
+            onChangeText={setManualModel}
+            placeholder="e.g. mistral-large-latest (Leave blank for default)"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          <View style={styles.buttonRow}>
+            <TouchableOpacity style={styles.downloadBtn} onPress={saveGroqKey}>
+              <Text style={styles.btnText}>Save Config</Text>
             </TouchableOpacity>
-          )}
+            {hasGroqApiKey && (
+              <TouchableOpacity style={styles.deleteBtn} onPress={removeGroqKey}>
+                <Text style={styles.btnText}>Delete</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
-      </View>
 
       <View style={styles.card}>
         <Text style={styles.title}>Analysis Mode</Text>
