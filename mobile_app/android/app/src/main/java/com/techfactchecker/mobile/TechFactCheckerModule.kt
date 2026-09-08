@@ -89,7 +89,17 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     if (query.isBlank()) continue
 
                     for (match in repoPattern.findAll(query)) {
-                        webValidator.verifyGitHubRepo(match.groupValues[1])?.let { collect(it) }
+                        webValidator.verifyGitHubRepo(match.groupValues[1])?.let { verified ->
+                            // Attach the README straight away. github.com repo
+                            // pages render client-side, so the page scraper got
+                            // zero characters off them and the model ended up
+                            // asserting "the repo confirms..." having read
+                            // nothing. raw.githubusercontent.com is a plain file
+                            // host, so this costs no GitHub API budget.
+                            val slug = verified.url.removePrefix("https://github.com/")
+                            val readme = webValidator.fetchGitHubReadme(slug)
+                            collect(if (readme.isBlank()) verified else verified.copy(pagePreview = readme))
+                        }
                     }
                     for (result in webValidator.searchDuckDuckGo(query, maxResults = 4)) {
                         collect(result)
@@ -99,7 +109,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 // Scrape page text once, for the best few results overall. Doing
                 // it per query would multiply into a long stall on a 10-query run.
                 val enriched = webValidator.enrichWithPageText(collected, limit = 4)
-                Log.i(TAG, "Evidence: results=${enriched.size}, pageContext=${enriched.count { it.pagePreview.isNotBlank() }}")
+                Log.i(TAG, "Evidence: results=${enriched.size}, pageContext=${enriched.count { it.pagePreview.isNotBlank() }}, ghRateLimited=${WebValidator.gitHubRateLimited}")
 
                 val evidence = Arguments.createArray()
                 for (source in enriched) {
