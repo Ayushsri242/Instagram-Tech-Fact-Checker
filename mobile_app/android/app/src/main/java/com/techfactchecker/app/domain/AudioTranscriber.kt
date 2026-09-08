@@ -31,6 +31,14 @@ class AudioTranscriber(private val modelDir: File) {
          * context. Whisper's own window is 30s and sherpa pads shorter input.
          */
         const val CHUNK_SECONDS = 12
+
+        /**
+         * Below this peak amplitude the track carries no speech. Measured
+         * silence in set 3 was exactly 0.000; a quiet but real reel in the same
+         * set peaked at 0.899, so there is three orders of magnitude of room
+         * between the two and this threshold does not need to be delicate.
+         */
+        const val SILENCE_PEAK = 0.01f
     }
 
     /** Whisper sizes we know how to load, best first. */
@@ -91,6 +99,18 @@ class AudioTranscriber(private val modelDir: File) {
             lastStats = "rate=${pcm.sampleRate} ch=${pcm.channels} enc=${encodingName(pcm.encoding)} " +
                 "durationSec=${"%.1f".format(pcm.samples.size / pcm.sampleRate.toFloat())} " +
                 "peak=${"%.3f".format(peak)} rms=${"%.4f".format(rms)}"
+
+            // Silence is not speech, whatever the decoder says about it. Both
+            // carousels in set 3 came through this path with peak=0.000 and
+            // rms=0.0000, and Whisper answered the silence with "Iw'n gweld."
+            // (Welsh) five times over - every chunk kept, because isLooped needs
+            // eight words and eleven characters is not a loop. The amplitude was
+            // already computed two lines above and never consulted.
+            if (peak < SILENCE_PEAK) {
+                Log.w("TFC_DEBUG", "STT: track is silent (peak=${"%.4f".format(peak)}), returning no transcript")
+                lastStats += " silent=true"
+                return ""
+            }
             dumpWav(pcm)
 
             val whisper = OfflineWhisperModelConfig(
