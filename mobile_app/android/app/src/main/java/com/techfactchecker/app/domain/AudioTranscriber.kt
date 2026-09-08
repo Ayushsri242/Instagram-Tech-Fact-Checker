@@ -55,7 +55,18 @@ class AudioTranscriber(private val modelDir: File) {
         return null
     }
 
+    /**
+     * The last run's audio shape and chunk tally, in one line, for the CSV run
+     * log. The same facts are in logcat, but the logcat buffer rolls in minutes
+     * and a five-post batch is analysed hours later - the run that dropped the
+     * chunk carrying every proper noun was only diagnosable because the log was
+     * still there. The CSV survives.
+     */
+    var lastStats: String = ""
+        private set
+
     fun transcribe(videoFile: File): String {
+        lastStats = ""
         val modelSet = findModelSet()
         if (modelSet == null) {
             Log.w("TFC_DEBUG", "STT skipped: Whisper model files missing")
@@ -77,6 +88,9 @@ class AudioTranscriber(private val modelDir: File) {
                     "enc=${encodingName(pcm.encoding)} durationSec=${"%.1f".format(pcm.samples.size / pcm.sampleRate.toFloat())} " +
                     "peak=${"%.3f".format(peak)} rms=${"%.4f".format(rms)}"
             )
+            lastStats = "rate=${pcm.sampleRate} ch=${pcm.channels} enc=${encodingName(pcm.encoding)} " +
+                "durationSec=${"%.1f".format(pcm.samples.size / pcm.sampleRate.toFloat())} " +
+                "peak=${"%.3f".format(peak)} rms=${"%.4f".format(rms)}"
             dumpWav(pcm)
 
             val whisper = OfflineWhisperModelConfig(
@@ -157,6 +171,8 @@ class AudioTranscriber(private val modelDir: File) {
         }
 
         Log.i("TFC_DEBUG", "STT chunks: total=$index kept=${kept.size} dropped=$dropped")
+        lastStats = (lastStats + " chunks=$index kept=${kept.size} dropped=$dropped " +
+            "keptLens=[" + kept.joinToString(",") { it.length.toString() } + "]").trim()
         return kept.joinToString(" ")
     }
 
