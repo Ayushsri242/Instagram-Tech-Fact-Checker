@@ -68,6 +68,30 @@ class InstagramExtractor(private val context: Context) {
 
         private fun isJunkImage(url: String): Boolean =
             JUNK_IMAGE_MARKERS.any { url.contains(it) }
+
+        /**
+         * Instagram states the rendition in the `stp` query parameter, and that
+         * is what separates this post's slides from everything else the embed
+         * page draws around them. Measured on post DcbFunokXyI:
+         *
+         *   dst-jpg_e35_tt6                  real slide 01/07
+         *   dst-jpg_e35_tt6                  real slide 02/07
+         *   dst-jpg_s100x100_tt6             the author's avatar
+         *   dst-jpg_e35_p240x240_sh2.08_tt6  a suggested post
+         *   dst-jpg_e15_p240x240_tt6         a suggested post
+         *
+         * The avatar and the two suggested posts were OCR'd as if they were
+         * slides, which put an unrelated post about Claude pricing into the
+         * evidence: the report then fact-checked "FABLE 5.1" as a tool of this
+         * post. `isJunkImage` could not catch them because the markers it knows
+         * are path segments, while these sizes live in the query string.
+         *
+         * A real slide is delivered at full width and carries no NNNxNNN size.
+         */
+        private val THUMBNAIL_RENDITION_REGEX = Regex("""[_=][sp]\d{2,4}x\d{2,4}""")
+
+        private fun isThumbnail(url: String): Boolean =
+            THUMBNAIL_RENDITION_REGEX.containsMatchIn(url)
     }
 
     data class ExtractResult(
@@ -297,8 +321,17 @@ class InstagramExtractor(private val context: Context) {
             .filter { it.startsWith("http") && !isJunkImage(it) }
             .distinct()
             .toList()
-        val imageUrls = (if (fromJson.isNotEmpty()) fromJson else fromDom).take(12)
-        Log.i(TAG, "EXTRACT: TIER_B slides json=" + fromJson.size + " dom=" + fromDom.size)
+        val rawImages = (if (fromJson.isNotEmpty()) fromJson else fromDom).take(12)
+        // Fail safe: if every candidate looks like a thumbnail the assumption is
+        // wrong for this page, and half a post beats none of it - keep the
+        // originals and let the coverage warning downstream say so.
+        val slideImages = rawImages.filterNot { isThumbnail(it) }
+        val imageUrls = if (slideImages.isNotEmpty()) slideImages else rawImages
+        Log.i(
+            TAG,
+            "EXTRACT: TIER_B slides json=" + fromJson.size + " dom=" + fromDom.size +
+                " kept=" + imageUrls.size + " droppedThumbnails=" + (rawImages.size - slideImages.size)
+        )
 
         // The embed page renders suggested posts alongside the requested one, and
         // their images survive isJunkImage because they are full-size media with
