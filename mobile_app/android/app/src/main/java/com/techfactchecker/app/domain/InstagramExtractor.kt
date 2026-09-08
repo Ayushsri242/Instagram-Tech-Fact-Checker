@@ -292,6 +292,20 @@ class InstagramExtractor(private val context: Context) {
         val imageUrls = (if (fromJson.isNotEmpty()) fromJson else fromDom).take(12)
         Log.i(TAG, "EXTRACT: TIER_B slides json=" + fromJson.size + " dom=" + fromDom.size)
 
+        // The embed page renders suggested posts alongside the requested one, and
+        // their images survive isJunkImage because they are full-size media with
+        // the same CDN path shape as real slides. On post Dc8bV14lHsk the OCR
+        // came back with two foreign posts mixed in (a data-science workshop and
+        // an unrelated Hidden Markov Model post), and every downstream stage then
+        // fact-checked claims the post never made.
+        //
+        // Filtering blind risks removing real slides, so log the candidates in
+        // full first and decide from real data which field actually separates
+        // them.
+        imageUrls.forEachIndexed { i, u ->
+            Log.i(TAG, "EXTRACT: candidate[" + i + "] " + u.take(220))
+        }
+
         val author = (CAPTION_USER_REGEX.find(html)?.groupValues?.get(1)
             ?: OWNER_REGEX.find(json)?.groupValues?.get(1)
             ?: "").trim().ifBlank { "Creator" }
