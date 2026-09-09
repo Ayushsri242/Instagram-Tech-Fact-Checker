@@ -251,30 +251,55 @@ class InstagramExtractor(private val context: Context) {
                 handler.postDelayed(runnable, SETTLE_AFTER_LOAD_MS)
             }
 
-            private fun scrapeHtml(view: WebView?) {
+            private val scrapedImages = mutableSetOf<String>()
+            private var lastHtml = ""
+            private fun scrapeHtml(view: WebView?, attempt: Int = 0) {
                 if (finished.get() || view == null) return
+                if (isReel) {
+                    view.evaluateJavascript("(function(){return document.documentElement.outerHTML})();") { raw ->
+                        val html = unescapeJsPayload(raw)
+                        val parsed = parseHtml(html, isReel)
+                        if (parsed != null && !parsed.isEmpty) finish(parsed) else {
+                            val sniff = buildFromSniff()
+                            if (sniff != null) finish(sniff) else finish(null)
+                        }
+                    }
+                    return
+                }
+
                 view.evaluateJavascript(
-                    "(function(){return document.documentElement.outerHTML})();"
+                    "(function(){" +
+                    "  var next = document.querySelector('button[aria-label=\"Next\"]') || document.querySelector('.coreSpriteRightChevron');" +
+                    "  if (next) next.click();" +
+                    "  return document.documentElement.outerHTML;" +
+                    "})();"
                 ) { raw ->
                     val html = unescapeJsPayload(raw)
-                    Log.i(
-                        TAG,
-                        "EXTRACT: TIER_B html chars=" + html.length +
-                            " videoTag=" + VIDEO_TAG_REGEX.containsMatchIn(html) +
-                            " videoUrlKey=" + html.contains("\"video_url\"") +
-                            " displayUrlKey=" + html.contains("\"display_url\"")
-                    )
-                    val parsed = parseHtml(html, isReel)
-                    if (parsed != null && !parsed.isEmpty) {
-                        finish(parsed)
+                    lastHtml = html
+                    
+                    val json = normalizeEscapes(html)
+                    val fromJson = DISPLAY_URL_REGEX.findAll(json)
+                        .map { cleanUrl(it.groupValues[1]) }
+                        .filter { it.startsWith("http") && !isJunkImage(it) }
+                        .toList()
+                    val fromDom = IMG_TAG_REGEX.findAll(html)
+                        .map { cleanUrl(it.groupValues[1]) }
+                        .filter { it.startsWith("http") && !isJunkImage(it) }
+                        .toList()
+                    
+                    val newImages = (if (fromJson.isNotEmpty()) fromJson else fromDom).filterNot { isThumbnail(it) }
+                    val added = scrapedImages.addAll(newImages)
+                    
+                    if ((added || attempt == 0) && attempt < 10) {
+                        handler.postDelayed({ scrapeHtml(view, attempt + 1) }, 600)
                     } else {
-                        val sniff = buildFromSniff()
-                        if (sniff != null) {
-                            Log.i(TAG, "EXTRACT: TIER_B empty, falling back to TIER_A sniff")
-                            finish(sniff)
+                        Log.i(TAG, "EXTRACT: TIER_B pagination finished after " + attempt + " swipes")
+                        val parsed = parseHtml(lastHtml, isReel, scrapedImages.toList())
+                        if (parsed != null && !parsed.isEmpty) {
+                            finish(parsed)
                         } else {
-                            Log.e(TAG, "EXTRACT: both tiers empty (post may be login-gated)")
-                            finish(null)
+                            val sniff = buildFromSniff()
+                            if (sniff != null) finish(sniff) else finish(null)
                         }
                     }
                 }
@@ -296,7 +321,7 @@ class InstagramExtractor(private val context: Context) {
         webView.loadUrl(embedUrl)
     }
 
-    private fun parseHtml(html: String, isReel: Boolean): ExtractResult? {
+    private fun parseHtml(html: String, isReel: Boolean, allImages: List<String>? = null): ExtractResult? {
         if (html.isBlank()) return null
 
         // contextJSON is embedded as a double-escaped string, so the display_url key never matches
@@ -321,7 +346,7 @@ class InstagramExtractor(private val context: Context) {
             .filter { it.startsWith("http") && !isJunkImage(it) }
             .distinct()
             .toList()
-        val rawImages = (if (fromJson.isNotEmpty()) fromJson else fromDom).take(12)
+        val rawImages = allImages?.take(20) ?: (if (fromJson.isNotEmpty()) fromJson else fromDom).take(12)
         // Fail safe: if every candidate looks like a thumbnail the assumption is
         // wrong for this page, and half a post beats none of it - keep the
         // originals and let the coverage warning downstream say so.
