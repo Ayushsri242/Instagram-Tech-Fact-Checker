@@ -2,6 +2,8 @@ import axios from 'axios';
 import { NativeModules } from 'react-native';
 import { getGroqApiKey, getApiProvider, getApiModel } from './secrets';
 import { getOfflineMode, saveApiLimits } from './storage';
+import { runVerifiers, fillMissingPageText } from './verifiers';
+import { logRun } from './runlog';
 
 const { TechFactChecker } = NativeModules;
 
@@ -121,7 +123,7 @@ const callGroqJson = async (apiKey, messages) => {
     try {
       const response = await axios.post(
         config.url,
-        { model, messages, temperature: 0.1 },
+        { model, messages, temperature: 0 },
         { timeout: 90000, headers: { Authorization: 'Bearer ' + apiKey } }
       );
       
@@ -250,7 +252,7 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
     return true;
   };
 
-  const slugPattern = /([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/g;
+  const slugPattern = /\b([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)\b/g;
   let match = slugPattern.exec(ocrText || '');
   while (match !== null) {
     const slug = match[1];
@@ -303,7 +305,19 @@ const rankEvidence = (evidence, techName, tools) => {
     if (t.github_repo && t.github_repo !== 'null') needles.push(String(t.github_repo).toLowerCase());
     if (t.name) needles.push(String(t.name).toLowerCase());
   }
-  const uniq = [...new Set(needles.filter((n) => n.length >= 3))];
+  // Fuzzy variants, because a project's own page often uses the name it was
+  // RENAMED to. On the nanobot run, "clawdbot" scored zero against
+  // openclaw/openclaw - the very row that settles what Clawdbot actually is -
+  // so the rename evidence was trimmed away before the model ever saw it.
+  for (const n of [...needles]) {
+    const bare = n.split('/').pop();
+    if (bare && bare.length >= 4) {
+      needles.push(bare);
+      needles.push(bare.replace(/[-_.]/g, ''));
+      if (bare.length >= 6) needles.push(bare.slice(0, Math.max(4, bare.length - 3)));
+    }
+  }
+  const uniq = [...new Set(needles.filter((n) => n.length >= 4))];
 
   const score = (item) => {
     const hay = `${item.url || ''} ${item.title || ''}`.toLowerCase();
@@ -324,18 +338,71 @@ const rankEvidence = (evidence, techName, tools) => {
     .map((x) => x.item);
 };
 
-const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence) => {
+// Carousels print their own slide counter - "01/07" on slide one. When the
+// number of images actually fetched is short of the declared total, the
+// extraction is incomplete, and that is a fact the pipeline can state instead
+// of discovering by accident. Set 3 fetched 2 of a 7-slide post and then
+// reported "no public repository exists" for a tool that lives on slide 3.
+export const slideCoverage = (ocrText, imagesUsed) => {
+  const seen = Number(imagesUsed || 0);
+  if (!seen) return null;
+  let declared = 0;
+  for (const m of String(ocrText || '').matchAll(/\b0?(\d{1,2})\s*\/\s*0?(\d{1,2})\b/g)) {
+    const index = Number(m[1]);
+    const total = Number(m[2]);
+    // A plausible slide counter, not a date or a fraction in a price.
+    if (total >= 2 && total <= 20 && index >= 1 && index <= total) {
+      declared = Math.max(declared, total);
+    }
+  }
+  return declared > seen ? { declared, seen } : null;
+};
+
+const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, coverage) => {
   const kept = rankEvidence(evidence, claimsData && claimsData.tech_name, claimsData && claimsData.tools);
   if ((evidence || []).length > kept.length) {
     console.warn(`Evidence trimmed for token budget: ${evidence.length} -> ${kept.length} rows.`);
   }
+  // Log the survivors, not the input. The previous log showed the full list, so
+  // a row being cut was invisible - which hid the openclaw evidence being
+  // dropped by the ranker on the nanobot run.
+  console.log('\n===== TFC STAGE 2 KEPT (what the model actually reads) =====');
+  console.log(JSON.stringify(kept.map((k) => ({ title: k.title, url: k.url, pageChars: (k.pagePreview || '').length })), null, 2));
+  const extractClaimAnchored = (text, budget) => {
+    if (!text) return '';
+    const terms = [];
+    if (claimsData && claimsData.tech_name) terms.push(claimsData.tech_name);
+    (claimsData && claimsData.tools || []).forEach(t => {
+      if (t.name) terms.push(t.name);
+      if (t.github_repo && t.github_repo !== 'null') terms.push(t.github_repo);
+    });
+    const claimsStr = (claimsData && claimsData.claimed_features || []).join(' ');
+    const numbers = claimsStr.match(/\b\d+(?:\.\d+)?x?\b/g) || [];
+    terms.push(...numbers);
+    terms.push('price', 'pricing', 'license', 'free', 'cost', 'source');
+    
+    const sentences = text.replace(/([.!?])\s+/g, "$1|").split("|");
+    const hits = [];
+    const lowerTerms = [...new Set(terms)].filter(Boolean).map(t => String(t).toLowerCase());
+    
+    for (let i = 0; i < sentences.length; i++) {
+      const s = sentences[i].toLowerCase();
+      if (lowerTerms.some(t => s.includes(t))) {
+        if (i > 0) hits.push(sentences[i-1].trim());
+        hits.push(sentences[i].trim());
+        if (i < sentences.length - 1) hits.push(sentences[i+1].trim());
+      }
+    }
+    
+    const result = hits.length ? [...new Set(hits)].join(' ') : text;
+    return result.slice(0, budget);
+  };
+
   const evidenceText = kept.map((item) => [
     'Title: ' + (item.title || ''),
     'URL: ' + (item.url || ''),
     'Snippet: ' + (item.snippet || '').slice(0, 300),
-    // Scraped page text, matching research.fetch_url_text. Without it the model
-    // is reasoning from two lines of search-result marketing.
-    'Page Context: ' + (item.pagePreview || '').slice(0, MAX_PAGE_PREVIEW),
+    'Page Context: ' + extractClaimAnchored(item.pagePreview, MAX_PAGE_PREVIEW),
   ].join('\n')).join('\n\n');
   transcript = (transcript || '').slice(0, MAX_TRANSCRIPT);
   ocrText = (ocrText || '').slice(0, MAX_OCR);
@@ -348,6 +415,12 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence) 
     'Visual/OCR Text:', ocrText,
     '',
     'Extracted Claims & Tools:', JSON.stringify(claimsData),
+    ...(claimsData.tech_name === null ? ['',
+      'SUBJECT UNIDENTIFIED: Do not guess the primary tool or subject name. State clearly in factual_reality that the primary subject could not be confidently identified, and only evaluate the tools that were found.'] : []),
+    ...(coverage ? ['',
+      'EXTRACTION WAS INCOMPLETE: this post declares ' + coverage.declared +
+      ' slides and only ' + coverage.seen + ' were read. Anything the post promotes may be on a slide nobody saw,' +
+      ' so do not state that a tool does not exist, has no repository or cannot be installed. Say the post was only partly readable instead.'] : []),
     '',
     'Web Evidence Gathered:', evidenceText,
     '',
@@ -431,6 +504,230 @@ const cleanList = (v, limit = 10) => {
   return out.slice(0, limit);
 };
 
+// The model reads the evidence and then contradicts it.
+//
+// On one nanobot run the kept evidence literally said
+//   "PyPI - nanobot: Minimalist robot navigation framework"
+// and the model still emitted "pip install nanobot". Asking more firmly does not
+// work - three sessions of prompt changes proved that. So every check that can
+// be decided by looking at the evidence is decided here instead.
+const applyEvidenceRules = (report, evidence, techName) => {
+  const notes = [];
+  const rows = evidence || [];
+  const hay = (r) => `${r.title || ''} ${r.snippet || ''} ${r.pagePreview || ''}`;
+  const findRow = (re) => rows.find((r) => re.test(hay(r)));
+
+  // Evidence gate for repos: a repo URL may appear in the report only if it was
+  // in the gathered evidence.
+  const validTools = [];
+  for (const tool of report.tools || []) {
+    if (tool.repo && tool.repo !== 'null') {
+      const lowerRepo = tool.repo.toLowerCase();
+      const inEvidence = rows.some((r) => (r.url || '').toLowerCase().includes('github.com/' + lowerRepo));
+      if (!inEvidence) {
+        notes.push(`Dropped tool "${tool.name}": repo ${tool.repo} was never fetched in evidence.`);
+        continue;
+      }
+    }
+    validTools.push(tool);
+  }
+  report.tools = validTools;
+
+  for (const tool of report.tools || []) {
+    if (!tool.install) continue;
+    const m = String(tool.install).match(/(?:pip3?)\s+install\s+([a-z0-9][a-z0-9._-]*)/i);
+    if (!m) continue;
+    const pkg = m[1];
+    const lower = pkg.toLowerCase();
+    // Plain string match, not a built regex. `\b` and `\s` inside a template
+    // literal are a backspace char and the letter s, so the previous pattern
+    // silently never matched and fabricated packages sailed through.
+    const absentTitle = `pypi - ${lower} not found`;
+    if (rows.some((r) => String(r.title || '').toLowerCase().startsWith(absentTitle))) {
+      notes.push(`Dropped install "${tool.install}": PyPI has no package named "${pkg}".`);
+      tool.install = null;
+      continue;
+    }
+    const row = rows.find((r) => String(r.url || '').toLowerCase() === `https://pypi.org/project/${lower}/`);
+    if (row) {
+      // The package exists. Do NOT delete the command just because the summary
+      // reads unrelated: on the gemini-web2api run this rule removed
+      // "pip install httpx", which is the project's own documented first step.
+      // A dependency is not a wrong package. Flag the mismatch, keep the line.
+      const summary = String(row.snippet || '').toLowerCase();
+      const subject = String(techName || '').toLowerCase();
+      const named = subject.length >= 3 && subject !== lower && summary.includes(subject);
+      const aiish = /\b(ai|agent|agents|assistant|llm|llms|chatbot|chat)\b/.test(summary);
+      if (!named && !aiish) {
+        notes.push(`NOTE: "${pkg}" on PyPI is "${String(row.snippet || '').slice(0, 60)}" - may be a dependency rather than the tool itself.`);
+      }
+    }
+  }
+
+  // A rename the resolver confirmed must not be silently dropped.
+  const rename = findRow(/RENAME CONFIRMED|RENAMED: /i);
+  if (rename) {
+    const line = String(rename.snippet || rename.pagePreview || '').replace(/\s+/g, ' ').trim();
+    if (line && !(report.gotchas || []).some((g) => /renamed|now lives at|is now/i.test(g))) {
+      report.gotchas = [line.slice(0, 140), ...(report.gotchas || [])].slice(0, 4);
+      notes.push('Added the confirmed rename to gotchas; the model had that row and omitted it.');
+    }
+  }
+
+  // Two questions, two answers.
+  //
+  // Asking one model for one word produced a reflex: four runs of
+  // PARTIALLY_TRUE, then - after the rubric was tightened - three runs of
+  // MISLEADING, including on a post whose five repos were all real and whose
+  // star counts were UNDERSTATED. "Are the tools real" is decidable from
+  // evidence; "is the framing honest" is a judgement. Keep them apart.
+  const tools = report.tools || [];
+  const verified = tools.filter((t) => t.status === 'verified').length;
+  const missing = tools.filter((t) => t.status === 'not_found').length;
+  report.toolsReal = { verified, missing, total: tools.length };
+
+  // Code owns the existence half. The model may not call something fake when
+  // the evidence verified it, nor real when the evidence says it is missing.
+  if (report.verdict === 'FAKE' && verified > 0 && missing === 0) {
+    notes.push(`Overrode FAKE: ${verified}/${tools.length} tools were verified to exist.`);
+    report.verdict = 'MISLEADING';
+  }
+  if (report.verdict === 'TRUE' && (missing > 0 || verified === 0)) {
+    notes.push(`Downgraded TRUE (verified=${verified}, missing=${missing}).`);
+    report.verdict = 'PARTIALLY_TRUE';
+  }
+  // A MISLEADING -> HYPE softening rule used to sit here. It fired twice and
+  // was wrong both times, most damagingly on a reel about resetting Claude
+  // Code's usage limit: "Claude Code" is obviously a real tool, so the rule
+  // softened a correct MISLEADING to HYPE. Whether a tool exists says nothing
+  // about whether a claim ABOUT that tool is honest, which is the whole point
+  // of keeping the two questions apart. Removed deliberately - do not re-add.
+
+  // The run log reads `__rules` and it was never assigned, so the
+  // `evidenceRules` column has been blank in every recorded set - including the
+  // run where a TRUE was silently downgraded to PARTIALLY_TRUE and the analysis
+  // had to reconstruct which rule did it by reading this function.
+  if (notes.length) {
+    console.warn('EVIDENCE RULES:' + String.fromCharCode(10) + '  ' + notes.join(String.fromCharCode(10) + '  '));
+    report.__rules = notes;
+  }
+  return report;
+};
+
+// Deterministic subject picker.
+//
+// Two of five recorded runs named the wrong thing, and when the subject is
+// wrong nothing downstream can be right:
+//   - "sparkly-api"          - the creator's own IDE window title
+//   - "5 free GitHub repos"  - the caption headline, not a product
+//
+// Order of trust: a repo the evidence verified, then a name the OCR repeats,
+// then the model's guess. Chrome and headlines are rejected outright, and if
+// nothing survives the answer is "unidentified" - an honest blank beats a
+// confident wrong.
+const CHROME_PATTERNS = [
+  /ask anything/i, /for actions/i, /to mention/i, /^untitled/i, /settings$/i,
+  /^new (chat|file|project)/i, /^search$/i, /^menu$/i, /sign ?in/i, /^home$/i,
+];
+const HEADLINE_PATTERNS = [
+  /^\d+\s/i,                       // "5 free GitHub repos"
+  /^(top|best|these|my|the)\s/i,  // "Top 5 tools"
+  /(repos|tools|libraries|apps|tricks|hacks|ways|tips)$/i,
+  /killer$/i, /f[*u]ck/i,
+];
+
+const looksLikeSubject = (name) => {
+  const n = String(name || '').trim();
+  if (n.length < 3 || n.length > 40) return false;
+  if (n.split(/\s+/).length > 4) return false;
+  if (CHROME_PATTERNS.some((re) => re.test(n))) return false;
+  if (HEADLINE_PATTERNS.some((re) => re.test(n))) return false;
+  return true;
+};
+
+// A post that names a rival names it in order to bury it. Set 3 picked
+// "Graphify" as the subject of a post whose first slide reads "Smart Devs Don't
+// Use Graphify. They Use BASE." - the mention was read, the stance was not.
+// Case 2 did the same with DeepCode.
+const DISMISSAL_VERBS = "don'?t use|do not use|stop using|no more|forget|replace[sd]?|instead of|rip|goodbye to|killer|kills|is dead|obsolete";
+const escapeForRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const pickSubject = (modelName, evidence, ocrText) => {
+  // OCR joins lines with " | ", so the slide reading "Smart Devs Don't / Use
+  // Graphify" arrives as "Smart Devs Don't | Use Graphify" and no phrase match
+  // survives. Flatten the separators before looking for phrases.
+  const ocr = String(ocrText || '').toLowerCase().replace(/[|\n]+/g, ' ').replace(/\s+/g, ' ');
+  const countOf = (n) => {
+    if (n.length < 3) return 0;
+    let count = 0, i = 0;
+    while ((i = ocr.indexOf(n, i)) !== -1) { count += 1; i += n.length; }
+    return count;
+  };
+  // A repo is "prime-agent"; the post writes "Prime Agent". Counting the slug
+  // literally scored it zero on a post that showed the name in every frame, and
+  // the subject fell through to a three-letter acronym instead.
+  const occurrences = (needle) => {
+    const n = String(needle || '').toLowerCase();
+    const spaced = n.replace(/[-_.]+/g, ' ');
+    return Math.max(countOf(n), spaced === n ? 0 : countOf(spaced));
+  };
+  const isDismissed = (name) => {
+    const n = escapeForRegex(name);
+    // Either order: "don't use Graphify" and "Graphify killer" both bury it.
+    return new RegExp('(?:' + DISMISSAL_VERBS + ')\\s+(?:the\\s+)?' + n, 'i').test(ocr) ||
+      new RegExp(n + '\\s+(?:is\\s+)?(?:killer|is dead|obsolete)', 'i').test(ocr);
+  };
+
+  // 1. A repository the evidence confirmed, whose name the post shows - ranked,
+  //    not first-past-the-post. Evidence order is arbitrary, and taking the
+  //    first match made a repo mentioned once beat "Prime Agent", which the
+  //    same post showed 23 times.
+  const candidates = [];
+  for (const r of evidence || []) {
+    const m = String(r.url || '').match(/github\.com\/([\w.-]+)\/([\w.-]+)\/?$/i);
+    if (!m) continue;
+    const repoName = m[2];
+    if (!looksLikeSubject(repoName)) continue;
+    // A three-letter repo name is an acronym for a concept, not the product a
+    // post is about, and counting substrings flatters it: "rlm" scored 13 hits
+    // against "prime-agent"'s 11 on a post whose every frame says Prime Agent,
+    // because RLM is the technique the harness is built on.
+    if (repoName.length < 4) continue;
+    const hits = occurrences(repoName);
+    if (hits < 1) continue;
+    if (candidates.some((c) => c.name.toLowerCase() === repoName.toLowerCase())) continue;
+    candidates.push({ name: repoName, slug: m[1] + '/' + m[2], hits, dismissed: isDismissed(repoName) });
+  }
+  // A tool the post promotes outranks one it dismisses, however often the
+  // dismissed one is named; within a group, the more the post says it, the more
+  // likely it is what the post is about.
+  candidates.sort((a, b) => (a.dismissed - b.dismissed) || (b.hits - a.hits));
+  const best = candidates.find((c) => !c.dismissed);
+  if (best) {
+    return { name: best.name, why: `verified repo ${best.slug} named ${best.hits}x in the post` };
+  }
+  if (candidates.length) {
+    // Everything the evidence verified is something this post is arguing
+    // against. Naming any of them would fact-check the rival.
+    const names = candidates.map((c) => c.name).join(', ');
+    if (looksLikeSubject(modelName) && occurrences(modelName) >= 1 && !isDismissed(modelName)) {
+      return { name: modelName, why: `model name, appears ${occurrences(modelName)}x; verified repos (${names}) are all dismissed by the post` };
+    }
+    return { name: null, why: `only dismissed tools were verified (${names})` };
+  }
+
+  // 2. The model's name, but only if the post actually says it. A name with
+  //    zero occurrences is the definition of not being the subject: that branch
+  //    used to return the name anyway, and it published a creator's Instagram
+  //    handle as the product under test.
+  if (looksLikeSubject(modelName)) {
+    const hits = occurrences(modelName);
+    if (hits >= 2) return { name: modelName, why: `model name, appears ${hits}x in OCR` };
+    return { name: null, why: `rejected "${modelName}": model named it but appears only ${hits}x (needs 2)` };
+  }
+  return { name: null, why: `rejected "${modelName}" as chrome or headline` };
+};
+
 const normalizeReport = (report, evidence) => {
   const VERDICTS = ['TRUE', 'PARTIALLY_TRUE', 'HYPE', 'MISLEADING', 'FAKE'];
   const verdict = VERDICTS.includes(report.verdict) ? report.verdict : 'UNKNOWN';
@@ -459,15 +756,22 @@ const normalizeReport = (report, evidence) => {
     }
     if (references.length >= 8) break;
   }
-  return {
+  return applyEvidenceRules({
     verdict,
     factualReality: clampSentences(cleanLine(report.factual_reality), 2, 220),
     claims: cleanList(report.claims, 4).map((c) => clampSentences(c, 1, 110)),
     tools,
     gotchas: cleanList(report.gotchas, 4).map((g) => clampSentences(g, 1, 110)),
     references,
-  };
+    toolsReal: null,
+  }, evidence, report.tech_name);
 };
+
+// Exposed for tools/replay.js, which re-runs recorded runs through the picker
+// and the normaliser without a device. Testing on hardware costs a build, an
+// Instagram fetch and an API call per case, which is why earlier sessions kept
+// tuning against a single reel and calling it a pass.
+export const __test = { pickSubject, normalizeReport, looksLikeSubject, applyEvidenceRules };
 
 const normalizeTools = (tools) => (tools || []).map((tool) => ({
   name: tool.name || 'Tool',
@@ -490,7 +794,15 @@ export const analyzeReelApi = async (url) => {
   const apiKey = await getGroqApiKey();
   if (!apiKey) throw new Error('Add your Groq API key in Setup first.');
 
+  const startedAt = Date.now();
+  // Per-stage timing, so "50 seconds" can be attributed instead of guessed at.
+  // Set 2 regressed 40.3s -> 50.4s and the cause had to be reasoned about from
+  // what had changed, because nothing measured the stages.
+  const stage = {};
+  let mark = startedAt;
+  const lap = (name) => { stage[name] = Date.now() - mark; mark = Date.now(); };
   const media = await TechFactChecker.analyzeAndVerify(url, false);
+  lap('native');
   const transcript = media.rawTranscript || '';
   const ocrText = media.ocrText || '';
   const log = (label, value) => {
@@ -509,25 +821,124 @@ export const analyzeReelApi = async (url) => {
   log('TRANSCRIPT', transcript || '(empty)');
   log('OCR', ocrText || '(empty)');
 
-  const claimsData = await extractClaims(apiKey, transcript, ocrText);
+  let claimsData = await extractClaims(apiKey, transcript, ocrText);
+  lap('claims');
+  // Kept because the picker overwrites tech_name below, and a replay of this
+  // run has to see what the model originally said to measure a picker change.
+  const modelTechName = claimsData.tech_name;
   log('STAGE 1 CLAIMS', claimsData);
   const queries = (claimsData.search_queries || []).slice(0, 10);
   log('STAGE 2 QUERIES', queries);
-  const evidence = queries.length ? await TechFactChecker.gatherEvidence(queries) : (media.sources || []);
+
+  // Structured lookups and web search are independent, so run them together.
+  // Sequentially they pushed one run to 55s; a paste-and-wait app cannot afford
+  // that.
+  const searched = queries.length
+    ? await TechFactChecker.gatherEvidence(queries)
+    : (media.sources || []);
+  lap('search');
+  // The pricing check needs the search results, so the router runs after them.
+  // Its own lookups are already parallel inside runVerifiers.
+  const verified = await runVerifiers(claimsData, transcript, ocrText, searched);
+  const structured = verified.rows;
+  lap('verifiers');
+  log('STAGE 2 STRUCTURED', structured.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet })));
+  // Structured rows lead: they are authoritative and short, so they survive the
+  // token trim that drops the tail of the search results.
+  const evidence = [...structured, ...searched];
   log('STAGE 2 EVIDENCE', {
     count: evidence.length,
     withPageContext: evidence.filter((e) => (e.pagePreview || '').length > 0).length,
     rows: evidence.map((e) => ({ title: e.title, url: e.url, pageChars: (e.pagePreview || '').length })),
   });
 
-  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence);
+  // Rescue the rows that scraped to nothing, before ranking picks the 12.
+  await fillMissingPageText(evidence, 2);
+  lap('pagefill');
+
+  // Decide the subject in code before the model writes anything about it.
+  const subject = pickSubject(claimsData.tech_name, evidence, ocrText);
+  log('SUBJECT', subject);
+  if (subject.name !== undefined && subject.name !== claimsData.tech_name) {
+    claimsData = { ...claimsData, tech_name: subject.name };
+  }
+
+  const coverage = slideCoverage(ocrText, media.imagesUsed);
+  if (coverage) log('COVERAGE', coverage);
+  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage);
+  lap('synthesis');
   log('STAGE 3 RAW REPORT', report);
+  const verdictRaw = report.verdict;
   const normalized = normalizeReport(report, evidence);
   log('STAGE 3 NORMALIZED (what the card renders)', normalized);
 
+  const tools = normalized.tools || [];
+  await logRun({
+    timestamp: new Date().toISOString(),
+    shortcode: (String(url).match(/(?:reel|p)\/([A-Za-z0-9_-]+)/) || [])[1] || url,
+    verdict: normalized.verdict,
+    verdictRaw,
+    techName: report.tech_name || claimsData.tech_name || '',
+    ocrChars: ocrText.length,
+    speechChars: media.speechChars != null ? media.speechChars : '',
+    captionChars: media.caption ? media.caption.length : '',
+    toolsOut: tools.length,
+    toolsVerified: tools.filter((t) => t.status === 'verified').length,
+    toolsNotFound: tools.filter((t) => t.status === 'not_found').length,
+    install: tools.map((t) => t.install).filter(Boolean).join(' ; '),
+    structuredRows: structured.length,
+    searchRows: searched.length,
+    keptRows: Math.min(evidence.length, 12),
+    keptWithPageText: evidence.slice(0, 12).filter((e) => (e.pagePreview || '').length > 0).length,
+    evidenceRules: (normalized.__rules || []).join(' ; '),
+    claims: (normalized.claims || []).length,
+    gotchas: (normalized.gotchas || []).length,
+    durationMs: Date.now() - startedAt,
+    error: '',
+    // Everything below exists so a batch can be analysed from the CSV alone.
+    // Three test sets were scored from counters, and every disease-level finding
+    // - invented repos, a fork cited over a 389k-star original, a fact-check of
+    // a window title - needed the report text, which no column carried.
+    coverage: coverage ? coverage.seen + '/' + coverage.declared + ' slides' : '',
+    subjectName: subject.name || '',
+    subjectWhy: subject.why || '',
+    verifiersFired: (verified.fired || []).join(' ; '),
+    stageMs: Object.keys(stage).map((k) => k + '=' + stage[k]).join(' '),
+    mediaSource: media.mediaSource || '',
+    mediaType: media.mediaType || '',
+    extractVia: media.extractVia || '',
+    slidesJson: media.slidesJson != null ? media.slidesJson : '',
+    slidesDom: media.slidesDom != null ? media.slidesDom : '',
+    imagesUsed: media.imagesUsed != null ? media.imagesUsed : '',
+    ocrLens: media.ocrLens || '',
+    sttStats: media.sttStats || '',
+    candidates: media.candidates || '',
+    claimsJson: JSON.stringify({
+      tech_name: modelTechName,
+      tech_name_after_picker: claimsData.tech_name,
+      tools: claimsData.tools,
+      claimed_features: claimsData.claimed_features,
+      search_queries: queries,
+    }),
+    evidenceJson: JSON.stringify(
+      evidence.slice(0, 12).map((e) => ({
+        t: e.title,
+        u: e.url,
+        p: (e.pagePreview || '').length,
+      }))
+    ),
+    reportJson: JSON.stringify(normalized),
+    transcript,
+    ocrText,
+  });
+  delete normalized.__rules;
+
   return {
     ...media,
-    techName: report.tech_name || claimsData.tech_name || media.techName,
+    // An honest blank beats a confident wrong: two of five recorded runs named
+    // a window title and a caption headline.
+    techName: subject.name !== undefined && subject.name !== null ? subject.name : (subject.name === null ? 'Unidentified' : (report.tech_name || media.techName || 'Unidentified')),
+    subjectWhy: subject.why,
     verdict: report.verdict || 'UNKNOWN',
     pricingModel: report.pricing_model || 'Unknown',
     githubUrl: report.github_url || null,
