@@ -1,0 +1,23 @@
+{
+  "shortcode": "DdAwhV3GXWi",
+  "source_url": "https://www.instagram.com/p/DdAwhV3GXWi/?stkn=dDJidHpudWxuMmVh",
+  "title": "Comment “AI” to get the link and the full list of free AI resources.\n\nSomeone ju...",
+  "author": "simplifyinai",
+  "caption": "Comment “AI” to get the link and the full list of free AI resources.\n\nSomeone just leaked the system prompts behind GPT-6 Astra and Fable 5.1. All in the same repo.\n\nIt’s system_prompts_leaks, a collection of extracted system prompts from popular AI products. What it has:\n\n> 401 prompt files across 16 providers\n> OpenAI, Anthropic, Gemini, Grok, Kimi, and more\n> hidden rules for tools, coding, browsing, etc.\n> multiple versions to compare how prompts evolve\n\nclone it with:\ngit clone https://github.com/asgeirtj/system_prompts_leaks\n\n100% free & open-source.",
+  "is_carousel": true,
+  "frames": [
+    {
+      "file": "frame_00.jpg",
+      "slide": 0
+    },
+    {
+      "file": "frame_01.jpg",
+      "slide": 1
+    },
+    {
+      "file": "frame_02.jpg",
+      "slide": 2
+    }
+  ],
+  "duration_seconds": 0.0
+}

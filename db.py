@@ -40,7 +40,8 @@ def init_db():
             github_url TEXT,
             pricing_model TEXT,
             summary_markdown TEXT,
-            evidence_sources TEXT
+            evidence_sources TEXT,
+            tool_details TEXT
         );
         """)
 
@@ -54,13 +55,17 @@ def init_db():
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+        columns = {row[1] for row in cursor.execute("PRAGMA table_info(verifications)")}
+        if "tool_details" not in columns:
+            cursor.execute("ALTER TABLE verifications ADD COLUMN tool_details TEXT")
         conn.commit()
 
 def save_reel_and_verification(
     reel_meta: Dict[str, Any],
     transcript: str,
     fact_check: Dict[str, Any],
-    claimed_features: List[str]
+    claimed_features: List[str],
+    tools: Optional[List[Dict[str, Any]]] = None
 ) -> None:
     """Save reel metadata and fact-check results to SQLite database."""
     init_db()
@@ -91,8 +96,8 @@ def save_reel_and_verification(
         # Insert Verification
         cursor.execute("""
         INSERT INTO verifications (
-            reel_id, tech_name, claimed_features, verdict, github_url, pricing_model, summary_markdown, evidence_sources
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            reel_id, tech_name, claimed_features, verdict, github_url, pricing_model, summary_markdown, evidence_sources, tool_details
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
             reel_meta["id"],
             fact_check.get("tech_name", "Unknown"),
@@ -101,7 +106,8 @@ def save_reel_and_verification(
             fact_check.get("github_url"),
             fact_check.get("pricing_model", "Unknown"),
             fact_check.get("summary_markdown", ""),
-            json.dumps(fact_check.get("sources", []))
+            json.dumps(fact_check.get("sources", [])),
+            json.dumps(tools or [])
         ))
         conn.commit()
 
@@ -111,7 +117,7 @@ def get_reel(reel_id: str) -> Optional[Dict[str, Any]]:
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-        SELECT r.*, v.tech_name, v.verdict, v.claimed_features, v.github_url, v.pricing_model, v.summary_markdown, v.evidence_sources
+        SELECT r.*, v.tech_name, v.verdict, v.claimed_features, v.github_url, v.pricing_model, v.summary_markdown, v.evidence_sources, v.tool_details
         FROM reels r
         LEFT JOIN verifications v ON r.id = v.reel_id
         WHERE r.id = ?;

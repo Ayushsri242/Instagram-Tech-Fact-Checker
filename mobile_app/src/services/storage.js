@@ -84,3 +84,22 @@ export const setOfflineMode = async (enabled) => {
     console.error('Failed to save offline mode:', e);
   }
 };
+
+const API_LIMITS_KEY = '@tech_fact_checker_api_limits';
+
+export const saveApiLimits = async (limits) => {
+  try {
+    await AsyncStorage.setItem(API_LIMITS_KEY, JSON.stringify(limits));
+  } catch (e) {
+    console.error('Failed to save API limits:', e);
+  }
+};
+
+export const getApiLimits = async () => {
+  try {
+    const json = await AsyncStorage.getItem(API_LIMITS_KEY);
+    return json ? JSON.parse(json) : null;
+  } catch (e) {
+    return null;
+  }
+};

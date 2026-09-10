@@ -1,23 +1,23 @@
+import json
+from typing import Any, Dict, List
+
+import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os
-import uvicorn
-from dotenv import load_dotenv
 
-from ingest import download_media, download_carousel, extract_shortcode
-from transcribe import transcribe_audio
-from vision import analyze_media_frames
-from verify import extract_claims_and_queries, synthesize_fact_check
+from db import get_chat_history, get_reel, init_db, save_chat_message, save_reel_and_verification
+from ingest import download_media, extract_shortcode
 from research import gather_evidence_for_queries
-from db import init_db, save_reel_and_verification, save_chat_message, get_chat_history, get_reel
-from groq import Groq
+from transcribe import transcribe_audio
+from verify import FALLBACK_MODEL, MODEL_NAME, extract_claims_and_queries, get_groq_client, synthesize_fact_check
+from vision import analyze_media_frames
 
 load_dotenv()
 init_db()
 
-app = FastAPI(title="Tech Fact Checker Local Micro-Agent API")
-
+app = FastAPI(title="Tech Fact Checker Groq API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,125 +26,143 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 class AnalyzeRequest(BaseModel):
     url: str
+
 
 class ChatRequest(BaseModel):
     reelId: str
     message: str
-    techName: str
+    techName: str = ""
+
+
+def _decode_list(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    try:
+        decoded = json.loads(value)
+        return decoded if isinstance(decoded, list) else []
+    except (TypeError, json.JSONDecodeError):
+        return []
+
+
+def _mobile_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "name": tool.get("name", "Tool"),
+            "githubRepo": tool.get("github_repo") or tool.get("githubRepo"),
+            "pipCommand": tool.get("pip_command") or tool.get("pipCommand"),
+            "isVerified": tool.get("is_verified", tool.get("isVerified", False)),
+        }
+        for tool in tools
+    ]
+
+
+def _response_from_record(record: Dict[str, Any], ocr_text: str = "") -> Dict[str, Any]:
+    return {
+        "reelId": record["id"],
+        "sourceUrl": record["source_url"],
+        "title": record.get("title") or "Instagram Post",
+        "author": record.get("author") or "Creator",
+        "techName": record.get("tech_name") or record.get("title") or "Unknown Technology",
+        "verdict": record.get("verdict") or "UNKNOWN",
+        "pricingModel": record.get("pricing_model") or "Unknown",
+        "githubUrl": record.get("github_url"),
+        "factualReality": record.get("summary_markdown") or "",
+        "summaryMarkdown": record.get("summary_markdown") or "",
+        "tools": _mobile_tools(_decode_list(record.get("tool_details"))),
+        "claims": _decode_list(record.get("claimed_features")),
+        "sources": _decode_list(record.get("evidence_sources")),
+        "rawTranscript": record.get("raw_transcript") or "",
+        "ocrText": ocr_text,
+    }
+
 
 @app.post("/api/analyze")
 def analyze_endpoint(req: AnalyzeRequest):
     url = req.url.strip()
     shortcode = extract_shortcode(url)
-
-    # 1. Check SQLite Cache
     existing = get_reel(shortcode)
     if existing:
-        return {
-            "reelId": existing["id"],
-            "sourceUrl": existing["source_url"],
-            "title": existing["title"],
-            "author": existing["author"],
-            "techName": existing["tech_name"] or existing["title"],
-            "verdict": existing["verdict"] or "PARTIALLY_TRUE",
-            "pricingModel": existing["pricing_model"] or "Open Source",
-            "githubUrl": existing["github_url"],
-            "factualReality": existing["summary_markdown"],
-            "summaryMarkdown": existing["summary_markdown"],
-            "tools": [],
-            "claims": existing["claimed_features"] or [],
-            "rawTranscript": existing["raw_transcript"]
-        }
+        return _response_from_record(existing)
 
-    # 2. Ingest
-    media_info = download_media(url)
-    is_carousel = False
-    carousel_dir = None
+    try:
+        media_info = download_media(url)
+        transcript = media_info.get("caption", "") if media_info.get("is_carousel") else ""
+        if media_info.get("audio_path") and not media_info.get("is_carousel"):
+            transcript = transcribe_audio(media_info["audio_path"]).get("text", "")
 
-    if not media_info or not media_info.get("video_path"):
-        carousel_dir = download_carousel(url)
-        if carousel_dir:
-            is_carousel = True
-            media_info = {
-                "id": shortcode,
-                "title": f"Instagram Carousel ({shortcode})",
-                "uploader": "Instagram Creator",
-                "duration": 0,
-                "video_path": None,
-                "audio_path": None
-            }
-        else:
-            raise HTTPException(status_code=400, detail="Could not ingest Instagram media.")
+        media_target = media_info.get("frames_dir") if media_info.get("is_carousel") else media_info.get("video_path")
+        ocr_text = analyze_media_frames(media_target).get("combined_ocr_text", "")
+        claims_data = extract_claims_and_queries(transcript, ocr_text)
+        evidence = gather_evidence_for_queries(claims_data.get("search_queries", []))
+        verification_data = synthesize_fact_check(transcript, claims_data, evidence, ocr_text)
+        tools = claims_data.get("tools", [])
 
-    # 3. Transcribe & OCR
-    transcript = ""
-    if media_info.get("audio_path"):
-        transcript = transcribe_audio(media_info["audio_path"])
-    
-    ocr_data = analyze_media_frames(carousel_dir if is_carousel else media_info["video_path"])
+        save_reel_and_verification(
+            media_info,
+            transcript,
+            verification_data,
+            claims_data.get("claimed_features", []),
+            tools,
+        )
+        saved = get_reel(media_info["id"])
+        if not saved:
+            raise RuntimeError("Fact-check was not saved.")
+        return _response_from_record(saved, ocr_text)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Fact-check failed: {exc}") from exc
 
-    # 4. Synthesize Fact Check
-    claims_data = extract_claims_and_queries(transcript, ocr_data["ocr_text"])
-    evidence = gather_evidence_for_queries(claims_data.get("search_queries", []))
-    verification_data = synthesize_fact_check(transcript, claims_data, evidence, ocr_data["ocr_text"])
-
-    # 5. Save in SQLite
-    save_reel_and_verification(media_info, transcript, verification_data)
-
-    return {
-      "reelId": shortcode,
-      "sourceUrl": url,
-      "title": media_info.get("title", f"Instagram Reel ({shortcode})"),
-      "author": media_info.get("uploader", "Creator"),
-      "techName": verification_data.get("tech_name", "Tech Library"),
-      "verdict": verification_data.get("verdict", "PARTIALLY_TRUE"),
-      "pricingModel": verification_data.get("pricing_model", "Open Source"),
-      "githubUrl": verification_data.get("github_url"),
-      "factualReality": verification_data.get("summary_markdown", ""),
-      "summaryMarkdown": verification_data.get("summary_markdown", ""),
-      "tools": [
-          {
-              "name": t.get("name", "Tool"),
-              "githubRepo": t.get("github_repo"),
-              "pipCommand": t.get("pip_command"),
-              "isVerified": t.get("is_verified", True)
-          }
-          for t in verification_data.get("tools", [])
-      ],
-      "claims": verification_data.get("claimed_features", []),
-      "rawTranscript": transcript
-    }
 
 @app.post("/api/chat")
 def chat_endpoint(req: ChatRequest):
-    save_chat_message(req.reelId, "user", req.message)
     existing = get_reel(req.reelId)
-    tech_name = req.techName or (existing["tech_name"] if existing else "Technology")
+    if not existing:
+        raise HTTPException(status_code=404, detail="Analyze this post before asking questions.")
 
-    api_key = os.getenv("GROQ_API_KEY")
-    if api_key:
-        client = Groq(api_key=api_key)
-        history = get_chat_history(req.reelId)
-        messages = [
-            {"role": "system", "content": f"You are a helpful technical coding assistant. Answer questions concisely for {tech_name}."},
-        ]
-        for msg in history[-6:]:
-            role = "assistant" if msg["sender"] == "assistant" else "user"
-            messages.append({"role": role, "content": msg["message_text"]})
+    save_chat_message(req.reelId, "user", req.message)
+    tech_name = req.techName or existing.get("tech_name") or "Technology"
+    source_urls = "\n".join(_decode_list(existing.get("evidence_sources"))[:5])
+    system_prompt = f"""You are an expert AI and mobile engineer answering questions about one verified Instagram post.
+Tech: {tech_name}
 
-        resp = client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=messages,
-            temperature=0.3
-        )
-        reply = resp.choices[0].message.content
-    else:
-        reply = f"{tech_name} is verified from on-screen evidence. You can inspect its documentation or clone the repository to test locally."
+Transcript or caption:
+{existing.get("raw_transcript", "")}
 
-    save_chat_message(req.reelId, "assistant", reply)
-    return {"reply": reply}
+Verified fact-check:
+{existing.get("summary_markdown", "")}
+
+Evidence URLs:
+{source_urls}
+
+Answer concisely and technically. Use the supplied verified context. State uncertainty when the context does not support an answer."""
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for message in get_chat_history(req.reelId)[-8:]:
+        role = "assistant" if message["sender"] == "assistant" else "user"
+        messages.append({"role": role, "content": message["message_text"]})
+
+    last_error = None
+    for model in [MODEL_NAME, FALLBACK_MODEL, "qwen/qwen3.6-27b"]:
+        try:
+            response = get_groq_client().chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.3,
+            )
+            reply = response.choices[0].message.content
+            save_chat_message(req.reelId, "assistant", reply)
+            return {"reply": reply}
+        except Exception as exc:
+            last_error = exc
+
+    raise HTTPException(status_code=502, detail=f"Groq chat failed: {last_error}")
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

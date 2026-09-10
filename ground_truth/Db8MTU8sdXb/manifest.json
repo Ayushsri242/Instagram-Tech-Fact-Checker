@@ -1,0 +1,62 @@
+{
+  "shortcode": "Db8MTU8sdXb",
+  "source_url": "https://www.instagram.com/reel/Db8MTU8sdXb/?stkn=b2c3YzV2b3Q2a3dr",
+  "title": "Video by thevibefounder",
+  "author": "Ajay Yadav",
+  "caption": "",
+  "is_carousel": false,
+  "frames": [
+    {
+      "file": "frame_00.jpg",
+      "at_seconds": 3.44
+    },
+    {
+      "file": "frame_01.jpg",
+      "at_seconds": 6.88
+    },
+    {
+      "file": "frame_02.jpg",
+      "at_seconds": 10.32
+    },
+    {
+      "file": "frame_03.jpg",
+      "at_seconds": 13.76
+    },
+    {
+      "file": "frame_04.jpg",
+      "at_seconds": 17.2
+    },
+    {
+      "file": "frame_05.jpg",
+      "at_seconds": 20.64
+    },
+    {
+      "file": "frame_06.jpg",
+      "at_seconds": 24.08
+    },
+    {
+      "file": "frame_07.jpg",
+      "at_seconds": 27.52
+    },
+    {
+      "file": "frame_08.jpg",
+      "at_seconds": 30.96
+    },
+    {
+      "file": "frame_09.jpg",
+      "at_seconds": 34.4
+    },
+    {
+      "file": "frame_10.jpg",
+      "at_seconds": 37.84
+    },
+    {
+      "file": "frame_11.jpg",
+      "at_seconds": 41.28
+    }
+  ],
+  "duration_seconds": 44.72,
+  "reference_transcript": "The CEOs of Google, ChatGPT and Claude have been digging their own graves since last night. And why wouldn't they? Because Nvidia just made their brand new coding model completely free inside Klein. Four times faster output, a million tokens of memory, and it runs on one graphics card sitting in your room. Here's exactly how it works. Open Klein. Pick Nemotron 3.5 Lightning from the model list. Start typing what you want built. That's it. No card. No bill. No subscription. And here's the part nobody is talking about. Because it's this small and this fast, you can leave an agent running all day and it costs you nothing. Until the app, fix the bugs at 3am, ship it Monday, Nvidia also put it up for free download. You can take it, change it, sell whatever you build with it, and you never have to ask them for permission. Google, OpenAI, and Anthropic, all by their chips from Nvidia. They have been paying for the shovel this whole time, comment lightning, and I'll send you the direct link, and follow for more videos.",
+  "reference_transcript_language": "en",
+  "reference_transcript_engine": "faster-whisper base, beam_size=5"
+}

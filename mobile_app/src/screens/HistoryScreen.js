@@ -49,7 +49,7 @@ export default function HistoryScreen({ navigation }) {
           renderItem={({ item }) => (
             <TouchableOpacity
               style={styles.card}
-              onPress={() => navigation.navigate('Result', { reel: item })}
+              onPress={() => navigation.navigate('Chat', { reel: item })}
             >
               <View style={styles.cardInfo}>
                 <Text style={styles.cardTitle}>{item.techName || item.title}</Text>

@@ -1,0 +1,37 @@
+!pip install -q ai-edge-torch-nightly mediapipe transformers huggingface_hub torch
+
+from huggingface_hub import login
+# REPLACE "hf_YOUR_TOKEN_HERE" WITH YOUR ACTUAL TOKEN
+login("hf_YOUR_TOKEN_HERE") 
+
+import os
+!git clone https://github.com/google-ai-edge/ai-edge-torch.git
+os.chdir("ai-edge-torch")
+
+print("Downloading and compiling Llama 3.2 1B... This will take about 5-10 minutes.")
+
+!python -m ai_edge_torch.generative.examples.llama.convert_to_tflite \
+    --checkpoint_path="meta-llama/Llama-3.2-1B-Instruct" \
+    --quantization="dynamic_int8" \
+    --output_path="llama3_2_1b.tflite"
+
+import mediapipe as mp
+from mediapipe.tasks.python.genai import bundler
+from transformers import AutoTokenizer
+
+print("Converting tokenizer and packaging .task file...")
+
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
+tokenizer.save_pretrained("./tokenizer_out")
+
+config = bundler.BundleConfig(
+    tflite_model='llama3_2_1b.tflite',
+    tokenizer_model='./tokenizer_out/tokenizer.model',
+    start_token='<|begin_of_text|>',
+    stop_tokens=['<|end_of_text|>', '<|eot_id|>'],
+    output_filename='llama-3.2-1b-instruct-int8.task',
+    enable_bytes_to_unicode_mapping=True,
+)
+bundler.create_bundle(config)
+
+print("SUCCESS! The file is ready.")

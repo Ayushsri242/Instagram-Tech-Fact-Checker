@@ -80,6 +80,8 @@ export default function ChatScreen({ route, navigation }) {
     return () => clearInterval(interval);
   }, [loading, isInitialAnalysis]);
 
+  const [chatLoadingText, setChatLoadingText] = useState('Thinking...');
+
   const loadHistoryOrAnalyze = async () => {
     if (initialUrl && !currentReel) {
       // setCurrentReel below re-fires this effect, and a remount would re-fire
@@ -187,6 +189,7 @@ export default function ChatScreen({ route, navigation }) {
     setInput('');
     const userMsg = { id: newId(), sender: 'user', text: textToSend };
     setMessages((prev) => [...prev, userMsg]);
+    setChatLoadingText('Thinking...');
     setLoading(true);
 
     try {
@@ -194,7 +197,9 @@ export default function ChatScreen({ route, navigation }) {
       await saveChatMessage(reelId, userMsg);
       
       console.log("[DEBUG_CHAT] User:", textToSend);
-      let replyText = await chatWithAiApi(currentReel, textToSend, messages);
+      let replyText = await chatWithAiApi(currentReel, textToSend, messages, () => {
+        setChatLoadingText('Web search in progress...');
+      });
       if (!aliveRef.current) return;
       // Fallback cleaner: strip any rogue stars if Groq disobeys the prompt
       replyText = replyText.replace(/\*\*/g, '').replace(/###?/g, '').trim();
@@ -265,7 +270,7 @@ export default function ChatScreen({ route, navigation }) {
             }
             return (
               <View style={{ padding: 12, alignItems: 'center' }}>
-                <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 4 }}>Thinking...</Text>
+                <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 4 }}>{chatLoadingText}</Text>
               </View>
             );
           }}

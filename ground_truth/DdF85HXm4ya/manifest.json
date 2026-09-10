@@ -1,0 +1,23 @@
+{
+  "shortcode": "DdF85HXm4ya",
+  "source_url": "https://www.instagram.com/p/DdF85HXm4ya/",
+  "title": "this open-source model is insanely good for how small it is.\n\nMiniCPM5-1B, from ...",
+  "author": "simplifyinai",
+  "caption": "this open-source model is insanely good for how small it is.\n\nMiniCPM5-1B, from Tsinghua’s THUNLP:\n\n> beats every model its size on reasoning, code, & agentic tasks\n> 1 checkpoint switches between fast replies and deep reasoning\n> drops straight into vllm, sglang, ollama, or llama.cpp, no custom kernels\n\nships its own agent skills too, Cursor or Claude Code auto-picks the right deploy or fine-tune route instead of you digging through docs.",
+  "is_carousel": true,
+  "frames": [
+    {
+      "file": "frame_00.jpg",
+      "slide": 0
+    },
+    {
+      "file": "frame_01.jpg",
+      "slide": 1
+    },
+    {
+      "file": "frame_02.jpg",
+      "slide": 2
+    }
+  ],
+  "duration_seconds": 0.0
+}

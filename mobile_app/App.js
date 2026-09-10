@@ -1,7 +1,10 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
+import { DeviceEventEmitter } from 'react-native';
+import { analyzeReelApi } from './src/services/api';
+import { saveReelResult } from './src/services/storage';
 import HomeScreen from './src/screens/HomeScreen';
 import ResultScreen from './src/screens/ResultScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
@@ -12,6 +15,22 @@ import { colors } from './src/theme/colors';
 const Stack = createNativeStackNavigator();
 
 export default function App() {
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('ON_REEL_COPIED', async (url) => {
+      console.log('Doomscroll Mode: Caught URL ->', url);
+      // Step 3 will flesh out the queue. For now, just run it!
+      try {
+        const result = await analyzeReelApi(url);
+        await saveReelResult(result);
+        console.log('Doomscroll Mode: Finished ->', result.verdict);
+        // TODO: Step 4 - Push Notification
+      } catch (e) {
+        console.log('Doomscroll Mode: Failed ->', e.message);
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   return (
     <NavigationContainer>
       <StatusBar style="light" backgroundColor={colors.background} />

@@ -1,0 +1,41 @@
+--------- beginning of main
+09-04 13:59:56.157 13427 13514 E TFC_DEBUG: STEP 1: Starting analyzeAndVerify with url=https://www.instagram.com/reel/DchQA7CTapw/?igsi=MXZkN3VkMGVxdjRkaw==, useLocalLlm=true
+09-04 13:59:56.158 13427 13514 E TFC_DEBUG: STEP 2: Extracting media on-device via offscreen WebView...
+09-04 13:59:56.162 13427 13514 I TFC_DEBUG: EXTRACT: start shortcode=DchQA7CTapw isReel=true embed=https://www.instagram.com/reel/DchQA7CTapw/embed/captioned/
+09-04 13:59:56.323 13427 13427 I TFC_DEBUG: EXTRACT: loading embed page in offscreen WebView
+09-04 13:59:57.718 13427 13427 I TFC_DEBUG: EXTRACT: page finished, settling 3000ms
+09-04 14:00:00.889 13427 13427 I TFC_DEBUG: EXTRACT: TIER_B html chars=270047 videoTag=false videoUrlKey=false displayUrlKey=false
+09-04 14:00:00.916 13427 13427 I TFC_DEBUG: EXTRACT: TIER_B slides json=0 dom=3
+09-04 14:00:00.917 13427 13427 I TFC_DEBUG: EXTRACT: TIER_B empty, falling back to TIER_A sniff
+09-04 14:00:00.933 13427 13514 E TFC_DEBUG: EXTRACT: reel had no video URL, rejecting so Render fallback runs
+09-04 14:00:00.933 13427 13514 E TFC_DEBUG: STEP 2b: SOURCE=RENDER (WebView returned nothing, calling cloud service)
+09-04 14:00:19.242 13427 13514 I TFC_DEBUG: STEP 2c: Render HTTP=200, responseBytes=1150
+09-04 14:00:19.244 13427 13514 D TFC_DEBUG: STEP 2d: Render response preview={"type":"video","video_url":"https://instagram.fhan14-3.fna.fbcdn.net/o1/v/t16/f2/m84/AQPMCSGQIcRCEQrXXqMI4puXoOUWtC8QNFL1a6z8abyB_T7QCI0X_cHkvwsMlRZ9ASlLVZoNwrQJPVNouLljRjxAcC-kgb-0zJIpPRs.mp4?_nc_ca
+09-04 14:00:19.244 13427 13514 E TFC_DEBUG: STEP 3: Media type = video (SOURCE=RENDER)
+09-04 14:00:19.244 13427 13514 E TFC_DEBUG: STEP 4: Got direct video URL from SOURCE=RENDER, downloading...
+09-04 14:00:20.913 13427 13514 I TFC_DEBUG: STEP 4a: Video HTTP=200, bytes=4137663
+09-04 14:00:21.036 13427 13514 E TFC_DEBUG: STEP 4b: Video duration = 27954ms
+09-04 14:00:21.577 13427 13514 I TFC_DEBUG: STEP 4c: OCR frame 1 textLength=0, repos=0, urls=0
+09-04 14:00:21.826 13427 13514 I TFC_DEBUG: STEP 4c: OCR frame 2 textLength=0, repos=0, urls=0
+09-04 14:00:22.230 13427 13514 I TFC_DEBUG: STEP 4c: OCR frame 3 textLength=479, repos=1, urls=0
+09-04 14:00:22.522 13427 13514 I TFC_DEBUG: STEP 4c: OCR frame 4 textLength=0, repos=0, urls=0
+09-04 14:00:22.522 13427 13514 I TFC_DEBUG: STEP 4d: Frames processed=4/$4
+09-04 14:00:28.366 13427 13514 I TFC_DEBUG: STT complete: chars=551, sampleRate=22050
+09-04 14:00:28.366 13427 13514 I TFC_DEBUG: STEP 4e: Audio transcript chars=551
+09-04 14:00:28.367 13427 13514 I TFC_DEBUG: STEP 5: OCR complete. textLength=483, repos=1, urls=0
+09-04 14:00:28.367 13427 13514 I TFC_DEBUG: STEP 6: Running FactCheckEngine. transcriptSource=caption, transcriptLength=551
+09-04 14:00:28.368 13427 13514 I TFC_DEBUG: FACT_CHECK start: reelId=2077740, ocrChars=483, repos=1, urls=0, transcriptChars=551
+09-04 14:00:28.368 13427 13514 I TFC_DEBUG: FACT_CHECK mode: OFFLINE_3STAGE
+09-04 14:00:36.812 13427 13514 I TFC_DEBUG: FACT_CHECK stage1 raw=TECH: Ollama
+09-04 14:00:36.812 13427 13514 I TFC_DEBUG: CLAIM1: Runs large language models locally with one command
+09-04 14:00:36.812 13427 13514 I TFC_DEBUG: CLAIM2: NONE
+09-04 14:00:36.812 13427 13514 I TFC_DEBUG: QUERY1: Ollama run LLM locally single command
+09-04 14:00:36.812 13427 13514 I TFC_DEBUG: QUERY2: NONE
+09-04 14:00:36.821 13427 13514 I TFC_DEBUG: FACT_CHECK stage1: tech=Ollama, claims=1, queries=1
+09-04 14:00:37.836 13427 13514 I TFC_DEBUG: FACT_CHECK stage2: query=Ollama run LLM locally single command, results=4
+09-04 14:00:45.178 13427 13514 I TFC_DEBUG: FACT_CHECK stage3 raw=TECH_NAME: Ollama
+09-04 14:00:45.178 13427 13514 I TFC_DEBUG: VERDICT: PARTIALLY_TRUE
+09-04 14:00:45.178 13427 13514 I TFC_DEBUG: SUMMARY: While Ollama offers local LLM execution via an Ollama CLI, thereΓÇÖs no guarantee its performance will be as good as running models on powerful hardware.
+09-04 14:00:45.180 13427 13514 I TFC_DEBUG: FACT_CHECK stage3: tech=Ollama, verdict=PARTIALLY_TRUE, summaryChars=151
+09-04 14:00:45.181 13427 13514 E TFC_DEBUG: STEP 6 DONE: verdict=PARTIALLY_TRUE, techName=Ollama
+09-04 14:00:45.183 13427 13514 E TFC_DEBUG: STEP 7: Resolving promise to JS

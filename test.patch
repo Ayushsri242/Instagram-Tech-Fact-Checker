@@ -1,0 +1,71 @@
+--- E:\RANDOM_BS\Instagram\mobile_app\src\screens\SettingsScreen.js
++++ E:\RANDOM_BS\Instagram\mobile_app\src\screens\SettingsScreen.js
+@@ -10,6 +10,7 @@
+   const [groqApiKey, setGroqApiKey] = useState("");
+   const [hasGroqApiKey, setHasGroqApiKey] = useState(false);
+   const [offlineMode, setOfflineModeState] = useState(false);
++  const [manualProvider, setManualProvider] = useState("");
+ 
+   const modelDir = `${FileSystem.documentDirectory}models/`;
+   const MODEL_FILE = "Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task";
+@@ -74,6 +75,19 @@
+     }
+   };
+ 
++  // Guess the provider based on the text
++  const getGuessedProvider = (key) => {
++    if (!key) return "Groq";
++    if (key.startsWith("sk-or-v1-")) return "OpenRouter";
++    if (key.startsWith("nvapi-")) return "NVIDIA";
++    if (key.startsWith("sk-ant-")) return "Anthropic";
++    if (key.startsWith("sk-")) return "OpenAI";
++    if (key.startsWith("gsk_")) return "Groq";
++    return "Unknown (Please specify below)";
++  };
++
++  const guessedProvider = getGuessedProvider(groqApiKey);
++
+   const saveGroqKey = async () => {
+     if (!groqApiKey.trim()) return;
+     await saveGroqApiKey(groqApiKey);
+@@ -87,14 +101,15 @@
+     <SafeAreaView style={styles.container}>
+       <ScrollView contentContainerStyle={styles.scrollContent}>
+       <View style={styles.card}>
+-        <Text style={styles.title}>Groq API Setup</Text>
++        <Text style={styles.title}>API Key Setup</Text>
+         <Text style={styles.desc}>
+-          Paste your Groq API key. It is encrypted and saved only in this app on this phone.
++          Paste your API key. It is encrypted and saved only in this app on this phone.
++          Auto-detects Groq, OpenRouter, NVIDIA, OpenAI.
+         </Text>
+         <TextInput
+           style={styles.input}
+           value={groqApiKey}
+           onChangeText={setGroqApiKey}
+-          placeholder="gsk_..."
++          placeholder="sk-..., gsk_..., nvapi-..."
+           placeholderTextColor={colors.textMuted}
+           autoCapitalize="none"
+@@ -104,8 +119,16 @@
+         <Text style={styles.keyStatus}>
+-          Status: {hasGroqApiKey ? "Saved on device" : "Not saved"}
++          Status: {hasGroqApiKey ? "Saved on device" : "Not saved"} | Detected: {guessedProvider}
+         </Text>
++        <Text style={styles.desc}>
++          Provider Override (Optional):
++        </Text>
++        <TextInput
++          style={styles.input}
++          value={manualProvider}
++          onChangeText={setManualProvider}
++          placeholder={`Leave blank to use: ${guessedProvider}`}
++          placeholderTextColor={colors.textMuted}
++        />
+         <View style={styles.buttonRow}>
+           <TouchableOpacity style={styles.downloadBtn} onPress={saveGroqKey}>
+-            <Text style={styles.btnText}>Save Groq Key</Text>
++            <Text style={styles.btnText}>Save API Config</Text>
+           </TouchableOpacity>
+           {hasGroqApiKey && (
+

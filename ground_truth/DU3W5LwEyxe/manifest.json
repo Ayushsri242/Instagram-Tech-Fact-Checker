@@ -1,0 +1,62 @@
+{
+  "shortcode": "DU3W5LwEyxe",
+  "source_url": "https://www.instagram.com/reel/DU3W5LwEyxe/",
+  "title": "Video by anay.tech",
+  "author": "Anay Joshi • AI • Tech • Careers",
+  "caption": "",
+  "is_carousel": false,
+  "frames": [
+    {
+      "file": "frame_00.jpg",
+      "at_seconds": 3.56
+    },
+    {
+      "file": "frame_01.jpg",
+      "at_seconds": 7.12
+    },
+    {
+      "file": "frame_02.jpg",
+      "at_seconds": 10.68
+    },
+    {
+      "file": "frame_03.jpg",
+      "at_seconds": 14.25
+    },
+    {
+      "file": "frame_04.jpg",
+      "at_seconds": 17.81
+    },
+    {
+      "file": "frame_05.jpg",
+      "at_seconds": 21.37
+    },
+    {
+      "file": "frame_06.jpg",
+      "at_seconds": 24.93
+    },
+    {
+      "file": "frame_07.jpg",
+      "at_seconds": 28.49
+    },
+    {
+      "file": "frame_08.jpg",
+      "at_seconds": 32.05
+    },
+    {
+      "file": "frame_09.jpg",
+      "at_seconds": 35.61
+    },
+    {
+      "file": "frame_10.jpg",
+      "at_seconds": 39.18
+    },
+    {
+      "file": "frame_11.jpg",
+      "at_seconds": 42.74
+    }
+  ],
+  "duration_seconds": 46.3,
+  "reference_transcript": "Stop paying for your API keys in 2026 Because why combinator just launched a 25 thousand dollars worth of AI starter pack And here's exactly how you can get your hands on it Hi I am Anay and I work as a software engineer and 10 technologies First let's see what will happen You're getting 10 thousand dollars worth of credits for Azure and AWS cloud To deploy as many projects as possible, you have to pay a lot of attention Next up is the best thing you can get in 2026 That is 5 thousand dollars worth of credit from GPD, Claude and Grop By doing so many vipcoding, you have to open it With this you're getting credits for the upcoming AI DevTools Covering web crawling, browser automation and even video generation It's a complete ecosystem that you're getting for free If you want a full guide on how to apply and get this for free This is a comment AI and I'll give it to you in the first 3 DM But make sure you follow the account first Otherwise you won't allow the Instagram DM That's it for this one, I'll see you guys in the next one",
+  "reference_transcript_language": "hi",
+  "reference_transcript_engine": "faster-whisper base, beam_size=5"
+}

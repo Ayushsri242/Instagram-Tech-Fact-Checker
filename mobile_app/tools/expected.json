@@ -1,0 +1,42 @@
+{
+  "_comment": "System 1 ground truth, copied from TEST_LOG.md. 'slides' is the real slide count for carousels and is omitted for reels. 'subject' is the thing the post is actually about, which is not always the thing with a repo.",
+  "DbtJytsumrO": {
+    "subject": "Prime Agent",
+    "verdict": "PARTIALLY_TRUE"
+  },
+  "Dcz98y7mbA1": {
+    "subject": "GitNexus",
+    "verdict": "PARTIALLY_TRUE",
+    "slides": 3
+  },
+  "DcbFunokXyI": {
+    "subject": "BASE",
+    "verdict": "HYPE",
+    "slides": 7
+  },
+  "DcwJq4tp6Fz": {
+    "subject": null,
+    "verdict": "MISLEADING"
+  },
+  "DcqopiqvtRw": {
+    "subject": "Mindrift",
+    "verdict": "PARTIALLY_TRUE"
+  },
+  "DcvZqlBMnoj": {
+    "subject": "GlucoFM",
+    "verdict": "TRUE"
+  },
+  "DdBGaAgnQyL": {
+    "subject": "locally-uncensored",
+    "verdict": "TRUE"
+  },
+  "DW7TbBXmey3": {
+    "subject": "graphify",
+    "verdict": "PARTIALLY_TRUE",
+    "slides": 8
+  },
+  "DU3W5LwEyxe": {
+    "subject": null,
+    "verdict": "PARTIALLY_TRUE"
+  }
+}

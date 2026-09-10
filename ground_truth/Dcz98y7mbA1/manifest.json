@@ -1,0 +1,23 @@
+{
+  "shortcode": "Dcz98y7mbA1",
+  "source_url": "https://www.instagram.com/p/Dcz98y7mbA1/",
+  "title": "Comment “AI” to get the link and the full list of free AI resources.\n\nThis free ...",
+  "author": "simplifyinai",
+  "caption": "Comment “AI” to get the link and the full list of free AI resources.\n\nThis free tool stops AI coding agents from breaking your codebase.\n\nIt’s called GitNexus.\n\nMost AI coding tools don’t actually know your codebase structure, so they edit a function without realizing 47 other things depend on it, and something breaks.\n\n→ Builds a knowledge graph of your repo: every dependency, call chain, and cluster mapped out\n\n→ Works inside Claude Code, Cursor, Codex, and more, so your agent gets full context in one query instead of guessing\n\n→ Try the web version with zero install, or run one command locally: npx gitnexus analyze\n\nOne thing to know: it’s free for personal use, but commercial use needs a separate license, it’s not fully open source.",
+  "is_carousel": true,
+  "frames": [
+    {
+      "file": "frame_00.jpg",
+      "slide": 0
+    },
+    {
+      "file": "frame_01.jpg",
+      "slide": 1
+    },
+    {
+      "file": "frame_02.jpg",
+      "slide": 2
+    }
+  ],
+  "duration_seconds": 0.0
+}

@@ -1,0 +1,6 @@
+﻿timestamp,shortcode,verdict,verdictRaw,techName,ocrChars,speechChars,captionChars,toolsOut,toolsVerified,toolsNotFound,install,structuredRows,searchRows,keptRows,keptWithPageText,evidenceRules,claims,gotchas,durationMs,error
+2026-09-08T11:35:01.659Z,Dcz98y7mbA1,PARTIALLY_TRUE,PARTIALLY_TRUE,GitNexus,1918,,,4,4,0,npx gitnexus analyze,5,21,12,11,,4,4,40055,
+2026-09-08T11:37:38.679Z,DcbFunokXyI,MISLEADING,MISLEADING,BASE and Graphify,1408,,,2,2,0,,7,19,12,12,,4,4,31526,
+2026-09-08T11:39:50.815Z,DcwJq4tp6Fz,MISLEADING,MISLEADING,4 Side Hustles,793,,,0,0,0,,4,20,12,10,,4,4,38710,
+2026-09-08T11:42:14.194Z,DcqopiqvtRw,MISLEADING,FAKE,Sachifinance,3930,,,1,1,0,pip install toloka-kit,5,18,12,10,,4,4,59776,
+2026-09-08T11:45:52.315Z,DbtJytsumrO,MISLEADING,MISLEADING,Prime Agent,3382,,,1,1,0,,5,19,12,11,,4,4,58461,

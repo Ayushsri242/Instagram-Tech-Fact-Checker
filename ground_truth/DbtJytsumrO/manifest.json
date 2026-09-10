@@ -1,0 +1,62 @@
+{
+  "shortcode": "DbtJytsumrO",
+  "source_url": "https://www.instagram.com/reel/DbtJytsumrO/",
+  "title": "Video by wassimyounes_",
+  "author": "Wassim Younes",
+  "caption": "",
+  "is_carousel": false,
+  "frames": [
+    {
+      "file": "frame_00.jpg",
+      "at_seconds": 2.97
+    },
+    {
+      "file": "frame_01.jpg",
+      "at_seconds": 5.93
+    },
+    {
+      "file": "frame_02.jpg",
+      "at_seconds": 8.9
+    },
+    {
+      "file": "frame_03.jpg",
+      "at_seconds": 11.87
+    },
+    {
+      "file": "frame_04.jpg",
+      "at_seconds": 14.83
+    },
+    {
+      "file": "frame_05.jpg",
+      "at_seconds": 17.8
+    },
+    {
+      "file": "frame_06.jpg",
+      "at_seconds": 20.77
+    },
+    {
+      "file": "frame_07.jpg",
+      "at_seconds": 23.73
+    },
+    {
+      "file": "frame_08.jpg",
+      "at_seconds": 26.7
+    },
+    {
+      "file": "frame_09.jpg",
+      "at_seconds": 29.67
+    },
+    {
+      "file": "frame_10.jpg",
+      "at_seconds": 32.63
+    },
+    {
+      "file": "frame_11.jpg",
+      "at_seconds": 35.6
+    }
+  ],
+  "duration_seconds": 38.57,
+  "reference_transcript": "One harness took Opus 5 from 30% to 95% in the ARC AGI 3 scale, so we just got the best self-improving harness out there. Extremely token-efficient, and that makes your AIs much better. Which tells you the difference is making your AIs more efficient is the way it scaffolds. The harness that operates your AIs makes it a lot better. The difference is the model didn't just get better, but it's the way it scaffolds. This harness does something completely different. While it's running, it could rewrite its own prompts, memory, and its tests. And modifies its own harness for self-improvement. This is one of the most revolutionary things that we have currently. So remember, it's not the way your LLMs improve, but it's also the way your harness operates them.",
+  "reference_transcript_language": "en",
+  "reference_transcript_engine": "faster-whisper base, beam_size=5"
+}
