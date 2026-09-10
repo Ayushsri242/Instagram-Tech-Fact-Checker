@@ -1,0 +1,6 @@
+﻿timestamp,shortcode,verdict,verdictRaw,techName,ocrChars,speechChars,captionChars,toolsOut,toolsVerified,toolsNotFound,install,structuredRows,searchRows,keptRows,keptWithPageText,evidenceRules,claims,gotchas,durationMs,error
+2026-09-08T06:58:41.249Z,Dc8bV14lHsk,PARTIALLY_TRUE,PARTIALLY_TRUE,nanobot,2080,,,1,1,0,,8,22,12,11,"Dropped install ""pip install nanobot"": PyPI ""nanobot"" is ""Minimalist robot navigation framework using cascading decisi"" - a different project. ; Added the confirmed rename to gotchas; the model had that row and omitted it.",4,4,22326,
+2026-09-08T06:59:49.331Z,Db9M3PYTcxq,PARTIALLY_TRUE,PARTIALLY_TRUE,Paper2Code Skill,1623,,,2,2,0,,4,13,12,8,,4,4,33104,
+2026-09-08T07:01:54.312Z,Db8MTU8sdXb,MISLEADING,MISLEADING,Nemotron 3.5 Lightning,2428,,,3,3,0,pip install vllm,7,27,12,11,,4,4,43799,
+2026-09-08T07:05:59.977Z,DajCWEUjktT,MISLEADING,MISLEADING,"5 free GitHub repos replacing ElevenLabs, HeyGen, Nano Banana, Runway, Wispr Flow",2441,,,1,1,0,,3,27,12,7,,4,4,47175,
+2026-09-08T07:23:52.762Z,DbgSN0gzwJ8,MISLEADING,MISLEADING,sparkly-api,7303,,,3,3,0,,6,30,12,10,"Dropped install ""pip install httpx"": PyPI ""httpx"" is ""The next generation HTTP client."" - a different project.",4,4,55197,

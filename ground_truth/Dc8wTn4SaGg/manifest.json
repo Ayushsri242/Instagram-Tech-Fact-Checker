@@ -1,0 +1,62 @@
+{
+  "shortcode": "Dc8wTn4SaGg",
+  "source_url": "https://www.instagram.com/reel/Dc8wTn4SaGg/?stkn=MWUybm04aHgydXIzcg==",
+  "title": "Video by julian.goldie_",
+  "author": "Julian Goldie",
+  "caption": "",
+  "is_carousel": false,
+  "frames": [
+    {
+      "file": "frame_00.jpg",
+      "at_seconds": 2.18
+    },
+    {
+      "file": "frame_01.jpg",
+      "at_seconds": 4.36
+    },
+    {
+      "file": "frame_02.jpg",
+      "at_seconds": 6.54
+    },
+    {
+      "file": "frame_03.jpg",
+      "at_seconds": 8.72
+    },
+    {
+      "file": "frame_04.jpg",
+      "at_seconds": 10.89
+    },
+    {
+      "file": "frame_05.jpg",
+      "at_seconds": 13.07
+    },
+    {
+      "file": "frame_06.jpg",
+      "at_seconds": 15.25
+    },
+    {
+      "file": "frame_07.jpg",
+      "at_seconds": 17.43
+    },
+    {
+      "file": "frame_08.jpg",
+      "at_seconds": 19.61
+    },
+    {
+      "file": "frame_09.jpg",
+      "at_seconds": 21.79
+    },
+    {
+      "file": "frame_10.jpg",
+      "at_seconds": 23.97
+    },
+    {
+      "file": "frame_11.jpg",
+      "at_seconds": 26.15
+    }
+  ],
+  "duration_seconds": 28.33,
+  "reference_transcript": "Stop paying to run Hermes and Claude code. You can use it for free instead. So what you can use is something called magnitude, which is an open source freeway that makes your AI agents 100% free with no API build. That means you can run Hermes fully offline and you get unlimited tokens with this powerful system. It's open source, it's free and it's ready to use right now. Thinking the bio, if you want the full training on exactly how to use this.",
+  "reference_transcript_language": "en",
+  "reference_transcript_engine": "faster-whisper base, beam_size=5"
+}

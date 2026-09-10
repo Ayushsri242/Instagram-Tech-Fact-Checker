@@ -18,6 +18,32 @@ def extract_shortcode(url: str) -> str:
     import hashlib
     return hashlib.md5(url.encode()).hexdigest()[:10]
 
+COOKIE_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "www.instagram.com_cookies.txt")
+
+
+def cookie_file() -> str:
+    """Path to the exported Instagram cookie jar, or "" when it is absent.
+
+    Some posts return an empty media response to both yt-dlp and Instaloader
+    while other posts fetch fine from the same IP in the same minute, so the
+    cause is the post being login-gated, not rate limiting. A logged-in session
+    is the only keyless way past that. The file is gitignored and never staged.
+    """
+    return COOKIE_FILE if os.path.exists(COOKIE_FILE) else ""
+
+
+def load_cookies_into(L) -> None:
+    """Give an Instaloader instance the exported browser session."""
+    path = cookie_file()
+    if not path:
+        return
+    import http.cookiejar
+    jar = http.cookiejar.MozillaCookieJar(path)
+    jar.load(ignore_discard=True, ignore_expires=True)
+    L.context._session.cookies.update(jar)
+
+
 def download_carousel(url: str, output_dir: str = DOWNLOADS_DIR) -> Dict[str, Any]:
     """Download Instagram carousel / image post slides via Instaloader."""
     import instaloader
@@ -33,7 +59,8 @@ def download_carousel(url: str, output_dir: str = DOWNLOADS_DIR) -> Dict[str, An
         download_geotags=False,
         quiet=True
     )
-    
+    load_cookies_into(L)
+
     post = instaloader.Post.from_shortcode(L.context, shortcode)
     L.download_post(post, target=shortcode)
     
@@ -65,6 +92,8 @@ def download_media(url: str, output_dir: str = DOWNLOADS_DIR) -> Dict[str, Any]:
         "quiet": True,
         "no_warnings": True,
     }
+    if cookie_file():
+        ydl_opts["cookiefile"] = cookie_file()
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

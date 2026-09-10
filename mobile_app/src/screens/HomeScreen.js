@@ -1,119 +1,110 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
-  ActivityIndicator,
   SafeAreaView,
+  KeyboardAvoidingView,
+  Platform,
+  StatusBar,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
-import { analyzeReelApi } from '../services/api';
-import { saveReelResult } from '../services/storage';
+import { getApiLimits, getOfflineMode } from '../services/storage';
 
 export default function HomeScreen({ navigation }) {
   const [url, setUrl] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [statusText, setStatusText] = useState('');
+  const [limits, setLimits] = useState(null);
+  const [isOffline, setIsOffline] = useState(false);
 
-  const sampleReels = [
-    { label: '5 LLM Libs', url: 'https://www.instagram.com/p/DcOJpsKDEht/' },
-    { label: 'Hindi Reel', url: 'https://www.instagram.com/reel/DcXzQH5si-A/' },
-    { label: '/eli5 Prompt', url: 'https://www.instagram.com/reel/DcYcqi5TePT/' },
-  ];
+  useFocusEffect(
+    useCallback(() => {
+      const fetchLimits = async () => {
+        const offline = await getOfflineMode();
+        setIsOffline(offline);
+        if (!offline) {
+          const l = await getApiLimits();
+          setLimits(l);
+        } else {
+          setLimits(null);
+        }
+      };
+      fetchLimits();
+    }, [])
+  );
 
-  const handleAnalyze = async (targetUrl = url) => {
-    if (!targetUrl.trim()) return;
-    setLoading(true);
-    setStatusText('🔍 Ingesting media & analyzing claims...');
-
-    try {
-      const result = await analyzeReelApi(targetUrl.trim());
-      await saveReelResult(result);
-      setLoading(false);
-      navigation.navigate('Result', { reel: result });
-    } catch (e) {
-      setLoading(false);
-      alert(`Analysis failed: ${e.message}`);
-    }
+  const handleSend = () => {
+    if (!url.trim()) return;
+    navigation.navigate('Chat', { initialUrl: url.trim() });
+    setUrl('');
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1 }}
+      >
         {/* Header */}
-        <View style={[styles.header, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
-          <View>
-            <Text style={styles.title}>Tech Fact Checker</Text>
-            <Text style={styles.subtitle}>100% Free • Local-First Micro-Agent</Text>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.navigate('History')} style={styles.iconButton}>
+            <Text style={styles.iconText}>History</Text>
+          </TouchableOpacity>
+          <View style={{ flex: 1, alignItems: 'center' }}>
+            {isOffline ? (
+              <Text style={styles.limitText}>OFFLINE MODE</Text>
+            ) : limits ? (
+              <Text style={styles.limitText}>
+                API: {limits.remainingRequests} reqs left
+              </Text>
+            ) : null}
           </View>
-          <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={{ padding: 8, backgroundColor: colors.surface, borderRadius: 8 }}>
-            <Text style={{ color: colors.primary, fontWeight: 'bold' }}>Setup</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.iconButton}>
+            <Text style={styles.iconText}>Setup</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Input Card */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Paste Instagram Reel / Carousel Link</Text>
+        {/* Center Title (Empty State) */}
+        <View style={styles.centerContent}>
+          <Text style={styles.title}>Tech Fact Checker</Text>
+          <Text style={styles.subtitle}>100% Free - Local-First Micro-Agent</Text>
+          <TouchableOpacity 
+            style={{ marginTop: 24, padding: 12, backgroundColor: colors.accentCyan, borderRadius: 8 }}
+            onPress={async () => {
+              const { NativeModules } = require('react-native');
+              try {
+                await NativeModules.TechFactChecker.startDoomscrollMode();
+                alert('Doomscroll Mode started! Floating bubble should appear.');
+              } catch (e) {
+                alert('Error: ' + e.message);
+              }
+            }}
+          >
+            <Text style={{ color: '#000', fontWeight: 'bold' }}>Start Doomscroll Mode</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Input Bar at Bottom */}
+        <View style={styles.inputContainer}>
           <TextInput
             style={styles.input}
-            placeholder="https://www.instagram.com/reel/..."
+            placeholder="Paste Instagram link here..."
             placeholderTextColor={colors.textMuted}
             value={url}
             onChangeText={setUrl}
-            autoCapitalize="none"
+            onSubmitEditing={handleSend}
           />
-
           <TouchableOpacity
-            style={[styles.primaryButton, loading && styles.disabledButton]}
-            onPress={() => handleAnalyze()}
-            disabled={loading || !url.trim()}
+            style={[styles.sendButton, !url.trim() && styles.disabledSend]}
+            onPress={handleSend}
+            disabled={!url.trim()}
           >
-            {loading ? (
-              <ActivityIndicator color="#000" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Run Fact Check</Text>
-            )}
+            <Text style={styles.sendText}>Check</Text>
           </TouchableOpacity>
         </View>
-
-        {/* Loading status */}
-        {loading && (
-          <View style={styles.statusCard}>
-            <Text style={styles.statusTitle}>⚙️ Processing Pipeline</Text>
-            <Text style={styles.statusDesc}>{statusText}</Text>
-          </View>
-        )}
-
-        {/* Quick Samples */}
-        <Text style={styles.sectionHeader}>💡 Quick Sample Reels</Text>
-        <View style={styles.samplesRow}>
-          {sampleReels.map((item, idx) => (
-            <TouchableOpacity
-              key={idx}
-              style={styles.sampleChip}
-              onPress={() => {
-                setUrl(item.url);
-                handleAnalyze(item.url);
-              }}
-            >
-              <Text style={styles.sampleChipText}>{item.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Feature info */}
-        <View style={styles.infoCard}>
-          <Text style={styles.infoTitle}>📱 Instagram Share Sheet</Text>
-          <Text style={styles.infoText}>
-            1. Tap Share on any Reel inside Instagram{'\n'}
-            2. Select "Tech Fact Checker"{'\n'}
-            3. Instant multimodal fact-check & code extraction
-          </Text>
-        </View>
-      </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -122,117 +113,86 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
-  },
-  scrollContent: {
-    padding: 16,
-    gap: 16,
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
   header: {
-    marginVertical: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 16,
+    alignItems: 'center',
+  },
+  iconButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: colors.surface,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  iconText: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  limitText: {
+    fontSize: 12,
+    color: colors.textMuted,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  centerContent: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
   },
   title: {
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: 'bold',
     color: colors.textPrimary,
+    marginBottom: 8,
   },
   subtitle: {
-    fontSize: 13,
-    color: colors.accentCyan,
-    marginTop: 4,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: 16,
-    borderColor: colors.cardBorder,
-    borderWidth: 1,
-  },
-  cardTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    marginBottom: 12,
-  },
-  input: {
-    backgroundColor: colors.background,
-    borderColor: colors.cardBorder,
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
-    color: colors.textPrimary,
     fontSize: 14,
-    marginBottom: 12,
-  },
-  primaryButton: {
-    backgroundColor: colors.accentCyan,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  disabledButton: {
-    opacity: 0.6,
-  },
-  primaryButtonText: {
-    color: '#000',
-    fontWeight: 'bold',
-    fontSize: 15,
-  },
-  statusCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 14,
-    padding: 14,
-    borderColor: colors.accentCyan,
-    borderWidth: 1,
-  },
-  statusTitle: {
     color: colors.accentCyan,
-    fontWeight: 'bold',
-    marginBottom: 4,
+    marginTop: 8,
   },
-  statusDesc: {
-    color: colors.textSecondary,
-    fontSize: 13,
-  },
-  sectionHeader: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    marginTop: 4,
-  },
-  samplesRow: {
+  inputContainer: {
     flexDirection: 'row',
+    padding: 12,
+    backgroundColor: colors.background,
+    borderTopWidth: 1,
+    borderTopColor: colors.cardBorder,
+    alignItems: 'center',
     gap: 8,
   },
-  sampleChip: {
+  input: {
     flex: 1,
     backgroundColor: colors.surface,
     borderColor: colors.cardBorder,
     borderWidth: 1,
-    borderRadius: 10,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  sampleChipText: {
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     color: colors.textPrimary,
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  infoCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: 16,
-    marginTop: 8,
-  },
-  infoTitle: {
     fontSize: 14,
-    fontWeight: 'bold',
-    color: colors.textPrimary,
-    marginBottom: 6,
   },
-  infoText: {
-    fontSize: 12,
-    color: colors.textMuted,
-    lineHeight: 18,
+  sendButton: {
+    backgroundColor: colors.accentCyan,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 20,
+  },
+  disabledSend: {
+    opacity: 0.5,
+  },
+  sendText: {
+    color: '#000',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
 });

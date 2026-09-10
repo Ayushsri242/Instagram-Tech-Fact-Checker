@@ -1,0 +1,62 @@
+{
+  "shortcode": "DcqopiqvtRw",
+  "source_url": "https://www.instagram.com/reel/DcqopiqvtRw/",
+  "title": "Video by sachifinance",
+  "author": "Sachi Finance",
+  "caption": "",
+  "is_carousel": false,
+  "frames": [
+    {
+      "file": "frame_00.jpg",
+      "at_seconds": 3.9
+    },
+    {
+      "file": "frame_01.jpg",
+      "at_seconds": 7.79
+    },
+    {
+      "file": "frame_02.jpg",
+      "at_seconds": 11.69
+    },
+    {
+      "file": "frame_03.jpg",
+      "at_seconds": 15.58
+    },
+    {
+      "file": "frame_04.jpg",
+      "at_seconds": 19.48
+    },
+    {
+      "file": "frame_05.jpg",
+      "at_seconds": 23.37
+    },
+    {
+      "file": "frame_06.jpg",
+      "at_seconds": 27.27
+    },
+    {
+      "file": "frame_07.jpg",
+      "at_seconds": 31.16
+    },
+    {
+      "file": "frame_08.jpg",
+      "at_seconds": 35.06
+    },
+    {
+      "file": "frame_09.jpg",
+      "at_seconds": 38.95
+    },
+    {
+      "file": "frame_10.jpg",
+      "at_seconds": 42.85
+    },
+    {
+      "file": "frame_11.jpg",
+      "at_seconds": 46.75
+    }
+  ],
+  "duration_seconds": 50.64,
+  "reference_transcript": "تمی پتا ہے تم AI کو трین کر کے اس website سے ایک سیڑن کم جنیڈ کر سکتے دو میں نے یہاں کو سیمپل تاس کمپلیٹ کر کے 14.70 دورس انگی ہیں جس میں میں نے یہ ایمیز والی تاس کمپلیٹ کر دیا تھے اس تاس میں ایک ایمیز دی جاتی ہے اور اس ایمیز میں کچھ چینز کروانے کے لئے ایک پرومٹ دیا جاتی ہے اور پھر یہاں پر اس پرومٹ سے دو ریزلٹ ایمیز دی جاتی ہے اور تمیے اس ایمیز کو سلیکٹ کرنا ہوتا ہے",
+  "reference_transcript_language": "hi",
+  "reference_transcript_engine": "faster-whisper base, beam_size=5"
+}

@@ -1,0 +1,62 @@
+{
+  "shortcode": "DXPBYItAXnL",
+  "source_url": "https://www.instagram.com/reel/DXPBYItAXnL/?stkn=eHlwempzbWk0dWtm",
+  "title": "Video by technerdpeter",
+  "author": "Tech Nerd Peter 🤓",
+  "caption": "",
+  "is_carousel": false,
+  "frames": [
+    {
+      "file": "frame_00.jpg",
+      "at_seconds": 3.72
+    },
+    {
+      "file": "frame_01.jpg",
+      "at_seconds": 7.45
+    },
+    {
+      "file": "frame_02.jpg",
+      "at_seconds": 11.17
+    },
+    {
+      "file": "frame_03.jpg",
+      "at_seconds": 14.9
+    },
+    {
+      "file": "frame_04.jpg",
+      "at_seconds": 18.62
+    },
+    {
+      "file": "frame_05.jpg",
+      "at_seconds": 22.34
+    },
+    {
+      "file": "frame_06.jpg",
+      "at_seconds": 26.07
+    },
+    {
+      "file": "frame_07.jpg",
+      "at_seconds": 29.79
+    },
+    {
+      "file": "frame_08.jpg",
+      "at_seconds": 33.52
+    },
+    {
+      "file": "frame_09.jpg",
+      "at_seconds": 37.24
+    },
+    {
+      "file": "frame_10.jpg",
+      "at_seconds": 40.96
+    },
+    {
+      "file": "frame_11.jpg",
+      "at_seconds": 44.69
+    }
+  ],
+  "duration_seconds": 48.41,
+  "reference_transcript": "Cloud Code just removed its usage limit. Yeah, I heard about it. What is actually going on? A group of developers dug into Cloud Code and found the limit can be reset manually. Then where is it coming from? Part of it lives locally. Cloud stores your entire session in a log file inside a hidden folder on your device, and that file decides when you hit the limit. So if that file changes, the limit changes? Exactly. Open your terminal, go to cd.cloud, and you will find your session logs sitting there. And the limit just disappears if we touch it? Open that file, delete everything except the first line. That line is just a header, then save it. That is all it takes? Restart Cloud Code, it comes back thinking it is a fresh session, no memory of the limit. So the limit was never really global? It was tied to your session the whole time, not some invisible server wall, just a file deciding when you stop.",
+  "reference_transcript_language": "en",
+  "reference_transcript_engine": "faster-whisper base, beam_size=5"
+}

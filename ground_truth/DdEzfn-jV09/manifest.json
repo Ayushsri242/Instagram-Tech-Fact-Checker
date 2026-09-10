@@ -1,0 +1,39 @@
+{
+  "shortcode": "DdEzfn-jV09",
+  "source_url": "https://www.instagram.com/p/DdEzfn-jV09/",
+  "title": "🧠 You can train a real LLM from scratch for less than ₹40.\n\nminimind builds a 64...",
+  "author": "fullstackparody",
+  "caption": "🧠 You can train a real LLM from scratch for less than ₹40.\n\nminimind builds a 64M-param model in ~2 hours on a single 3090, for about 3 RMB. Not a toy: pretrain, SFT, LoRA and full RLHF, all in native PyTorch you can actually read. 54k stars, Apache 2.0.\n\nClone it, run two scripts, then chat with a model you built.\n\nSave this ❗ Would you try it?\n\n#minimind #llm #trainyourownllm #pytorch #aitools machinelearning aiengineer buildinpublic",
+  "is_carousel": true,
+  "frames": [
+    {
+      "file": "frame_00.jpg",
+      "slide": 0
+    },
+    {
+      "file": "frame_01.jpg",
+      "slide": 1
+    },
+    {
+      "file": "frame_02.jpg",
+      "slide": 2
+    },
+    {
+      "file": "frame_03.jpg",
+      "slide": 3
+    },
+    {
+      "file": "frame_04.jpg",
+      "slide": 4
+    },
+    {
+      "file": "frame_05.jpg",
+      "slide": 5
+    },
+    {
+      "file": "frame_06.jpg",
+      "slide": 6
+    }
+  ],
+  "duration_seconds": 0.0
+}

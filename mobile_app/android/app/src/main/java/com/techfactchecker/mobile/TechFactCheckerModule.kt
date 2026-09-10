@@ -59,6 +59,52 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    private val bubbleReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+            if (intent.action == "com.techfactchecker.REEL_COPIED") {
+                val url = intent.getStringExtra("url") ?: return
+                reactContext.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("ON_REEL_COPIED", url)
+            }
+        }
+    }
+
+    init {
+        val filter = android.content.IntentFilter("com.techfactchecker.REEL_COPIED")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            reactContext.registerReceiver(bubbleReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            reactContext.registerReceiver(bubbleReceiver, filter)
+        }
+    }
+
+    @ReactMethod
+    fun startDoomscrollMode(promise: Promise) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(reactContext)) {
+            val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+            intent.data = android.net.Uri.parse("package:${reactContext.packageName}")
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            reactContext.startActivity(intent)
+            promise.reject("PERMISSION_DENIED", "Please grant 'Display over other apps' permission and try again.")
+            return
+        }
+        val intent = android.content.Intent(reactContext, com.techfactchecker.app.domain.FloatingBubbleService::class.java)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            reactContext.startForegroundService(intent)
+        } else {
+            reactContext.startService(intent)
+        }
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun stopDoomscrollMode(promise: Promise) {
+        val intent = android.content.Intent(reactContext, com.techfactchecker.app.domain.FloatingBubbleService::class.java)
+        reactContext.stopService(intent)
+        promise.resolve(true)
+    }
+
+
     @ReactMethod
     fun generateResponse(prompt: String, promise: Promise) {
         scope.launch {

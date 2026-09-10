@@ -56,7 +56,19 @@ export default function ReportCard({ report, techName }) {
       </View>
 
       {!!techName && techName !== 'Unknown Technology' && (
-        <Text style={styles.techName}>{techName}</Text>
+        <Text style={[styles.techName, techName === 'Unidentified' && styles.techUnknown]}>
+          {techName === 'Unidentified' ? 'Could not identify the tool' : techName}
+        </Text>
+      )}
+
+      {/* Existence and framing are separate questions. The chip above judges the
+          framing; this line reports what the evidence confirmed, which is a
+          fact rather than an opinion. */}
+      {!!report.toolsReal && report.toolsReal.total > 0 && (
+        <Text style={styles.toolsReal}>
+          {report.toolsReal.verified}/{report.toolsReal.total} tools verified to exist
+          {report.toolsReal.missing > 0 ? ' · ' + report.toolsReal.missing + ' not found' : ''}
+        </Text>
       )}
 
       {!!report.factualReality && (
@@ -126,6 +138,8 @@ const styles = StyleSheet.create({
   },
   verdictText: { color: '#000', fontWeight: '800', fontSize: 12, letterSpacing: 0.8 },
   techName: { color: colors.textPrimary, fontSize: 19, fontWeight: '700', marginBottom: 4 },
+  techUnknown: { color: colors.textMuted, fontSize: 16, fontStyle: 'italic' },
+  toolsReal: { color: colors.textMuted, fontSize: 12, marginBottom: 6 },
   reality: { color: colors.textPrimary, fontSize: 14, lineHeight: 19, marginBottom: 2 },
   section: { marginTop: 11 },
   sectionTitle: {

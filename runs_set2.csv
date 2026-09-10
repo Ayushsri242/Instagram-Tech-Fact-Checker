@@ -1,0 +1,5 @@
+﻿timestamp,shortcode,verdict,verdictRaw,techName,ocrChars,speechChars,captionChars,toolsOut,toolsVerified,toolsNotFound,install,structuredRows,searchRows,keptRows,keptWithPageText,evidenceRules,claims,gotchas,durationMs,error
+2026-09-08T09:52:09.275Z,Dc8wTn4SaGg,PARTIALLY_TRUE,PARTIALLY_TRUE,Magnitude,5671,,,3,3,0,,7,37,12,12,,4,4,51906,
+2026-09-08T09:53:11.415Z,DdAwhV3GXWi,PARTIALLY_TRUE,PARTIALLY_TRUE,system_prompts_leaks,2896,,,1,1,0,git clone https://github.com/asgeirtj/systempromptsleaks,3,32,12,9,,4,4,46566,
+2026-09-08T09:57:33.821Z,DZMqdC0Ronu,PARTIALLY_TRUE,PARTIALLY_TRUE,FreeDomain,5516,,,1,1,0,,4,23,12,11,,4,4,50831,
+2026-09-08T09:58:57.071Z,DXPBYItAXnL,HYPE,MISLEADING,Claude Code,3890,,,1,1,0,,6,24,12,11,,4,4,52122,

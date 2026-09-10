@@ -1,0 +1,62 @@
+{
+  "shortcode": "DdBGaAgnQyL",
+  "source_url": "https://www.instagram.com/reel/DdBGaAgnQyL/",
+  "title": "Video by gittrend.io",
+  "author": "Trending OpenSource Projects",
+  "caption": "",
+  "is_carousel": false,
+  "frames": [
+    {
+      "file": "frame_00.jpg",
+      "at_seconds": 3.62
+    },
+    {
+      "file": "frame_01.jpg",
+      "at_seconds": 7.25
+    },
+    {
+      "file": "frame_02.jpg",
+      "at_seconds": 10.87
+    },
+    {
+      "file": "frame_03.jpg",
+      "at_seconds": 14.49
+    },
+    {
+      "file": "frame_04.jpg",
+      "at_seconds": 18.12
+    },
+    {
+      "file": "frame_05.jpg",
+      "at_seconds": 21.74
+    },
+    {
+      "file": "frame_06.jpg",
+      "at_seconds": 25.36
+    },
+    {
+      "file": "frame_07.jpg",
+      "at_seconds": 28.99
+    },
+    {
+      "file": "frame_08.jpg",
+      "at_seconds": 32.61
+    },
+    {
+      "file": "frame_09.jpg",
+      "at_seconds": 36.23
+    },
+    {
+      "file": "frame_10.jpg",
+      "at_seconds": 39.86
+    },
+    {
+      "file": "frame_11.jpg",
+      "at_seconds": 43.48
+    }
+  ],
+  "duration_seconds": 47.1,
+  "reference_transcript": "Want to run chat GPT-like AI, generate images and make videos locally for free? It's a desktop app that does all the big AI tasks in one window. You can chat with any local model that answers directly, generate images and video with a single click, and use a coding agent that edits your code and shows the diff first. There's an agent mode that searches the web, reads files, runs commands, and even makes images, all through a permission gate you control. You install it just like any other program, pick a model that fits your hardware from the built-in manager, and start typing. It works with engines you already have, like Alama or LM Studio, or it can set everything up for you automatically. It's for anyone who wants a private, uncensored AI studio without paying for cloud subscriptions or using a terminal. Comment studio, and I'll send you the repo link.",
+  "reference_transcript_language": "en",
+  "reference_transcript_engine": "faster-whisper base, beam_size=5"
+}

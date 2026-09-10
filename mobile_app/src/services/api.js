@@ -953,7 +953,20 @@ export const analyzeReelApi = async (url) => {
   };
 };
 
-export const chatWithAiApi = async (reel, userMessage, conversation = []) => {
+const performQuickSearch = async (query) => {
+  try {
+    const { data } = await axios.get(
+      'https://r.jina.ai/https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query),
+      { timeout: 10000, headers: { Accept: 'text/plain' }, responseType: 'text' }
+    );
+    // Return the first 1500 chars of Jina markdown
+    return String(data || '').slice(0, 1500);
+  } catch (e) {
+    return 'Search failed.';
+  }
+};
+
+export const chatWithAiApi = async (reel, userMessage, conversation = [], onSearchStart = null) => {
   const offline = await getOfflineMode();
   const apiKey = offline ? null : await getGroqApiKey();
   if (!offline && !apiKey) throw new Error('Add your Groq API key in Setup first.');
@@ -966,19 +979,46 @@ export const chatWithAiApi = async (reel, userMessage, conversation = []) => {
     'Transcript: ' + (reel.rawTranscript || ''),
     'Verified fact-check: ' + (reel.summaryMarkdown || reel.factualReality || ''),
     'Evidence: ' + JSON.stringify(reel.sources || []),
-    'Answer concisely and technically. State uncertainty when evidence does not support an answer.',
+    'CRITICAL RULES:',
+    '1. Answer in 1-2 short sentences maximum. Be concise. Only provide long detailed answers if the user explicitly uses words like "explain", "detail", or "elaborate".',
+    '2. If the user asks a question about something you have 0 knowledge about and it is not in the Evidence, you MUST output EXACTLY the phrase: SEARCH: [your search query here] and nothing else. The system will perform the search and give you the answer to summarize.',
   ].join('\n\n');
+  
   if (offline) {
     if (!TechFactChecker) throw new Error('Native mobile module is unavailable.');
     const prompt =
       '<start_of_turn>user\n' + context + '\n\n' + recentChat +
       '\n\nCurrent question: ' + userMessage +
       '<end_of_turn>\n<start_of_turn>model\n';
-    return TechFactChecker.generateResponse(prompt);
+    let res = await TechFactChecker.generateResponse(prompt);
+    if (res.includes('SEARCH:')) {
+      const match = res.match(/SEARCH:\s*(.+)/);
+      if (match) {
+        if (onSearchStart) onSearchStart();
+        const query = match[1].trim();
+        const searchResult = await performQuickSearch(query);
+        const followUpPrompt = prompt + res + '<end_of_turn>\n<start_of_turn>user\nSearch Results:\n' + searchResult + '\nNow answer the user\'s question concisely.<end_of_turn>\n<start_of_turn>model\n';
+        return TechFactChecker.generateResponse(followUpPrompt);
+      }
+    }
+    return res;
   }
 
-  return callGroqText(apiKey, [
+  const messages = [
     { role: 'system', content: context },
     { role: 'user', content: recentChat + '\n\nCurrent question: ' + userMessage },
-  ]);
+  ];
+  let res = await callGroqText(apiKey, messages);
+  if (res.includes('SEARCH:')) {
+    const match = res.match(/SEARCH:\s*(.+)/);
+    if (match) {
+      if (onSearchStart) onSearchStart();
+      const query = match[1].trim();
+      const searchResult = await performQuickSearch(query);
+      messages.push({ role: 'assistant', content: res });
+      messages.push({ role: 'user', content: 'Search Results:\n' + searchResult + '\n\nNow answer the question concisely.' });
+      return callGroqText(apiKey, messages);
+    }
+  }
+  return res;
 };
