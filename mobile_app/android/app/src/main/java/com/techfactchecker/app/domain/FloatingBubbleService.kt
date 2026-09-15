@@ -63,8 +63,8 @@ class FloatingBubbleService : Service() {
         }
 
         val params = WindowManager.LayoutParams(
-            150,
-            150,
+            120,
+            120,
             layoutFlag,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
@@ -78,9 +78,14 @@ class FloatingBubbleService : Service() {
         val text = TextView(this).apply {
             text = "AI"
             setTextColor(Color.WHITE)
-            textSize = 20f
+            textSize = 16f
             gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#00E5FF")) // Cyan
+            
+            val shape = android.graphics.drawable.GradientDrawable()
+            shape.shape = android.graphics.drawable.GradientDrawable.OVAL
+            shape.setColor(Color.parseColor("#00E5FF")) // Cyan
+            background = shape
+            
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
@@ -160,7 +165,8 @@ class FloatingBubbleService : Service() {
             if (text.contains("instagram.com")) {
                 (floatingView as FrameLayout).getChildAt(0).let {
                     (it as TextView).text = "..."
-                    it.setBackgroundColor(Color.parseColor("#FF9800"))
+                    val shape = it.background as android.graphics.drawable.GradientDrawable
+                    shape.setColor(Color.parseColor("#FF9800"))
                 }
                 val intent = Intent("com.techfactchecker.REEL_COPIED")
                 intent.putExtra("url", text)
