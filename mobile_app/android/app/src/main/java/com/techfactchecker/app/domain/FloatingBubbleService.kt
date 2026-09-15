@@ -109,7 +109,7 @@ class FloatingBubbleService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - initialTouchX).toInt()
                     val dy = (event.rawY - initialTouchY).toInt()
-                    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+                    if (Math.abs(dx) > 30 || Math.abs(dy) > 30) {
                         isClick = false
                     }
                     params.x = initialX + dx
@@ -132,8 +132,28 @@ class FloatingBubbleService : Service() {
     }
 
     private fun handleBubbleClick() {
+        Log.d("FloatingBubble", "Bubble clicked!")
+        
+        // Android 13+ strictly blocks background clipboard reads.
+        // We temporarily request window focus so Android grants us clipboard access.
+        val layoutParams = floatingView.layoutParams as WindowManager.LayoutParams
+        layoutParams.flags = layoutParams.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        windowManager.updateViewLayout(floatingView, layoutParams)
+
+        floatingView.postDelayed({
+            readClipboard()
+            // Drop focus immediately so user can keep scrolling
+            layoutParams.flags = layoutParams.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            windowManager.updateViewLayout(floatingView, layoutParams)
+        }, 150)
+    }
+
+    private fun readClipboard() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        if (clipboard.hasPrimaryClip() && clipboard.primaryClip?.itemCount!! > 0) {
+        val hasClip = clipboard.hasPrimaryClip()
+        Log.d("FloatingBubble", "Has clip? $hasClip")
+        
+        if (hasClip && clipboard.primaryClip?.itemCount!! > 0) {
             val text = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
             Log.d("FloatingBubble", "Clipboard read: $text")
             
