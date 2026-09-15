@@ -104,6 +104,7 @@ class FloatingBubbleService : Service() {
         floatingView.setOnTouchListener { v, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    Log.d("FloatingBubble", "Touch DOWN")
                     initialX = params.x
                     initialY = params.y
                     initialTouchX = event.rawX
@@ -114,7 +115,8 @@ class FloatingBubbleService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - initialTouchX).toInt()
                     val dy = (event.rawY - initialTouchY).toInt()
-                    if (Math.abs(dx) > 30 || Math.abs(dy) > 30) {
+                    // 150 pixels of wiggle room so normal taps aren't ignored
+                    if (Math.abs(dx) > 150 || Math.abs(dy) > 150) {
                         isClick = false
                     }
                     params.x = initialX + dx
@@ -123,6 +125,7 @@ class FloatingBubbleService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
+                    Log.d("FloatingBubble", "Touch UP, isClick=$isClick")
                     if (isClick) {
                         v.performClick()
                         handleBubbleClick()
