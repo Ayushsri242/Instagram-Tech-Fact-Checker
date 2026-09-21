@@ -23,12 +23,43 @@ class FloatingBubbleService : Service() {
 
     private lateinit var windowManager: WindowManager
     private lateinit var floatingView: View
+    private lateinit var closeView: View
+
+
+    private val commandReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+            if (intent.action == "com.techfactchecker.SET_BUBBLE_COLOR") {
+                val color = intent.getStringExtra("color") ?: return
+        
+        try {
+            unregisterReceiver(commandReceiver)
+        } catch (e: Exception) {}
+        
+        if (::floatingView.isInitialized) {
+                    (floatingView as FrameLayout).getChildAt(0).let {
+                        (it as TextView).text = "AI"
+                        val shape = it.background as android.graphics.drawable.GradientDrawable
+                        shape.setColor(Color.parseColor(color))
+                    }
+                }
+            }
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+
+        val filter = android.content.IntentFilter("com.techfactchecker.SET_BUBBLE_COLOR")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(commandReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(commandReceiver, filter)
+        }
+        
         startForegroundService()
+        createCloseView()
         createFloatingBubble()
     }
 
@@ -53,7 +84,8 @@ class FloatingBubbleService : Service() {
         startForeground(1, notification)
     }
 
-    private fun createFloatingBubble() {
+    private fun createCloseView()
+        createFloatingBubble() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
         val layoutFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -110,6 +142,7 @@ class FloatingBubbleService : Service() {
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
                     isClick = true
+                    closeView.visibility = View.VISIBLE
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -122,10 +155,27 @@ class FloatingBubbleService : Service() {
                     params.x = initialX + dx
                     params.y = initialY + dy
                     windowManager.updateViewLayout(floatingView, params)
+                    
+                    val screenWidth = resources.displayMetrics.widthPixels
+                    val screenHeight = resources.displayMetrics.heightPixels
+                    val isNearClose = event.rawY > screenHeight - 400 && event.rawX > screenWidth / 2 - 200 && event.rawX < screenWidth / 2 + 200
+                    closeView.alpha = if (isNearClose) 0.5f else 1.0f
+                    
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     Log.d("FloatingBubble", "Touch UP, isClick=$isClick")
+                    closeView.visibility = View.GONE
+                    
+                    val screenWidth = resources.displayMetrics.widthPixels
+                    val screenHeight = resources.displayMetrics.heightPixels
+                    val isNearClose = event.rawY > screenHeight - 400 && event.rawX > screenWidth / 2 - 200 && event.rawX < screenWidth / 2 + 200
+                    
+                    if (isNearClose && !isClick) {
+                        stopSelf()
+                        return@setOnTouchListener true
+                    }
+                    
                     if (isClick) {
                         v.performClick()
                         handleBubbleClick()
@@ -172,6 +222,7 @@ class FloatingBubbleService : Service() {
                     shape.setColor(Color.parseColor("#FF9800"))
                 }
                 val intent = Intent("com.techfactchecker.REEL_COPIED")
+                intent.setPackage(packageName)
                 intent.putExtra("url", text)
                 sendBroadcast(intent)
             }
@@ -180,8 +231,16 @@ class FloatingBubbleService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+
+        try {
+            unregisterReceiver(commandReceiver)
+        } catch (e: Exception) {}
+        
         if (::floatingView.isInitialized) {
             windowManager.removeView(floatingView)
+        }
+        if (::closeView.isInitialized) {
+            windowManager.removeView(closeView)
         }
     }
 }
