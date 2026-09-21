@@ -134,11 +134,22 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 manager?.createNotificationChannel(channel)
             }
             
+            val launchIntent = reactContext.packageManager.getLaunchIntentForPackage(reactContext.packageName)?.apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            val pendingIntent = if (launchIntent != null) {
+                android.app.PendingIntent.getActivity(
+                    reactContext, 0, launchIntent,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                )
+            } else null
+            
             val notification = androidx.core.app.NotificationCompat.Builder(reactContext, channelId)
                 .setContentTitle(title)
                 .setContentText(message)
                 .setSmallIcon(android.R.drawable.ic_menu_search)
                 .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
                 .build()
                 
             manager?.notify(System.currentTimeMillis().toInt(), notification)
