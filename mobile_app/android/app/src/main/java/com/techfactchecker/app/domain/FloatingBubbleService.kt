@@ -31,11 +31,7 @@ class FloatingBubbleService : Service() {
             if (intent.action == "com.techfactchecker.SET_BUBBLE_COLOR") {
                 val color = intent.getStringExtra("color") ?: return
         
-        try {
-            unregisterReceiver(commandReceiver)
-        } catch (e: Exception) {}
-        
-        if (::floatingView.isInitialized) {
+                if (::floatingView.isInitialized) {
                     (floatingView as FrameLayout).getChildAt(0).let {
                         (it as TextView).text = "AI"
                         val shape = it.background as android.graphics.drawable.GradientDrawable
