@@ -160,6 +160,42 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun showNotificationWithLink(title: String, message: String, deepLink: String, promise: Promise) {
+        try {
+            val channelId = "doomscroll_updates"
+            val manager = reactContext.getSystemService(android.app.NotificationManager::class.java)
+            
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val channel = android.app.NotificationChannel(channelId, "Doomscroll Updates", android.app.NotificationManager.IMPORTANCE_HIGH)
+                manager?.createNotificationChannel(channel)
+            }
+            
+            val launchIntent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(deepLink)).apply {
+                setPackage(reactContext.packageName)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            
+            val pendingIntent = android.app.PendingIntent.getActivity(
+                reactContext, 1, launchIntent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            
+            val notification = androidx.core.app.NotificationCompat.Builder(reactContext, channelId)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setSmallIcon(android.R.drawable.ic_menu_search)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .build()
+                
+            manager?.notify(System.currentTimeMillis().toInt(), notification)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("NOTIF_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
     fun generateResponse(prompt: String, promise: Promise) {
         scope.launch {
             try {
