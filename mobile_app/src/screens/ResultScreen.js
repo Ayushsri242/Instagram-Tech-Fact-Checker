@@ -7,12 +7,33 @@ import {
   TouchableOpacity,
   SafeAreaView,
   Linking,
+  Share,
 } from 'react-native';
 import { colors } from '../theme/colors';
 
 export default function ResultScreen({ route, navigation }) {
-  const { reel } = route.params;
+  const [reel, setReel] = useState(route.params.reel || null);
   const [showTranscript, setShowTranscript] = useState(false);
+
+  useEffect(() => {
+    if (!reel && route.params.reelId) {
+      import('../services/storage').then(({ getReelById }) => {
+        getReelById(route.params.reelId).then((data) => {
+          if (data) setReel(data);
+        });
+      });
+    }
+  }, [route.params.reelId, reel]);
+
+  if (!reel) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.scrollContent}>
+          <Text style={styles.techTitle}>Loading...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   const getBadgeColor = (verdict) => {
     switch (verdict?.toUpperCase()) {
@@ -33,30 +54,47 @@ export default function ResultScreen({ route, navigation }) {
 
   const badgeColor = getBadgeColor(reel?.verdict);
 
+  const handleShare = async () => {
+    try {
+      await Share.share({
+        message: `Fact Check: ${reel.techName || reel.title}\nVerdict: ${reel.verdict || 'UNKNOWN'}\n\nConfidence: ${reel.confidenceScore || 'N/A'}%\n\nSummary: ${reel.summaryMarkdown || reel.factualReality}`,
+      });
+    } catch (error) {
+      console.error('Error sharing', error);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* Header Card */}
         <View style={styles.card}>
           <Text style={styles.techTitle}>{reel.techName || reel.title}</Text>
-          <View style={[styles.badge, { borderColor: badgeColor, backgroundColor: badgeColor + '20' }]}>
-            <Text style={[styles.badgeText, { color: badgeColor }]}>
-              VERDICT: {reel.verdict || 'UNKNOWN'}
-            </Text>
+          <View style={styles.badgeRow}>
+            <View style={[styles.badge, { borderColor: badgeColor, backgroundColor: badgeColor + '20' }]}>
+              <Text style={[styles.badgeText, { color: badgeColor }]}>
+                VERDICT: {reel.verdict || 'UNKNOWN'}
+              </Text>
+            </View>
+            {reel.confidenceScore && (
+              <View style={[styles.badge, { borderColor: colors.accentBlue, backgroundColor: colors.accentBlue + '20', marginLeft: 10 }]}>
+                <Text style={[styles.badgeText, { color: colors.accentBlue }]}>
+                  🎯 {reel.confidenceScore}% Sure
+                </Text>
+              </View>
+            )}
           </View>
           <Text style={styles.authorText}>👤 @{reel.author || 'Creator'} • 💰 {reel.pricingModel || 'Open Source'}</Text>
         </View>
 
         {/* Action Row */}
         <View style={styles.actionRow}>
-          {reel.githubUrl && (
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: colors.accentBlue }]}
-              onPress={() => Linking.openURL(reel.githubUrl)}
-            >
-              <Text style={styles.actionButtonText}>GitHub Repo</Text>
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: colors.surfaceLight, borderWidth: 1, borderColor: colors.cardBorder }]}
+            onPress={handleShare}
+          >
+            <Text style={[styles.actionButtonText, { color: colors.textPrimary }]}>📤 Share</Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={[styles.actionButton, { backgroundColor: colors.accentCyan }]}
@@ -72,48 +110,20 @@ export default function ResultScreen({ route, navigation }) {
           <Text style={styles.summaryText}>{reel.summaryMarkdown || reel.factualReality}</Text>
         </View>
 
-        {/* Verified Tools Breakdown */}
-        {reel.tools && reel.tools.length > 0 && (
+        {/* Claims Breakdown */}
+        {reel.claims && reel.claims.length > 0 && (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>💡 Verified Tools ({reel.tools.length})</Text>
-            {reel.tools.map((tool, idx) => (
-              <View key={idx} style={styles.toolItem}>
-                <Text style={styles.toolName}>📦 {tool.name}</Text>
-                {tool.pipCommand && <Text style={styles.pipCode}>{tool.pipCommand}</Text>}
-                {tool.githubRepo && (
-                  <TouchableOpacity onPress={() => Linking.openURL(`https://github.com/${tool.githubRepo}`)}>
-                    <Text style={styles.repoLink}>https://github.com/{tool.githubRepo}</Text>
-                  </TouchableOpacity>
-                )}
+            <Text style={styles.sectionTitle}>🔍 Claims Breakdown</Text>
+            {reel.claims.map((c, idx) => (
+              <View key={idx} style={styles.claimItem}>
+                <Text style={styles.claimText}>
+                  {c.isTrue ? '🟩' : '🚩'} <Text style={styles.claimBold}>{c.claim}</Text>
+                </Text>
+                <Text style={styles.claimReason}>{c.reasoning}</Text>
               </View>
             ))}
           </View>
         )}
-
-        {reel.sources && reel.sources.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Sources</Text>
-            {reel.sources.map((source, idx) => (
-              <TouchableOpacity key={idx} onPress={() => Linking.openURL(source.url)}>
-                <Text style={styles.sourceLink}>{source.title || source.url}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {/* Collapsible Transcript */}
-        <View style={styles.card}>
-          <TouchableOpacity
-            style={styles.transcriptHeader}
-            onPress={() => setShowTranscript(!showTranscript)}
-          >
-            <Text style={styles.sectionTitle}>🎙️ Speech / Caption</Text>
-            <Text style={styles.toggleText}>{showTranscript ? 'Hide' : 'Show'}</Text>
-          </TouchableOpacity>
-          {showTranscript && (
-            <Text style={styles.transcriptText}>{reel.rawTranscript || 'No transcript available.'}</Text>
-          )}
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -141,13 +151,16 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     marginBottom: 8,
   },
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
   badge: {
-    alignSelf: 'flex-start',
     borderWidth: 1,
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 4,
-    marginBottom: 8,
   },
   badgeText: {
     fontWeight: 'bold',
@@ -184,49 +197,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
   },
-  toolItem: {
+  claimItem: {
     backgroundColor: colors.surfaceLight,
     padding: 12,
     borderRadius: 10,
     marginTop: 8,
   },
-  toolName: {
+  claimText: {
     color: colors.textPrimary,
-    fontWeight: 'bold',
     fontSize: 14,
-  },
-  pipCode: {
-    color: colors.accentCyan,
-    fontFamily: 'monospace',
-    fontSize: 12,
-    marginTop: 4,
-  },
-  repoLink: {
-    color: colors.accentBlue,
-    fontSize: 12,
-    marginTop: 4,
-    textDecorationLine: 'underline',
-  },
-  sourceLink: {
-    color: colors.accentBlue,
-    fontSize: 13,
     lineHeight: 20,
-    marginTop: 6,
-    textDecorationLine: 'underline',
   },
-  transcriptHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  claimBold: {
+    fontWeight: 'bold',
   },
-  toggleText: {
-    color: colors.accentCyan,
+  claimReason: {
+    color: colors.textSecondary,
     fontSize: 13,
-  },
-  transcriptText: {
-    color: colors.textMuted,
-    fontSize: 12,
-    fontFamily: 'monospace',
-    marginTop: 8,
+    lineHeight: 18,
+    marginTop: 4,
+    marginLeft: 24,
   },
 });

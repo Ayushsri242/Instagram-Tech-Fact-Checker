@@ -39,8 +39,12 @@ export default function App() {
         
         console.log('Doomscroll Mode: Finished ->', result.verdict);
         
-        // 3. Step 4 - Push Notification with verdict
-        TechFactChecker.showNotification("Fact Check Complete", `VERDICT: ${result.verdict}`);
+        // 3. Step 4 - Push Notification with verdict and deep link
+        TechFactChecker.showNotificationWithLink(
+          "Fact Check Complete",
+          `VERDICT: ${result.verdict}`,
+          `techfactchecker://result/${result.reelId}`
+        );
       } catch (e) {
         console.log('Doomscroll Mode: Failed ->', e.message);
         TechFactChecker.showNotification("Fact Check Failed", "Could not process reel.");
@@ -61,8 +65,19 @@ export default function App() {
     return () => sub.remove();
   }, []);
 
+  const linking = {
+    prefixes: ['techfactchecker://', 'com.techfactchecker.mobile://'],
+    config: {
+      screens: {
+        Home: 'home',
+        Result: 'result/:reelId',
+        History: 'history',
+      },
+    },
+  };
+
   return (
-    <NavigationContainer>
+    <NavigationContainer linking={linking}>
       <StatusBar style="light" backgroundColor={colors.background} />
       <Stack.Navigator
         screenOptions={{
