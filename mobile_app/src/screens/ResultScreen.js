@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,26 +10,34 @@ import {
   Share,
 } from 'react-native';
 import { colors } from '../theme/colors';
+import { getReelById } from '../services/storage';
 
 export default function ResultScreen({ route, navigation }) {
-  const [reel, setReel] = useState(route.params.reel || null);
-  const [showTranscript, setShowTranscript] = useState(false);
+  const [reel, setReel] = useState(route?.params?.reel || null);
 
   useEffect(() => {
-    if (!reel && route.params.reelId) {
-      import('../services/storage').then(({ getReelById }) => {
-        getReelById(route.params.reelId).then((data) => {
-          if (data) setReel(data);
-        });
-      });
-    }
-  }, [route.params.reelId, reel]);
+    let isMounted = true;
+    const fetchReel = async () => {
+      if (!reel && route?.params?.reelId) {
+        try {
+          const data = await getReelById(route.params.reelId);
+          if (data && isMounted) {
+            setReel(data);
+          }
+        } catch (err) {
+          console.error("Error fetching reel:", err);
+        }
+      }
+    };
+    fetchReel();
+    return () => { isMounted = false; };
+  }, [route?.params?.reelId, reel]);
 
   if (!reel) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.scrollContent}>
-          <Text style={styles.techTitle}>Loading...</Text>
+          <Text style={styles.techTitle}>Loading Fact Check...</Text>
         </View>
       </SafeAreaView>
     );
@@ -76,7 +84,7 @@ export default function ResultScreen({ route, navigation }) {
                 VERDICT: {reel.verdict || 'UNKNOWN'}
               </Text>
             </View>
-            {reel.confidenceScore && (
+            {!!reel.confidenceScore && (
               <View style={[styles.badge, { borderColor: colors.accentBlue, backgroundColor: colors.accentBlue + '20', marginLeft: 10 }]}>
                 <Text style={[styles.badgeText, { color: colors.accentBlue }]}>
                   🎯 {reel.confidenceScore}% Sure
@@ -111,7 +119,7 @@ export default function ResultScreen({ route, navigation }) {
         </View>
 
         {/* Claims Breakdown */}
-        {reel.claims && reel.claims.length > 0 && (
+        {Array.isArray(reel.claims) && reel.claims.length > 0 ? (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>🔍 Claims Breakdown</Text>
             {reel.claims.map((c, idx) => (
@@ -123,7 +131,7 @@ export default function ResultScreen({ route, navigation }) {
               </View>
             ))}
           </View>
-        )}
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
