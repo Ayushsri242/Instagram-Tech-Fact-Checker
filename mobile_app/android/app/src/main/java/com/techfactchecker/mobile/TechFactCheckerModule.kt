@@ -30,6 +30,11 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
 
         /** Frames sampled per video, matching the web pipeline's 10. */
         private const val FRAME_SAMPLES = 10
+
+        /** One slot for the progress line, so it is replaced and can be cleared. */
+        private const val PROGRESS_NOTIFICATION_ID = 1001
+        /** Verdicts get their own ids, derived from the reel, so several can coexist. */
+        private const val VERDICT_NOTIFICATION_ID_BASE = 2000
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -151,8 +156,16 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 .setAutoCancel(true)
                 .setContentIntent(pendingIntent)
                 .build()
-                
-            manager?.notify(System.currentTimeMillis().toInt(), notification)
+
+            // A fixed id, so "Processing Reel..." is REPLACED on the next reel
+            // instead of stacking, and so the verdict can clear it.
+            //
+            // Both notification methods used System.currentTimeMillis().toInt()
+            // as the id, which is unique every call. setAutoCancel only clears a
+            // notification when it is tapped, and nobody taps a progress line -
+            // so every processed reel left its "Processing" notification in the
+            // panel for ever, beside the verdict that had already arrived.
+            manager?.notify(PROGRESS_NOTIFICATION_ID, notification)
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("NOTIF_ERROR", e.message)
@@ -187,8 +200,12 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 .setAutoCancel(true)
                 .setContentIntent(pendingIntent)
                 .build()
-                
-            manager?.notify(System.currentTimeMillis().toInt(), notification)
+
+            // The verdict replaces the progress line rather than sitting next to
+            // it, then keeps its own id per reel so two finished verdicts can
+            // both stay in the panel.
+            manager?.cancel(PROGRESS_NOTIFICATION_ID)
+            manager?.notify(VERDICT_NOTIFICATION_ID_BASE + (deepLink.hashCode() and 0xFFFF), notification)
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("NOTIF_ERROR", e.message)
