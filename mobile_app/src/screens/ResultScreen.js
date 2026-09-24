@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { colors } from '../theme/colors';
 import { getReelById } from '../services/storage';
+import ReportCard from '../components/ReportCard';
 
 export default function ResultScreen({ route, navigation }) {
   const [reel, setReel] = useState(route?.params?.reel || null);
@@ -112,26 +113,36 @@ export default function ResultScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* Summary Card */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>📊 Analysis Summary</Text>
-          <Text style={styles.summaryText}>{reel.summaryMarkdown || reel.factualReality}</Text>
-        </View>
-
-        {/* Claims Breakdown */}
-        {Array.isArray(reel.claims) && reel.claims.length > 0 ? (
+        {/* The structured report.
+            This screen used to draw its own summary and a claims list, and the
+            claims list read c.claim / c.isTrue / c.reasoning off `reel.claims`
+            - which is stage 1's `claimed_features`, an array of plain STRINGS.
+            Every row therefore rendered a red flag and no text, and the rest of
+            the report - tools with repos, install commands, verified badges,
+            gotchas and sources - was never on screen at all, because only
+            ReportCard draws `reel.report` and this screen never imported it. */}
+        {reel.report ? (
+          <ReportCard report={reel.report} techName={reel.techName || reel.title} />
+        ) : (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>🔍 Claims Breakdown</Text>
-            {reel.claims.map((c, idx) => (
-              <View key={idx} style={styles.claimItem}>
-                <Text style={styles.claimText}>
-                  {c.isTrue ? '🟩' : '🚩'} <Text style={styles.claimBold}>{c.claim}</Text>
-                </Text>
-                <Text style={styles.claimReason}>{c.reasoning}</Text>
+            <Text style={styles.sectionTitle}>Analysis Summary</Text>
+            <Text style={styles.summaryText}>
+              {reel.summaryMarkdown || reel.factualReality || 'No report was saved for this reel.'}
+            </Text>
+            {/* History rows saved before the structured report existed keep
+                their plain-string claims, so render them as plain strings. */}
+            {Array.isArray(reel.claims) && reel.claims.length > 0 && (
+              <View style={{ marginTop: 10 }}>
+                {reel.claims.map((c, idx) => (
+                  <Text key={idx} style={styles.summaryText}>
+                    - {typeof c === 'string' ? c : (c && c.claim) || ''}
+                  </Text>
+                ))}
               </View>
-            ))}
+            )}
           </View>
-        ) : null}
+        )}
+
       </ScrollView>
     </SafeAreaView>
   );
