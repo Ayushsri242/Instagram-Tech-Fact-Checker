@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Linking } from 'react-native';
 import { colors } from '../theme/colors';
 
@@ -43,11 +43,9 @@ const openUrl = (url) => Linking.openURL(url).catch(() => {});
 
 export default function ReportCard({ report, techName }) {
   if (!report) return null;
+  const [showSources, setShowSources] = useState(false);
   const verdict = VERDICT_STYLE[report.verdict] || VERDICT_STYLE.UNKNOWN;
-  // report.references is still populated (and still built only from pages we
-  // actually fetched) - it is just not rendered. The card was too long, and the
-  // per-tool repo links already carry the useful ones.
-  const { claims = [], tools = [], gotchas = [] } = report;
+  const { claims = [], tools = [], gotchas = [], references = [], confidence = null } = report;
 
   return (
     <View style={styles.card}>
@@ -73,6 +71,17 @@ export default function ReportCard({ report, techName }) {
 
       {!!report.factualReality && (
         <Text style={styles.reality}>{report.factualReality}</Text>
+      )}
+
+      {/* Not the model's opinion of itself: this is computed from whether the
+          subject was confirmed, how much of the post was readable, how many
+          tools the evidence verified, and how many sources carried real page
+          text. */}
+      {!!confidence && (
+        <Text style={styles.confidence}>
+          {confidence.score}% confidence
+          {confidence.why && confidence.why.length > 0 ? ' - ' + confidence.why.join(', ') : ''}
+        </Text>
       )}
 
       {claims.length > 0 && (
@@ -114,6 +123,26 @@ export default function ReportCard({ report, techName }) {
         <Section title="GOTCHAS">
           {gotchas.map((g, i) => <Bullet key={`g${i}`}>{g}</Bullet>)}
         </Section>
+      )}
+
+      {/* Sources were hidden to keep the card short, which also removed the
+          reader's only way to check it. References are built exclusively from
+          pages the pipeline actually fetched, so this list is the evidence the
+          verdict rests on - collapsed by default, one tap to audit. */}
+      {references.length > 0 && (
+        <View style={styles.section}>
+          <TouchableOpacity onPress={() => setShowSources(!showSources)}>
+            <Text style={styles.sourcesToggle}>
+              {showSources ? 'HIDE SOURCES' : 'SHOW SOURCES (' + references.length + ')'}
+            </Text>
+          </TouchableOpacity>
+          {showSources && references.map((r, i) => (
+            <TouchableOpacity key={`r${i}`} onPress={() => openUrl(r.url)}>
+              <Text style={styles.sourceTitle} numberOfLines={1}>{i + 1}. {r.title || r.url}</Text>
+              <Text style={styles.sourceUrl} numberOfLines={1}>{r.url}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       )}
     </View>
   );
@@ -176,4 +205,14 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   caveat: { color: colors.warning || '#eab308', fontSize: 12, lineHeight: 18, marginTop: 5 },
+  confidence: { color: colors.textMuted, fontSize: 11.5, lineHeight: 16, marginTop: 6 },
+  sourcesToggle: {
+    color: colors.accentCyan,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.1,
+    marginBottom: 5,
+  },
+  sourceTitle: { color: colors.textPrimary, fontSize: 12.5, marginTop: 6 },
+  sourceUrl: { color: colors.textMuted, fontSize: 11 },
 });

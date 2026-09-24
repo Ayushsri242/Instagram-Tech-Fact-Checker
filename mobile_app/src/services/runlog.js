@@ -34,6 +34,7 @@ const COLUMNS = [
   // Logcat rolls within minutes, screenshots crop the report, and pasting Metro
   // scrollback per run turns a five-post batch back into single-reel tinkering.
   'coverage',         // "2/8 slides" when the post declares more than were read
+  'confidence',       // derived score plus the reasons it was reduced
   'subjectName',      // what the picker chose, not what the model said
   'subjectWhy',       // which path chose it: verified repo, model name, or abstain
   'verifiersFired',   // pypi/npm/hf/hn/pricing/technique/rename keys that ran

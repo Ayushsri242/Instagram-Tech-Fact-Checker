@@ -728,6 +728,34 @@ const pickSubject = (modelName, evidence, ocrText) => {
   return { name: null, why: `rejected "${modelName}" as chrome or headline` };
 };
 
+// How much the pipeline should be trusted on THIS run, computed from what
+// actually happened rather than asked of the model.
+//
+// A model rating its own answer is a self-report, and every model-judgement
+// rule added to this project has needed correcting. These four facts are
+// already measured every run, and each one has a recorded case behind it: a
+// post whose subject could not be confirmed published a creator's Instagram
+// handle as the product; a 7-slide carousel read 2 slides and then denied a
+// real repo existed; evidence rows that scraped to nothing produced a report
+// reasoning from search-result marketing.
+export const deriveConfidence = ({ subjectNamed, coverage, toolsReal, rowsWithText, hasText }) => {
+  let score = 95;
+  const why = [];
+  if (!subjectNamed) { score -= 25; why.push('subject not confirmed'); }
+  if (coverage) {
+    score -= 25;
+    why.push('read ' + coverage.seen + ' of ' + coverage.declared + ' slides');
+  }
+  if (toolsReal && toolsReal.total > 0 && toolsReal.verified < toolsReal.total) {
+    const unverified = toolsReal.total - toolsReal.verified;
+    score -= Math.min(20, unverified * 10);
+    why.push(unverified + ' of ' + toolsReal.total + ' tools unverified');
+  }
+  if (rowsWithText < 6) { score -= 10; why.push('only ' + rowsWithText + ' sources carried page text'); }
+  if (!hasText) { score -= 15; why.push('little readable text in the post'); }
+  return { score: Math.max(10, Math.min(95, score)), why };
+};
+
 const normalizeReport = (report, evidence) => {
   const VERDICTS = ['TRUE', 'PARTIALLY_TRUE', 'HYPE', 'MISLEADING', 'FAKE'];
   const verdict = VERDICTS.includes(report.verdict) ? report.verdict : 'UNKNOWN';
@@ -870,6 +898,14 @@ export const analyzeReelApi = async (url) => {
   log('STAGE 3 RAW REPORT', report);
   const verdictRaw = report.verdict;
   const normalized = normalizeReport(report, evidence);
+  normalized.confidence = deriveConfidence({
+    subjectNamed: Boolean(subject.name),
+    coverage,
+    toolsReal: normalized.toolsReal,
+    rowsWithText: evidence.slice(0, MAX_EVIDENCE_ROWS).filter((e) => (e.pagePreview || '').length > 0).length,
+    hasText: (ocrText.length + transcript.length) > 200,
+  });
+  log('CONFIDENCE', normalized.confidence);
   log('STAGE 3 NORMALIZED (what the card renders)', normalized);
 
   const tools = normalized.tools || [];
@@ -900,6 +936,9 @@ export const analyzeReelApi = async (url) => {
     // - invented repos, a fork cited over a 389k-star original, a fact-check of
     // a window title - needed the report text, which no column carried.
     coverage: coverage ? coverage.seen + '/' + coverage.declared + ' slides' : '',
+    confidence: normalized.confidence
+      ? normalized.confidence.score + ' (' + (normalized.confidence.why.join('; ') || 'no penalties') + ')'
+      : '',
     subjectName: subject.name || '',
     subjectWhy: subject.why || '',
     verifiersFired: (verified.fired || []).join(' ; '),
@@ -946,6 +985,8 @@ export const analyzeReelApi = async (url) => {
     // Structured report for the UI. summaryMarkdown is kept only so older saved
     // reels and the chat context still render.
     report: normalized,
+    // ResultScreen's badge reads this. Derived from the run, not self-rated.
+    confidenceScore: normalized.confidence ? normalized.confidence.score : null,
     summaryMarkdown: report.summary_markdown || '',
     tools: normalizeTools(claimsData.tools),
     claims: claimsData.claimed_features || [],
