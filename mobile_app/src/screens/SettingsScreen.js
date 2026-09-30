@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, NativeModules, Platform, Switch, ScrollView } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, NativeModules, Platform, Switch, ScrollView, Share, Alert } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import { colors } from '../theme/colors';
 import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey, saveApiProvider, saveApiModel, getApiProvider, getApiModel } from '../services/secrets';
 import { getOfflineMode, setOfflineMode } from '../services/storage';
 import { detectProvider } from '../services/api';
+import { readRunLog, clearRunLog, RUN_LOG_PATH } from '../services/runlog';
 
 export default function SettingsScreen() {
   const [modelExists, setModelExists] = useState(false);
@@ -16,6 +17,7 @@ export default function SettingsScreen() {
   const [manualModel, setManualModel] = useState('');
   const [hasGroqApiKey, setHasGroqApiKey] = useState(false);
   const [offlineMode, setOfflineModeState] = useState(false);
+  const [runLogRows, setRunLogRows] = useState(0);
 
   // Define exactly where the native Kotlin engine expects it.
   // Note: FileSystem.documentDirectory ends with a slash.
@@ -46,7 +48,48 @@ export default function SettingsScreen() {
     checkModel();
     checkGroqApiKey();
     getOfflineMode().then(setOfflineModeState);
+    countRunLog();
   }, []);
+
+  // Rows, not bytes: the header line is always there, so an empty log reads 0.
+  const countRunLog = async () => {
+    const csv = await readRunLog();
+    const lines = String(csv || '').trim().split('\n').filter(Boolean);
+    setRunLogRows(Math.max(0, lines.length - 1));
+  };
+
+  const shareRunLog = async () => {
+    const csv = await readRunLog();
+    if (!csv) {
+      Alert.alert('Run log', 'No runs recorded yet.');
+      return;
+    }
+    try {
+      // The file lives in app-private storage, so a viewer cannot open the
+      // path. Share the text itself, which any chat or mail app will take.
+      await Share.share({ message: csv, title: 'factcheck_runs.csv' });
+    } catch (e) {
+      Alert.alert('Could not share', e.message + '\n\nFile: ' + RUN_LOG_PATH);
+    }
+  };
+
+  const clearRunLogFile = () => {
+    Alert.alert(
+      'Clear run log?',
+      runLogRows + ' recorded run(s) will be deleted. Share the CSV first if the batch has not been scored.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: async () => {
+            await clearRunLog();
+            countRunLog();
+          },
+        },
+      ]
+    );
+  };
 
   const checkGroqApiKey = async () => {
     const savedKey = await getGroqApiKey();
@@ -339,6 +382,35 @@ export default function SettingsScreen() {
             )}
           </View>
         )}
+      </View>
+
+      {/* The run log is one CSV row per analysis and it is how a batch of reels
+          is scored. It was only reachable over adb, which meant a phone and a
+          cable to read numbers the phone had already written. runlog.js has
+          exported readRunLog/clearRunLog since it was created and nothing ever
+          called them. */}
+      <View style={styles.card}>
+        <Text style={styles.title}>Run Log</Text>
+        <Text style={styles.desc}>
+          One CSV row per analysis: verdict, subject, evidence, timings and the
+          full report. Share it to score a batch, clear it before starting a new
+          one.
+        </Text>
+        <View style={styles.statusBox}>
+          <Text style={styles.statusText}>
+            Rows recorded: <Text style={{ color: colors.success }}>{runLogRows}</Text>
+          </Text>
+        </View>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity style={styles.downloadBtn} onPress={shareRunLog}>
+            <Text style={styles.btnText}>Share CSV</Text>
+          </TouchableOpacity>
+          {runLogRows > 0 && (
+            <TouchableOpacity style={styles.deleteBtn} onPress={clearRunLogFile}>
+              <Text style={styles.btnText}>Clear</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
       </ScrollView>
     </SafeAreaView>

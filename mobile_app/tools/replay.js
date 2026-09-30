@@ -102,7 +102,20 @@ for (const file of process.argv.slice(2)) {
 
     // NAMING. Re-run the picker on the recorded inputs, so a change to
     // pickSubject is measurable here without touching a phone.
-    const picked = pickSubject(json(run.claimsJson, {}).tech_name, evidence, run.ocrText);
+    // Runs recorded before the caption and author columns existed can still be
+    // replayed: System 1's capture of the same post holds both, and the picker
+    // now weights caption mentions above slide mentions.
+    let caption = run.caption || '';
+    let author = run.author || '';
+    if (!caption || !author) {
+      const manifest = path.join(__dirname, '..', '..', 'ground_truth', run.shortcode, 'manifest.json');
+      if (fs.existsSync(manifest)) {
+        const m = json(fs.readFileSync(manifest, 'utf8'), {});
+        caption = caption || m.caption || '';
+        author = author || m.author || '';
+      }
+    }
+    const picked = pickSubject(json(run.claimsJson, {}).tech_name, evidence, run.ocrText, { caption, author });
     // "prime-agent" the repo and "Prime Agent" the product are the same answer.
     const flat = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const naming = {
@@ -114,7 +127,14 @@ for (const file of process.argv.slice(2)) {
     // INVENT. Every repo and install the report prints must be traceable to a
     // row the model was actually given. Four sets have produced a fabricated
     // repo, package or spec in every single case.
-    const evidenceText = evidence.map((e) => e.url + ' ' + e.title).join(' ').toLowerCase();
+    // A repo the post itself prints is not an invention, even when the search
+    // rows missed it: the SIMURG carousel shows github.com/doofzoff/SIMURG in
+    // its caption and on slide 01, while the queries came back with unrelated
+    // repos. Counting that as fabricated punished the run for the searcher's
+    // failure, not the reporter's.
+    const evidenceText = (
+      evidence.map((e) => e.url + ' ' + e.title).join(' ') + ' ' + run.ocrText + ' ' + caption
+    ).toLowerCase();
     const invented = [];
     for (const tool of report.tools || []) {
       if (tool.repo && !evidenceText.includes(String(tool.repo).toLowerCase())) invented.push('repo ' + tool.repo);

@@ -53,6 +53,8 @@ const COLUMNS = [
   'reportJson',       // the rendered card: the only record of what it claimed
   'transcript',
   'ocrText',
+  'caption',          // the picker weights caption mentions above slide mentions
+  'author',           // so a replay can reject the creator's own handle
 ];
 
 const cell = (v) => {

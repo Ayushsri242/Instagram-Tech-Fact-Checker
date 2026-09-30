@@ -10,7 +10,7 @@ import {
   Share,
 } from 'react-native';
 import { colors } from '../theme/colors';
-import { getReelById } from '../services/storage';
+import { getReelById, getLatestResult, markLatestSeen } from '../services/storage';
 import ReportCard from '../components/ReportCard';
 
 export default function ResultScreen({ route, navigation }) {
@@ -33,6 +33,15 @@ export default function ResultScreen({ route, navigation }) {
     fetchReel();
     return () => { isMounted = false; };
   }, [route?.params?.reelId, reel]);
+
+  // Opening the report - from the notification, History or the Home banner -
+  // is reading it, so the "verdict ready" banner must not reappear on Home.
+  useEffect(() => {
+    if (!reel || !reel.reelId) return;
+    getLatestResult().then((latest) => {
+      if (latest && latest.reelId === reel.reelId) markLatestSeen();
+    });
+  }, [reel && reel.reelId]);
 
   if (!reel) {
     return (

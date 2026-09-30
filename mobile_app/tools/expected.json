@@ -38,5 +38,22 @@
   "DU3W5LwEyxe": {
     "subject": null,
     "verdict": "PARTIALLY_TRUE"
+  },
+  "Dd2r0QFTKB3": {
+    "subject": "Antseed",
+    "verdict": "MISLEADING"
+  },
+  "DdmNTuwzi-I": {
+    "subject": "Idlen",
+    "verdict": "PARTIALLY_TRUE"
+  },
+  "Dc6fkWbGS4-": {
+    "subject": "SIMURG",
+    "verdict": "PARTIALLY_TRUE",
+    "slides": 4
+  },
+  "DddE9FBJDBl": {
+    "subject": "KAT-Coder-Pro V2.5",
+    "verdict": "MISLEADING"
   }
 }
