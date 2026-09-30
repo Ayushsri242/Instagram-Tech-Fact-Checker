@@ -111,6 +111,46 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
 
 
 
+    /**
+     * Holds the process alive while JS analyses a reel, with an ongoing
+     * "analysing" notification. See AnalysisService for why this exists.
+     */
+    @ReactMethod
+    fun startAnalysisService(message: String, promise: Promise) {
+        try {
+            val intent = android.content.Intent(reactContext, com.techfactchecker.app.domain.AnalysisService::class.java)
+                .setAction(com.techfactchecker.app.domain.AnalysisService.ACTION_START)
+                .putExtra(com.techfactchecker.app.domain.AnalysisService.EXTRA_MESSAGE, message)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                reactContext.startForegroundService(intent)
+            } else {
+                reactContext.startService(intent)
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            // Never block an analysis because the keep-alive could not start -
+            // the fact check still runs, it is just more exposed to being killed.
+            Log.w(TAG, "startAnalysisService failed: " + e.message)
+            promise.resolve(false)
+        }
+    }
+
+    @ReactMethod
+    fun stopAnalysisService(promise: Promise) {
+        try {
+            // stopService, not startService(ACTION_STOP): starting a service
+            // from the background can throw on Android 8+, and this is called
+            // exactly when the app is most likely to be in the background.
+            // Destroying a foreground service also removes its notification.
+            val intent = android.content.Intent(reactContext, com.techfactchecker.app.domain.AnalysisService::class.java)
+            reactContext.stopService(intent)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            Log.w(TAG, "stopAnalysisService failed: " + e.message)
+            promise.resolve(false)
+        }
+    }
+
     @ReactMethod
     fun setBubbleColor(colorHex: String, promise: Promise) {
         try {

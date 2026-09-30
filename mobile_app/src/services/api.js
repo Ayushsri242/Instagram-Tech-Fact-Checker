@@ -113,6 +113,70 @@ const rateLimitWaitMs = (error) => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Groq states durations as "2m59.56s", "7.66s" or "1h2m3s".
+export const parseResetMs = (value) => {
+  const s = String(value || '').trim();
+  if (!s) return null;
+  let ms = 0, matched = false;
+  for (const m of s.matchAll(/([\d.]+)\s*(h|ms|m|s)/g)) {
+    matched = true;
+    const n = parseFloat(m[1]);
+    ms += m[2] === 'h' ? n * 3600000 : m[2] === 'm' ? n * 60000 : m[2] === 's' ? n * 1000 : n;
+  }
+  return matched ? Math.round(ms) : null;
+};
+
+// What the Home header shows. Groq's headers mean two different things, and the
+// old display only ever showed the one that does not matter:
+//
+//   *-requests  -> requests per DAY    (the old "N reqs left")
+//   *-tokens    -> tokens per MINUTE   (8,000 on the free tier - the wall this
+//                                       app actually hits)
+//
+// It was also only saved after a SUCCESSFUL call, so a 429 - the one moment the
+// number matters - never updated it, and it never expired, so yesterday's count
+// sat on the screen indefinitely. Every response is recorded now, failures
+// included, with the moment each window resets.
+// One line for the Home header. A window whose reset time has passed is shown
+// as full rather than at its last recorded value: nothing was spent since, and
+// the old display left a stale count on screen for as long as the app was idle.
+export const describeLimits = (limits, now = Date.now()) => {
+  if (!limits || !limits.timestamp) return null;
+  if (now - limits.timestamp > 36 * 3600000) return null; // older than a day and a half: meaningless
+  const n = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+  const short = (v) => (v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'k' : String(v));
+  const tokLimit = n(limits.limitTokens);
+  let tokLeft = n(limits.remainingTokens);
+  if (tokLimit !== null && limits.tokensResetAt && now >= limits.tokensResetAt) tokLeft = tokLimit;
+  const reqLimit = n(limits.limitRequests);
+  let reqLeft = n(limits.remainingRequests);
+  if (reqLimit !== null && limits.requestsResetAt && now >= limits.requestsResetAt) reqLeft = reqLimit;
+  const parts = [];
+  if (tokLeft !== null && tokLimit !== null) parts.push('min ' + short(tokLeft) + '/' + short(tokLimit) + ' tok');
+  if (reqLeft !== null) parts.push('day ' + reqLeft + (reqLimit !== null ? '/' + reqLimit : '') + ' req');
+  return parts.length ? 'API: ' + parts.join(' · ') : null;
+};
+
+const recordLimits = (headers) => {
+  const h = headers || {};
+  const get = (k) => h[k] !== undefined ? h[k] : (typeof h.get === 'function' ? h.get(k) : undefined);
+  const limitRequests = get('x-ratelimit-limit-requests');
+  const remainingRequests = get('x-ratelimit-remaining-requests') || get('x-ratelimit-remaining');
+  if (remainingRequests === undefined || remainingRequests === null) return;
+  const now = Date.now();
+  const requestsResetMs = parseResetMs(get('x-ratelimit-reset-requests') || get('x-ratelimit-reset'));
+  const tokensResetMs = parseResetMs(get('x-ratelimit-reset-tokens'));
+  saveApiLimits({
+    remainingRequests,
+    limitRequests: limitRequests || null,
+    remainingTokens: get('x-ratelimit-remaining-tokens') || null,
+    limitTokens: get('x-ratelimit-limit-tokens') || null,
+    requestsResetAt: requestsResetMs !== null ? now + requestsResetMs : null,
+    tokensResetAt: tokensResetMs !== null ? now + tokensResetMs : null,
+    timestamp: now,
+  });
+};
+
 const callGroqJson = async (apiKey, messages) => {
   let lastError;
   const provider = await getApiProvider();
@@ -127,16 +191,13 @@ const callGroqJson = async (apiKey, messages) => {
         { timeout: 90000, headers: { Authorization: 'Bearer ' + apiKey } }
       );
       
-      const headers = response.headers || {};
-      const remainingRequests = headers['x-ratelimit-remaining-requests'] || headers['x-ratelimit-remaining'];
-      const remainingTokens = headers['x-ratelimit-remaining-tokens'];
-      const resetTime = headers['x-ratelimit-reset-requests'] || headers['x-ratelimit-reset'];
-      if (remainingRequests) {
-        saveApiLimits({ remainingRequests, remainingTokens, resetTime, timestamp: Date.now() });
-      }
+      recordLimits(response.headers);
       
       return parseJsonLoose(response.data.choices[0].message.content);
     } catch (error) {
+      // A 429 carries the same headers, and it is the one response where the
+      // numbers matter most.
+      if (error.response) recordLimits(error.response.headers);
       if (error.response && error.response.data) {
         console.error("API JSON Error Data:", JSON.stringify(error.response.data));
         lastError = new Error(`${error.message} - ${JSON.stringify(error.response.data)}`);
@@ -170,16 +231,13 @@ const callGroqText = async (apiKey, messages) => {
         { timeout: 60000, headers: { Authorization: 'Bearer ' + apiKey } }
       );
       
-      const headers = response.headers || {};
-      const remainingRequests = headers['x-ratelimit-remaining-requests'] || headers['x-ratelimit-remaining'];
-      const remainingTokens = headers['x-ratelimit-remaining-tokens'];
-      const resetTime = headers['x-ratelimit-reset-requests'] || headers['x-ratelimit-reset'];
-      if (remainingRequests) {
-        saveApiLimits({ remainingRequests, remainingTokens, resetTime, timestamp: Date.now() });
-      }
+      recordLimits(response.headers);
       
       return response.data.choices[0].message.content;
     } catch (error) {
+      // A 429 carries the same headers, and it is the one response where the
+      // numbers matter most.
+      if (error.response) recordLimits(error.response.headers);
       if (error.response && error.response.data) {
         console.error("API Text Error Data:", JSON.stringify(error.response.data));
         lastError = new Error(`${error.message} - ${JSON.stringify(error.response.data)}`);
@@ -275,6 +333,21 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
     if (tool.name && (repo || tool.pip_command || isPrimary)) {
       const q = tool.name + ' github';
       if (!queries.includes(q)) queries.push(q);
+    }
+    // A product name OCR mangled is still worth searching, because a search
+    // engine corrects spelling and hands back the canonical name in its result
+    // titles. The KAT-Coder reel read as "AT-Coder-V2.5" - the K clipped off a
+    // press-release screenshot - so the real model was never searched, never
+    // entered the evidence, and the report ended up fact-checking the three
+    // libraries visible in a code screenshot instead.
+    //
+    // Narrow on purpose: only names the post actually shows, long enough not to
+    // be a word, and version-shaped. Querying bare invented names is what once
+    // pulled real pages about an unrelated "Hidden Markov Model framework".
+    const name = String(tool.name || '');
+    const productShaped = name.length >= 6 && /[-_.]|\d/.test(name) && !/\s/.test(name);
+    if (productShaped && String(ocrText || '').toLowerCase().includes(name.toLowerCase())) {
+      if (!queries.includes(name)) queries.push(name);
     }
   });
   data.search_queries = queries.slice(0, 10);
@@ -652,25 +725,125 @@ const looksLikeSubject = (name) => {
 const DISMISSAL_VERBS = "don'?t use|do not use|stop using|no more|forget|replace[sd]?|instead of|rip|goodbye to|killer|kills|is dead|obsolete";
 const escapeForRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const pickSubject = (modelName, evidence, ocrText) => {
+// Cheap Levenshtein, bounded: only ever called on short product names.
+const editDistance = (a, b) => {
+  const m = a.length, n = b.length;
+  if (Math.abs(m - n) > 3) return 99;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(
+        prev[j] + 1,
+        cur[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    prev = cur;
+  }
+  return prev[n];
+};
+
+// Repair names the OCR mangled, using what the search engine gave back.
+//
+// A name read off a screenshot loses characters - "KAT-Coder-V2.5" arrived as
+// "AT-Coder-V2.5", "GlucoFM" once as "GluFormer". Search engines correct
+// spelling for free, so once the mangled token has been searched, the canonical
+// spelling is sitting in a result title. Adopt it, and remember which mangled
+// token it came from so the picker can still score it against the OCR.
+export const repairNames = (names, evidence) => {
+  const repaired = {};
+  const titles = (evidence || []).map((e) => String(e.title || ''));
+  for (const raw of names) {
+    const name = String(raw || '').trim();
+    if (name.length < 6) continue;
+    for (const title of titles) {
+      // Split on "/" too: a result title is usually "GitHub - owner/repo: ...",
+      // so without it the repo name is welded to its owner and never matches.
+      for (const token of title.split(/[\s,:()[\]"'|/]+/)) {
+        if (token.length < 6 || token.toLowerCase() === name.toLowerCase()) continue;
+        const d = editDistance(name.toLowerCase(), token.toLowerCase());
+        // Characters must be MISSING or EXTRA, never swapped. OCR clips a
+        // letter off the edge of a screenshot; it does not turn one word into
+        // a different one. Without this, "GlucoFM" repaired to "glucose" - two
+        // substitutions, distance 2, and a completely different subject.
+        const lengthGap = Math.abs(name.length - token.length);
+        if (d <= 2 && d === lengthGap && d < name.length / 3) {
+          repaired[token] = name;
+          break;
+        }
+      }
+      if (Object.values(repaired).includes(name)) break;
+    }
+  }
+  return repaired;
+};
+
+// Paths under github.com that are not repositories.
+const GITHUB_RESERVED_PATHS = new Set([
+  'topics', 'orgs', 'collections', 'marketplace', 'sponsors', 'features',
+  'about', 'pricing', 'security', 'enterprise', 'apps', 'settings', 'search',
+  'explore', 'trending', 'login', 'join', 'site', 'readme', 'users', 'new',
+]);
+
+const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
+  let modelName = rawModelName;
   // OCR joins lines with " | ", so the slide reading "Smart Devs Don't / Use
   // Graphify" arrives as "Smart Devs Don't | Use Graphify" and no phrase match
   // survives. Flatten the separators before looking for phrases.
-  const ocr = String(ocrText || '').toLowerCase().replace(/[|\n]+/g, ' ').replace(/\s+/g, ' ');
-  const countOf = (n) => {
+  const flatten = (t) => String(t || '').toLowerCase().replace(/[|\n]+/g, ' ').replace(/\s+/g, ' ');
+  const ocr = flatten(ocrText);
+  const caption = flatten(post.caption);
+  // The creator's own handle is on every slide as a watermark. Once carousel
+  // pagination started returning all seven slides instead of two, the handle
+  // outscored the product: a post about BASE was titled "Charlie", because
+  // @charlieautomates is stamped on each slide and BASE is only written on
+  // three. More sight made the ranking worse, which means mention count alone
+  // was never the right signal.
+  const handle = String(post.author || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const isAuthorHandle = (name) => {
+    const n = String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!n || !handle || n.length < 3) return false;
+    return handle.includes(n) || n.includes(handle);
+  };
+  const countIn = (hay, n) => {
     if (n.length < 3) return 0;
     let count = 0, i = 0;
-    while ((i = ocr.indexOf(n, i)) !== -1) { count += 1; i += n.length; }
+    while ((i = hay.indexOf(n, i)) !== -1) { count += 1; i += n.length; }
     return count;
   };
   // A repo is "prime-agent"; the post writes "Prime Agent". Counting the slug
   // literally scored it zero on a post that showed the name in every frame, and
   // the subject fell through to a three-letter acronym instead.
-  const occurrences = (needle) => {
+  const countOf = (hay, needle) => {
     const n = String(needle || '').toLowerCase();
     const spaced = n.replace(/[-_.]+/g, ' ');
-    return Math.max(countOf(n), spaced === n ? 0 : countOf(spaced));
+    return Math.max(countIn(hay, n), spaced === n ? 0 : countIn(hay, spaced));
   };
+  const occurrences = (needle) => countOf(ocr, needle);
+  // The caption is the one place a creator writes the subject as a sentence
+  // rather than as design. A chart legend listing baselines put "GluFormer"
+  // on screen beside the model being announced, and mention count could not
+  // separate them - while the caption said "Google Introduced GlucoFM" in its
+  // first four words. Caption mentions are worth more than slide mentions.
+  const CAPTION_WEIGHT = 3;
+  // A repaired name scores on the mangled spelling the post actually shows:
+  // "KAT-Coder-V2.5" appears nowhere in the OCR, but "AT-Coder-V2.5" does, and
+  // they are the same product.
+  const aliases = post.aliases || {};
+  const baseScore = (needle) => occurrences(needle) + CAPTION_WEIGHT * countOf(caption, needle);
+  const score = (needle) => {
+    const source = aliases[needle];
+    return baseScore(needle) + (source ? baseScore(source) : 0);
+  };
+  // Repo slugs the post shows on screen, e.g. "github.com/safishamsi/graphify".
+  // OCR of a screenshot puts spaces where a URL has none: the graphify slide
+  // came back as "/github. com/safishamsi/graphify", so a strict host match
+  // found nothing on the one post that printed its repo.
+  const printedRepoNames = new Set();
+  for (const m of ocr.matchAll(/github\s*\.\s*com\s*\/\s*[\w.-]+\s*\/\s*([\w.-]+)/g)) {
+    printedRepoNames.add(m[1].toLowerCase());
+  }
   const isDismissed = (name) => {
     const n = escapeForRegex(name);
     // Either order: "don't use Graphify" and "Graphify killer" both bury it.
@@ -686,6 +859,10 @@ const pickSubject = (modelName, evidence, ocrText) => {
   for (const r of evidence || []) {
     const m = String(r.url || '').match(/github\.com\/([\w.-]+)\/([\w.-]+)\/?$/i);
     if (!m) continue;
+    // github.com/topics/users is a tag page, not a repository, and it parsed as
+    // owner "topics" / repo "users" - which then won on the word "users"
+    // appearing in a caption.
+    if (GITHUB_RESERVED_PATHS.has(m[1].toLowerCase())) continue;
     const repoName = m[2];
     if (!looksLikeSubject(repoName)) continue;
     // A three-letter repo name is an acronym for a concept, not the product a
@@ -693,10 +870,19 @@ const pickSubject = (modelName, evidence, ocrText) => {
     // against "prime-agent"'s 11 on a post whose every frame says Prime Agent,
     // because RLM is the technique the harness is built on.
     if (repoName.length < 4) continue;
-    const hits = occurrences(repoName);
+    // The creator's handle is not the product, however often it is stamped on
+    // the slides.
+    if (isAuthorHandle(repoName)) continue;
+    // A repo the post PRINTS as a URL outranks one it merely names. The
+    // graphify carousel shows github.com/safishamsi/graphify on slide 4 while
+    // its caption talks about Claude Code, the tool being improved - so
+    // weighting the caption alone picked the wrong subject. A slug on screen is
+    // the creator pointing at the thing.
+    const printed = printedRepoNames.has(repoName.toLowerCase());
+    const hits = score(repoName) + (printed ? 100 : 0);
     if (hits < 1) continue;
     if (candidates.some((c) => c.name.toLowerCase() === repoName.toLowerCase())) continue;
-    candidates.push({ name: repoName, slug: m[1] + '/' + m[2], hits, dismissed: isDismissed(repoName) });
+    candidates.push({ name: repoName, slug: m[1] + '/' + m[2], hits, printed, dismissed: isDismissed(repoName) });
   }
   // A tool the post promotes outranks one it dismisses, however often the
   // dismissed one is named; within a group, the more the post says it, the more
@@ -704,26 +890,48 @@ const pickSubject = (modelName, evidence, ocrText) => {
   candidates.sort((a, b) => (a.dismissed - b.dismissed) || (b.hits - a.hits));
   const best = candidates.find((c) => !c.dismissed);
   if (best) {
-    return { name: best.name, why: `verified repo ${best.slug} named ${best.hits}x in the post` };
+    // A verified repo is not automatically the subject. The GlucoFM post plots
+    // GluFormer once in a chart legend as a baseline; that repo exists, so it
+    // became the headline of a post whose caption and every frame say GlucoFM.
+    // When the model's name is said far more often than the repo is, the post
+    // is about the model's name and the repo is a footnote.
+    const modelScore = looksLikeSubject(modelName) && !isAuthorHandle(modelName) && !isDismissed(modelName)
+      ? score(modelName)
+      : 0;
+    if (!best.printed && modelScore > best.hits) {
+      return { name: modelName, why: `model name, scores ${modelScore} against verified repo ${best.slug} at ${best.hits}` };
+    }
+    return { name: best.name, why: `verified repo ${best.slug}, score ${best.hits}` + (best.printed ? ' (slug printed in the post)' : '') };
   }
   if (candidates.length) {
     // Everything the evidence verified is something this post is arguing
     // against. Naming any of them would fact-check the rival.
     const names = candidates.map((c) => c.name).join(', ');
-    if (looksLikeSubject(modelName) && occurrences(modelName) >= 1 && !isDismissed(modelName)) {
-      return { name: modelName, why: `model name, appears ${occurrences(modelName)}x; verified repos (${names}) are all dismissed by the post` };
+    if (looksLikeSubject(modelName) && !isAuthorHandle(modelName) && score(modelName) >= 1 && !isDismissed(modelName)) {
+      return { name: modelName, why: `model name, scores ${score(modelName)}; verified repos (${names}) are all dismissed by the post` };
     }
     return { name: null, why: `only dismissed tools were verified (${names})` };
   }
+
+  // If the search engine handed back a corrected spelling of the model's name,
+  // use that spelling from here on - the report should say KAT-Coder-V2.5, not
+  // the clipped AT-Coder-V2.5 the OCR produced.
+  const corrected = Object.keys(aliases).find(
+    (k) => String(aliases[k]).toLowerCase() === String(modelName || '').toLowerCase()
+  );
+  if (corrected) modelName = corrected;
 
   // 2. The model's name, but only if the post actually says it. A name with
   //    zero occurrences is the definition of not being the subject: that branch
   //    used to return the name anyway, and it published a creator's Instagram
   //    handle as the product under test.
-  if (looksLikeSubject(modelName)) {
-    const hits = occurrences(modelName);
-    if (hits >= 2) return { name: modelName, why: `model name, appears ${hits}x in OCR` };
-    return { name: null, why: `rejected "${modelName}": model named it but appears only ${hits}x (needs 2)` };
+  if (looksLikeSubject(modelName) && !isAuthorHandle(modelName)) {
+    const hits = score(modelName);
+    if (hits >= 2) return { name: modelName, why: `model name, scores ${hits} in caption and OCR` };
+    return { name: null, why: `rejected "${modelName}": model named it but it scores only ${hits} (needs 2)` };
+  }
+  if (isAuthorHandle(modelName)) {
+    return { name: null, why: `rejected "${modelName}": that is the creator's handle, not the product` };
   }
   return { name: null, why: `rejected "${modelName}" as chrome or headline` };
 };
@@ -885,7 +1093,14 @@ export const analyzeReelApi = async (url) => {
   lap('pagefill');
 
   // Decide the subject in code before the model writes anything about it.
-  const subject = pickSubject(claimsData.tech_name, evidence, ocrText);
+  const namesSeen = [claimsData.tech_name, ...(claimsData.tools || []).map((t) => t.name)].filter(Boolean);
+  const aliases = repairNames(namesSeen, evidence);
+  if (Object.keys(aliases).length) log('NAME REPAIRS', aliases);
+  const subject = pickSubject(claimsData.tech_name, evidence, ocrText, {
+    author: media.author,
+    caption: media.caption,
+    aliases,
+  });
   log('SUBJECT', subject);
   if (subject.name !== undefined && subject.name !== claimsData.tech_name) {
     claimsData = { ...claimsData, tech_name: subject.name };
@@ -906,6 +1121,24 @@ export const analyzeReelApi = async (url) => {
     hasText: (ocrText.length + transcript.length) > 200,
   });
   log('CONFIDENCE', normalized.confidence);
+
+  // Last resort for the title, and it is still a lookup rather than a guess.
+  //
+  // The picker runs BEFORE synthesis, so it can only see repo names that the
+  // OCR shows. On a reel whose on-screen text is a headline - "Claude +
+  // NotebookLM Persistent Memory" - it correctly abstains, and the card was
+  // then titled "Unidentified" even though the finished report names
+  // alfredang/notebooklm-mcp and the evidence verified it. Take that name, but
+  // only when exactly one tool's repo is traceable to a page that was actually
+  // fetched, so an invented repo can never become the headline.
+  const evidenceUrls = evidence.map((e) => String(e.url || '').toLowerCase()).join(' ');
+  const traceable = (normalized.tools || []).filter(
+    (t) => t.repo && evidenceUrls.includes(String(t.repo).toLowerCase())
+  );
+  const fallbackName = traceable.length === 1 ? traceable[0].name : null;
+  if (!subject.name && fallbackName) {
+    log('SUBJECT FALLBACK', { name: fallbackName, why: 'only tool whose repo was in the fetched evidence' });
+  }
   log('STAGE 3 NORMALIZED (what the card renders)', normalized);
 
   const tools = normalized.tools || [];
@@ -969,6 +1202,8 @@ export const analyzeReelApi = async (url) => {
     reportJson: JSON.stringify(normalized),
     transcript,
     ocrText,
+    caption: media.caption || '',
+    author: media.author || '',
   });
   delete normalized.__rules;
 
@@ -976,7 +1211,7 @@ export const analyzeReelApi = async (url) => {
     ...media,
     // An honest blank beats a confident wrong: two of five recorded runs named
     // a window title and a caption headline.
-    techName: subject.name !== undefined && subject.name !== null ? subject.name : (subject.name === null ? 'Unidentified' : (report.tech_name || media.techName || 'Unidentified')),
+    techName: subject.name || fallbackName || 'Unidentified',
     subjectWhy: subject.why,
     verdict: report.verdict || 'UNKNOWN',
     pricingModel: report.pricing_model || 'Unknown',
@@ -1011,18 +1246,35 @@ export const chatWithAiApi = async (reel, userMessage, conversation = [], onSear
   const offline = await getOfflineMode();
   const apiKey = offline ? null : await getGroqApiKey();
   if (!offline && !apiKey) throw new Error('Add your Groq API key in Setup first.');
-  const recentChat = conversation.slice(-8).map((message) =>
-    (message.sender === 'user' ? 'User: ' : 'Assistant: ') + message.text
+  // Every follow-up used to re-send the whole research file: the full evidence
+  // array with each row's scraped page text, the entire transcript, and eight
+  // untruncated chat turns. A five-word question therefore cost 6,648 tokens,
+  // and with 4,694 already spent by the analysis that had just run it broke
+  // Groq's 8,000-per-minute ceiling and stalled the chat for 25 seconds.
+  //
+  // The model does not need twenty-seven scraped pages to answer "what is
+  // MCP?" - it needs the verdict, a short transcript, and a list of where the
+  // evidence came from. If it genuinely needs more it can already ask for a
+  // search through the SEARCH: contract below.
+  const recentChat = conversation.slice(-6).map((message) =>
+    (message.sender === 'user' ? 'User: ' : 'Assistant: ') + String(message.text || '').slice(0, 400)
   ).join('\n');
+  const sourceList = (reel.sources || []).slice(0, 6).map(
+    (e) => '- ' + String(e.title || '').slice(0, 80) + ' :: ' + (e.url || '')
+  ).join('\n');
+  const verdictLine = [
+    reel.verdict ? 'Verdict: ' + reel.verdict : '',
+    (reel.report && reel.report.factualReality) || reel.factualReality || '',
+  ].filter(Boolean).join(' - ');
   const context = [
     'You are an expert AI and mobile engineer answering questions about one verified Instagram post.',
     'Tech: ' + (reel.techName || 'Unknown Technology'),
-    'Transcript: ' + (reel.rawTranscript || ''),
-    'Verified fact-check: ' + (reel.summaryMarkdown || reel.factualReality || ''),
-    'Evidence: ' + JSON.stringify(reel.sources || []),
+    'Transcript: ' + String(reel.rawTranscript || '').slice(0, 800),
+    'Verified fact-check: ' + verdictLine,
+    'Sources consulted (titles and links only):' + (sourceList ? '\n' + sourceList : ' none'),
     'CRITICAL RULES:',
     '1. Answer in 1-2 short sentences maximum. Be concise. Only provide long detailed answers if the user explicitly uses words like "explain", "detail", or "elaborate".',
-    '2. If the user asks a question about something you have 0 knowledge about and it is not in the Evidence, you MUST output EXACTLY the phrase: SEARCH: [your search query here] and nothing else. The system will perform the search and give you the answer to summarize.',
+    '2. If the user asks a question about something you have 0 knowledge about and it is not covered above, you MUST output EXACTLY the phrase: SEARCH: [your search query here] and nothing else. The system will perform the search and give you the answer to summarize. You are given source titles and links, not their contents, so use this whenever the answer would need the text of one of those pages.',
   ].join('\n\n');
   
   if (offline) {

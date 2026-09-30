@@ -6,6 +6,7 @@ import { DeviceEventEmitter, NativeModules } from 'react-native';
 const { TechFactChecker } = NativeModules;
 import { analyzeReelApi } from './src/services/api';
 import { saveReelResult } from './src/services/storage';
+import { beginAnalysis, finishAnalysis, failAnalysis } from './src/services/jobNotify';
 import HomeScreen from './src/screens/HomeScreen';
 import ResultScreen from './src/screens/ResultScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
@@ -29,25 +30,23 @@ export default function App() {
       console.log('Doomscroll Mode: Processing URL ->', url);
 
       try {
-        // 1. Reset bubble to Blue
+        // Bubble turns blue while processing.
         TechFactChecker.setBubbleColor("#00E5FF");
-        // 2. Show processing notification
-        TechFactChecker.showNotification("Doomscroll Mode", "Processing Reel...");
+        // Same keep-alive and notifications as the paste flow, so the two
+        // entry points cannot drift apart again.
+        beginAnalysis();
 
         const result = await analyzeReelApi(url);
         await saveReelResult(result);
-        
+
         console.log('Doomscroll Mode: Finished ->', result.verdict);
-        
-        // 3. Step 4 - Push Notification with verdict and deep link
-        TechFactChecker.showNotificationWithLink(
-          "Fact Check Complete",
-          `VERDICT: ${result.verdict}`,
-          `techfactchecker://result/${result.reelId}`
-        );
+
+        // Doomscroll runs while the user is inside another app by definition,
+        // so always notify - even if this app happens to be in front.
+        await finishAnalysis(result, { alwaysNotify: true });
       } catch (e) {
         console.log('Doomscroll Mode: Failed ->', e.message);
-        TechFactChecker.showNotification("Fact Check Failed", "Could not process reel.");
+        await failAnalysis(e && e.message);
       }
 
       // Enforce 1-minute (60000ms) cooldown before next item

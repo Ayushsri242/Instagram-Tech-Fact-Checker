@@ -85,6 +85,47 @@ export const setOfflineMode = async (enabled) => {
   }
 };
 
+// The last analysis that finished while the user may not have been looking.
+// A user who pastes a link rarely waits sixty seconds on a spinner - they leave,
+// and if Android kills the app in the meantime, reopening it lands on Home with
+// no sign that anything finished. Home reads this to show a "verdict ready"
+// banner until it is opened.
+const LATEST_RESULT_KEY = '@tech_fact_checker_latest_result';
+
+export const saveLatestResult = async (result) => {
+  try {
+    await AsyncStorage.setItem(LATEST_RESULT_KEY, JSON.stringify({
+      reelId: result.reelId,
+      techName: result.techName || 'Fact check',
+      verdict: result.verdict || 'UNKNOWN',
+      finishedAt: Date.now(),
+      seen: false,
+    }));
+  } catch (e) {
+    console.error('Failed to save latest result:', e);
+  }
+};
+
+export const getLatestResult = async () => {
+  try {
+    const json = await AsyncStorage.getItem(LATEST_RESULT_KEY);
+    return json ? JSON.parse(json) : null;
+  } catch (e) {
+    return null;
+  }
+};
+
+export const markLatestSeen = async () => {
+  try {
+    const latest = await getLatestResult();
+    if (latest && !latest.seen) {
+      await AsyncStorage.setItem(LATEST_RESULT_KEY, JSON.stringify({ ...latest, seen: true }));
+    }
+  } catch (e) {
+    // nothing to mark
+  }
+};
+
 const API_LIMITS_KEY = '@tech_fact_checker_api_limits';
 
 export const saveApiLimits = async (limits) => {

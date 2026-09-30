@@ -14,6 +14,7 @@ import { colors } from '../theme/colors';
 import ReportCard from '../components/ReportCard';
 import { chatWithAiApi, analyzeReelApi } from '../services/api';
 import { getChatHistory, saveChatMessage, saveReelResult } from '../services/storage';
+import { beginAnalysis, finishAnalysis, failAnalysis } from '../services/jobNotify';
 
 // Date.now() collides when two messages are created in the same millisecond,
 // which is how a report and its follow-up ended up sharing a key.
@@ -111,9 +112,14 @@ export default function ChatScreen({ route, navigation }) {
       setMessages([welcomeMsg, initialUserMsg]);
       setLoading(true);
 
+      // Keeps the process alive and shows "analysing" while the user is away.
+      beginAnalysis();
       try {
         const result = await analyzeReelApi(initialUrl);
         await saveReelResult(result);
+        // Notify before the aliveRef check: if the user left this screen the
+        // result still has to reach them.
+        await finishAnalysis(result);
         if (!aliveRef.current) return;
         setCurrentReel(result);
 
@@ -135,6 +141,8 @@ export default function ChatScreen({ route, navigation }) {
         await saveChatMessage(result.reelId, aiMsg);
         console.log("[DEBUG_CHAT] AI report:", result.verdict, "| tools:", (result.report && result.report.tools ? result.report.tools.length : 0));
       } catch (err) {
+        const failureText = err && err.message ? err.message : String(err);
+        await failAnalysis(failureText);
         if (!aliveRef.current) return;
         // Read err OUTSIDE the updater. Hermes fails to capture a catch
         // parameter inside a closure and throws
