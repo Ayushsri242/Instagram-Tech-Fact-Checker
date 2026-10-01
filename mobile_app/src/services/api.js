@@ -589,6 +589,21 @@ const cleanList = (v, limit = 10) => {
 // and the model still emitted "pip install nanobot". Asking more firmly does not
 // work - three sessions of prompt changes proved that. So every check that can
 // be decided by looking at the evidence is decided here instead.
+// Every GitHub repository whose page was actually fetched, as owner/name.
+// Host exactly github.com, so docs.github.com/en/packages is not a repo.
+const fetchedRepoSlugs = (rows) => {
+  const out = [];
+  for (const r of rows || []) {
+    // Any page under the repo counts: /releases proves the repo as well as / does.
+    const m = String(r.url || '').match(/(?:^|\/\/)(?:www\.)?github\.com\/([\w.-]+)\/([\w-]+(?:\.[\w-]+)*?)(?:\.git)?(?:[/#?]|$)/i);
+    if (!m || GITHUB_RESERVED_PATHS.has(m[1].toLowerCase())) continue;
+    const slug = m[1] + '/' + m[2];
+    if (!out.some((s) => s.toLowerCase() === slug.toLowerCase())) out.push(slug);
+  }
+  return out;
+};
+const repoKey = (slug) => String(slug || '').toLowerCase().replace(/[-_.]/g, '');
+
 const applyEvidenceRules = (report, evidence, techName) => {
   const notes = [];
   const rows = evidence || [];
@@ -597,12 +612,23 @@ const applyEvidenceRules = (report, evidence, techName) => {
 
   // Evidence gate for repos: a repo URL may appear in the report only if it was
   // in the gathered evidence.
+  const fetched = fetchedRepoSlugs(rows);
   const validTools = [];
   for (const tool of report.tools || []) {
     if (tool.repo && tool.repo !== 'null') {
       const lowerRepo = tool.repo.toLowerCase();
-      const inEvidence = rows.some((r) => (r.url || '').toLowerCase().includes('github.com/' + lowerRepo));
-      if (!inEvidence) {
+      // Exact slug match against fetched repos. A substring test let
+      // docs.github.com/en/packages vouch for a "repo" called en/packages.
+      const inEvidence = fetched.some((s) => s.toLowerCase() === lowerRepo);
+      // Repair a spelling slip before dropping. The model wrote nashsu/llmwiki,
+      // the fetched repo is nashsu/llm_wiki, and the gate removed the post's
+      // own subject while keeping two side tools. Same owner, same name once
+      // - _ . are ignored, is the same repo; take the spelling that was fetched.
+      const repaired = inEvidence ? null : fetched.find((s) => repoKey(s) === repoKey(tool.repo));
+      if (repaired) {
+        notes.push(`Repaired repo for "${tool.name}": ${tool.repo} -> ${repaired} (the fetched spelling).`);
+        tool.repo = repaired;
+      } else if (!inEvidence) {
         notes.push(`Dropped tool "${tool.name}": repo ${tool.repo} was never fetched in evidence.`);
         continue;
       }
@@ -849,6 +875,15 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
   for (const m of ocr.matchAll(/github\s*\.\s*com\s*\/\s*[\w.-]+\s*\/\s*([\w.-]+)/g)) {
     printedRepoNames.add(m[1].toLowerCase());
   }
+  // "It's called X", "introducing X", "meet X", "my product X".
+  const NAMING_PHRASES = "(?:called|named|introducing|meet|my product)";
+  const namedInCaption = (name) => {
+    const n = String(name || '').toLowerCase();
+    if (n.length < 3) return false;
+    return [n, n.replace(/[-_.]+/g, ' ')].some((v) =>
+      new RegExp(NAMING_PHRASES + '\\s+(?:the\\s+)?' + escapeForRegex(v) + '(?![\\w-])', 'i').test(caption)
+    );
+  };
   const isDismissed = (name) => {
     const n = escapeForRegex(name);
     // Either order: "don't use Graphify" and "Graphify killer" both bury it.
@@ -862,7 +897,9 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
   //    same post showed 23 times.
   const candidates = [];
   for (const r of evidence || []) {
-    const m = String(r.url || '').match(/github\.com\/([\w.-]+)\/([\w.-]+)\/?$/i);
+    // Host exactly github.com: docs.github.com/en/packages parsed as owner "en"
+    // / repo "packages" and titled a post about Brud Code "packages".
+    const m = String(r.url || '').match(/(?:^|\/\/)(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/?$/i);
     if (!m) continue;
     // github.com/topics/users is a tag page, not a repository, and it parsed as
     // owner "topics" / repo "users" - which then won on the word "users"
@@ -903,6 +940,14 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
     const modelScore = looksLikeSubject(modelName) && !isAuthorHandle(modelName) && !isDismissed(modelName)
       ? score(modelName)
       : 0;
+    // The caption NAMES the subject in so many words - "It's called LLM Wiki",
+    // "It's called MiMo-V2.6-Distill-Qwen-9B". That is the creator stating a
+    // fact, not a mention to be counted: by count, Requarks/wiki won on every
+    // "wiki" in "LLM Wiki", and sglang (the engine the model runs on) beat the
+    // model the caption had just named.
+    if (!best.printed && modelScore > 0 && namedInCaption(modelName) && !namedInCaption(best.name)) {
+      return { name: modelName, why: `named in the caption ("${modelName}"), over verified repo ${best.slug} at ${best.hits}` };
+    }
     if (!best.printed && modelScore > best.hits) {
       return { name: modelName, why: `model name, scores ${modelScore} against verified repo ${best.slug} at ${best.hits}` };
     }
@@ -1216,6 +1261,7 @@ export const analyzeReelApi = async (url) => {
     ocrText,
     caption: media.caption || '',
     author: media.author || '',
+    fetchedRepos: fetchedRepoSlugs(evidence).join(' '),
   });
   trace('pipeline done ' + shortRef(url) + ' verdict=' + normalized.verdict +
     ' subject=' + (subject.name || 'none') + ' total=' + (Date.now() - startedAt) + 'ms');
@@ -1229,7 +1275,10 @@ export const analyzeReelApi = async (url) => {
     // a window title and a caption headline.
     techName: subject.name || fallbackName || 'Unidentified',
     subjectWhy: subject.why,
-    verdict: report.verdict || 'UNKNOWN',
+    // The verdict AFTER the evidence rules. This used to return the model's raw
+    // verdict, so a run the rules downgraded TRUE -> PARTIALLY_TRUE still showed
+    // TRUE on the badge and in the notification, while the CSV said PARTIALLY_TRUE.
+    verdict: normalized.verdict,
     pricingModel: report.pricing_model || 'Unknown',
     githubUrl: report.github_url || null,
     factualReality: report.factual_reality || '',
