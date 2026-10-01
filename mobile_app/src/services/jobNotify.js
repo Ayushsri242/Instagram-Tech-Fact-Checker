@@ -1,5 +1,6 @@
 import { NativeModules, AppState } from 'react-native';
 import { saveLatestResult } from './storage';
+import { trace } from './trace';
 
 // Notifications for an analysis, shared by the paste flow and doomscroll mode.
 //
@@ -26,12 +27,21 @@ const call = (name, ...args) => {
 // noise, and a Home banner would announce something they already read.
 const userIsWatching = () => AppState.currentState === 'active';
 
-export const beginAnalysis = () => call('startAnalysisService', 'Analysing reel - you can leave the app');
+export const beginAnalysis = (ref = '') => {
+  trace('analysis begin ' + ref + ' appState=' + AppState.currentState);
+  return call('startAnalysisService', 'Analysing reel - you can leave the app');
+};
 
 export const finishAnalysis = async (result, { alwaysNotify = false } = {}) => {
   await call('stopAnalysisService');
-  if (!result || !result.reelId) return;
-  if (alwaysNotify || !userIsWatching()) {
+  if (!result || !result.reelId) {
+    trace('analysis finished with no reelId - nothing to notify');
+    return;
+  }
+  const watching = userIsWatching();
+  trace('analysis done reelId=' + result.reelId + ' verdict=' + result.verdict +
+    ' appState=' + AppState.currentState + ' notify=' + (alwaysNotify || !watching));
+  if (alwaysNotify || !watching) {
     await saveLatestResult(result);
     const verdict = String(result.verdict || 'UNKNOWN').replace('_', ' ');
     const subject = result.techName && result.techName !== 'Unidentified' ? ' - ' + result.techName : '';
@@ -45,6 +55,7 @@ export const finishAnalysis = async (result, { alwaysNotify = false } = {}) => {
 };
 
 export const failAnalysis = async (message) => {
+  trace('analysis failed: ' + String(message || '').slice(0, 120));
   await call('stopAnalysisService');
   if (!userIsWatching()) {
     await call('showNotification', 'Fact check failed', String(message || 'Could not process the reel.').slice(0, 120));

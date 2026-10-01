@@ -12,27 +12,37 @@ import {
 import { colors } from '../theme/colors';
 import { getReelById, getLatestResult, markLatestSeen } from '../services/storage';
 import ReportCard from '../components/ReportCard';
+import { trace } from '../services/trace';
 
 export default function ResultScreen({ route, navigation }) {
   const [reel, setReel] = useState(route?.params?.reel || null);
 
+  // The reel this screen is SUPPOSED to show, from whichever param carried it.
+  const wantedId = route?.params?.reel?.reelId || route?.params?.reelId || null;
+
+  // Follow the route, not the first value it had.
+  //
+  // This screen used to fetch only `if (!reel)`. When a verdict notification
+  // was tapped while ResultScreen was already open - from History, the Home
+  // banner or an earlier notification - React Navigation reused the screen with
+  // the new reelId, `reel` was still set from before, and the fetch never ran:
+  // the user tapped "Verdict ready" for one post and read the report for
+  // another. Re-sync whenever the wanted id differs from what is on screen.
   useEffect(() => {
+    if (!wantedId) return;
+    trace('result screen: wants ' + wantedId + ', showing ' + (reel ? reel.reelId : 'nothing'));
+    if (reel && reel.reelId === wantedId) return;
+    if (route?.params?.reel && route.params.reel.reelId === wantedId) {
+      setReel(route.params.reel);
+      return;
+    }
     let isMounted = true;
-    const fetchReel = async () => {
-      if (!reel && route?.params?.reelId) {
-        try {
-          const data = await getReelById(route.params.reelId);
-          if (data && isMounted) {
-            setReel(data);
-          }
-        } catch (err) {
-          console.error("Error fetching reel:", err);
-        }
-      }
-    };
-    fetchReel();
+    setReel(null); // show "Loading" rather than the previous post's report
+    getReelById(wantedId)
+      .then((data) => { if (data && isMounted) setReel(data); })
+      .catch((e) => console.error('Error fetching reel:', e && e.message));
     return () => { isMounted = false; };
-  }, [route?.params?.reelId, reel]);
+  }, [wantedId]);
 
   // Opening the report - from the notification, History or the Home banner -
   // is reading it, so the "verdict ready" banner must not reappear on Home.

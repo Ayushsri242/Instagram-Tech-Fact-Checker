@@ -35,6 +35,26 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
         private const val PROGRESS_NOTIFICATION_ID = 1001
         /** Verdicts get their own ids, derived from the reel, so several can coexist. */
         private const val VERDICT_NOTIFICATION_ID_BASE = 2000
+
+        private const val FLOW = com.techfactchecker.app.domain.AnalysisService.FLOW_TAG
+
+        /**
+         * OEM screens that control background auto-start. These vendors run
+         * their own freezers on top of Android's battery rules - the OnePlus
+         * test phone froze the app with `OplusHansManager: freeze uid` - and none
+         * of them is reachable through a standard intent. First match wins.
+         */
+        private val AUTOSTART_SCREENS = listOf(
+            "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
+            "com.coloros.safecenter" to "com.coloros.safecenter.startupapp.StartupAppListActivity",
+            "com.oplus.safecenter" to "com.oplus.safecenter.permission.startup.StartupAppListActivity",
+            "com.oppo.safe" to "com.oppo.safe.permission.startup.StartupAppListActivity",
+            "com.miui.securitycenter" to "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            "com.vivo.permissionmanager" to "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+            "com.iqoo.secure" to "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager",
+            "com.huawei.systemmanager" to "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+            "com.asus.mobilemanager" to "com.asus.mobilemanager.autostart.AutoStartActivity",
+        )
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -68,6 +88,9 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
         override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
             if (intent.action == "com.techfactchecker.REEL_COPIED") {
                 val url = intent.getStringExtra("url") ?: return
+                // If this line is missing after a "bubble: reel link copied" line,
+                // the process was frozen between the two.
+                Log.i(FLOW, "module: reel link received from bubble, emitting to JS")
                 reactContext.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                     .emit("ON_REEL_COPIED", url)
             }
@@ -110,6 +133,130 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     }
 
 
+
+    /** JS side of the TFC_FLOW log, so one `adb logcat -s TFC_FLOW` tells the whole story on a release build. */
+    @ReactMethod
+    fun trace(message: String) {
+        Log.i(FLOW, "js: " + message)
+    }
+
+    // ---- Permissions the app needs to work while the user is in another app ----
+
+    @ReactMethod
+    fun getPermissionState(promise: Promise) {
+        try {
+            val map = Arguments.createMap()
+            val power = reactContext.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+            map.putBoolean(
+                "batteryUnrestricted",
+                android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M ||
+                    power.isIgnoringBatteryOptimizations(reactContext.packageName)
+            )
+            map.putBoolean(
+                "overlay",
+                android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M ||
+                    android.provider.Settings.canDrawOverlays(reactContext)
+            )
+            map.putBoolean(
+                "notifications",
+                androidx.core.app.NotificationManagerCompat.from(reactContext).areNotificationsEnabled()
+            )
+            map.putString("manufacturer", android.os.Build.MANUFACTURER.orEmpty())
+            map.putBoolean("hasAutostartScreen", findAutostartIntent() != null)
+            map.putInt("sdk", android.os.Build.VERSION.SDK_INT)
+            promise.resolve(map)
+        } catch (e: Exception) {
+            promise.reject("PERM_STATE", e.message)
+        }
+    }
+
+    /** The standard system dialog: "Let app always run in background?" */
+    @ReactMethod
+    fun requestBatteryUnrestricted(promise: Promise) {
+        try {
+            val direct = android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                .setData(android.net.Uri.parse("package:" + reactContext.packageName))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            val list = android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            startFirstAvailable(listOf(direct, list), "battery")
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("PERM_BATTERY", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun openOverlaySettings(promise: Promise) {
+        try {
+            val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                .setData(android.net.Uri.parse("package:" + reactContext.packageName))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            startFirstAvailable(listOf(intent, appDetailsIntent()), "overlay")
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("PERM_OVERLAY", e.message)
+        }
+    }
+
+    /**
+     * Android stops showing the notification prompt after it has been denied
+     * twice, so the only way back is the app's notification settings page.
+     */
+    @ReactMethod
+    fun openNotificationSettings(promise: Promise) {
+        try {
+            val intent = android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, reactContext.packageName)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            startFirstAvailable(listOf(intent, appDetailsIntent()), "notifications")
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("PERM_NOTIF", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun openAutostartSettings(promise: Promise) {
+        try {
+            val oem = findAutostartIntent()
+            startFirstAvailable(listOfNotNull(oem, appDetailsIntent()), "autostart")
+            promise.resolve(if (oem != null) "oem" else "app_details")
+        } catch (e: Exception) {
+            promise.reject("PERM_AUTOSTART", e.message)
+        }
+    }
+
+    private fun appDetailsIntent(): android.content.Intent =
+        android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            .setData(android.net.Uri.parse("package:" + reactContext.packageName))
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    private fun findAutostartIntent(): android.content.Intent? {
+        val pm = reactContext.packageManager
+        for ((pkg, cls) in AUTOSTART_SCREENS) {
+            val intent = android.content.Intent()
+                .setComponent(android.content.ComponentName(pkg, cls))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (intent.resolveActivity(pm) != null) return intent
+        }
+        return null
+    }
+
+    /** Vendors export some of these screens and lock others; try each until one opens. */
+    private fun startFirstAvailable(intents: List<android.content.Intent>, label: String) {
+        var last: Exception? = null
+        for (intent in intents) {
+            try {
+                reactContext.startActivity(intent)
+                Log.i(FLOW, "permissions: opened " + label + " via " + (intent.component?.className ?: intent.action))
+                return
+            } catch (e: Exception) {
+                last = e
+            }
+        }
+        throw last ?: IllegalStateException("no screen available for " + label)
+    }
 
     /**
      * Holds the process alive while JS analyses a reel, with an ongoing

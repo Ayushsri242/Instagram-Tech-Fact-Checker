@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
 /**
@@ -34,7 +35,14 @@ class AnalysisService : Service() {
         const val ACTION_START = "com.techfactchecker.ANALYSIS_START"
         const val EXTRA_MESSAGE = "message"
         const val NOTIFICATION_ID = 1001
-        private const val CHANNEL_ID = "analysis_progress"
+        const val CHANNEL_ID = "analysis_progress"
+        /**
+         * One logcat tag for the whole user-visible flow - bubble tap, JS
+         * pickup, service start/stop, notifications, verdict - native and JS
+         * alike. Release builds cannot be inspected with run-as, so this is how
+         * a release APK gets debugged:  adb logcat -s TFC_FLOW
+         */
+        const val FLOW_TAG = "TFC_FLOW"
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -74,8 +82,14 @@ class AnalysisService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+        Log.i(FLOW_TAG, "service: foreground started (" + message + ")")
         // If the system kills us anyway, do not restart: the JS that owned the
         // job is gone with the process, so a revived service would spin forever.
         return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        Log.i(FLOW_TAG, "service: stopped")
+        super.onDestroy()
     }
 }
