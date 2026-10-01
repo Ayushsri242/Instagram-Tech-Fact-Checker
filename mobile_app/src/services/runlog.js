@@ -7,6 +7,7 @@ import * as FileSystem from 'expo-file-system';
 // pattern never surfaces. A CSV makes five runs comparable in one glance.
 
 const FILE = FileSystem.documentDirectory + 'factcheck_runs.csv';
+const OLD_FILE = FileSystem.documentDirectory + 'factcheck_runs_old.csv';
 
 const COLUMNS = [
   'timestamp',
@@ -56,6 +57,7 @@ const COLUMNS = [
   'ocrText',
   'caption',          // the picker weights caption mentions above slide mentions
   'author',           // so a replay can reject the creator's own handle
+  'fetchedRepos',     // every GitHub repo actually fetched, not just the 12 kept rows
 ];
 
 const cell = (v) => {
@@ -65,12 +67,21 @@ const cell = (v) => {
 
 export const logRun = async (fields) => {
   try {
-    const info = await FileSystem.getInfoAsync(FILE);
+    const header = COLUMNS.join(',');
     const line = COLUMNS.map((c) => cell(fields[c])).join(',');
-    if (!info.exists) {
-      await FileSystem.writeAsStringAsync(FILE, COLUMNS.join(',') + '\n' + line + '\n');
+    const info = await FileSystem.getInfoAsync(FILE);
+    const existing = info.exists ? await FileSystem.readAsStringAsync(FILE) : '';
+    // A file written by an older build has an older header. Appending to it
+    // shifted every column after the new one (set 9: `url` was added, the
+    // header was not, and triage silently dropped the 8 newest rows). Start a
+    // fresh file instead; the old one is kept once, as _old.
+    if (existing && existing.slice(0, existing.indexOf('\n')) !== header) {
+      await FileSystem.deleteAsync(OLD_FILE, { idempotent: true });
+      await FileSystem.moveAsync({ from: FILE, to: OLD_FILE });
+      await FileSystem.writeAsStringAsync(FILE, header + '\n' + line + '\n');
+    } else if (!existing) {
+      await FileSystem.writeAsStringAsync(FILE, header + '\n' + line + '\n');
     } else {
-      const existing = await FileSystem.readAsStringAsync(FILE);
       await FileSystem.writeAsStringAsync(FILE, existing + line + '\n');
     }
     // Also print it, so a run is recoverable from the terminal alone if the

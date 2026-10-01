@@ -70,9 +70,15 @@ const parseCsv = (text) => {
   }
   if (cell || row.length) { row.push(cell); rows.push(row); }
   const header = rows.shift();
-  return rows
-    .filter((r) => r.length === header.length && r[0])
-    .map((r) => Object.fromEntries(header.map((h, i) => [h, r[i]])));
+  const filled = rows.filter((r) => r[0]);
+  const kept = filled.filter((r) => r.length === header.length);
+  // Never drop rows silently (see triage.js).
+  if (kept.length < filled.length) {
+    console.error('WARNING: dropped ' + (filled.length - kept.length) + ' of ' + filled.length +
+      ' rows whose column count does not match the header (' + header.length + ' columns).' +
+      ' The file mixes builds; split it before scoring.');
+  }
+  return kept.map((r) => Object.fromEntries(header.map((h, i) => [h, r[i]])));
 };
 
 const json = (s, fallback) => { try { return JSON.parse(s); } catch (e) { return fallback; } };
