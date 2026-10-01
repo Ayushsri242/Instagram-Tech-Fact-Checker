@@ -5,10 +5,11 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { DeviceEventEmitter, NativeModules } from 'react-native';
 const { TechFactChecker } = NativeModules;
-import { analyzeReelApi } from './src/services/api';
+import { analyzeReelApi, sleep } from './src/services/api';
 import { saveReelResult } from './src/services/storage';
 import { beginAnalysis, finishAnalysis, failAnalysis } from './src/services/jobNotify';
 import { trace, shortRef } from './src/services/trace';
+import { setJobsWaiting } from './src/services/jobState';
 import HomeScreen from './src/screens/HomeScreen';
 import ResultScreen from './src/screens/ResultScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
@@ -43,6 +44,7 @@ export default function App() {
       isProcessing = true;
 
       const url = queue.shift();
+      setJobsWaiting(queue.length);
       console.log('Doomscroll Mode: Processing URL ->', url);
 
       try {
@@ -65,11 +67,12 @@ export default function App() {
         await failAnalysis(e && e.message);
       }
 
-      // Enforce 1-minute (60000ms) cooldown before next item
-      setTimeout(() => {
-        isProcessing = false;
-        processQueue();
-      }, 60000);
+      // Enforce 1-minute (60000ms) cooldown before next item. Native sleep, not
+      // setTimeout: JS timers pause in the background, which left the next reel
+      // waiting (bubble orange) until the user reopened the app.
+      await sleep(60000);
+      isProcessing = false;
+      processQueue();
     };
 
     const sub = DeviceEventEmitter.addListener('ON_REEL_COPIED', (url) => {
@@ -77,6 +80,7 @@ export default function App() {
       // If the bubble logged a copy and this line is missing, JS was frozen.
       trace('doomscroll: JS received reel ' + shortRef(url) + ', queue now ' + (queue.length + 1));
       queue.push(url);
+      setJobsWaiting(queue.length);
       processQueue();
     });
     return () => sub.remove();
