@@ -10,7 +10,7 @@ import com.techfactchecker.app.domain.InstagramExtractor
 import com.techfactchecker.app.domain.LocalLlamaEngine
 import com.techfactchecker.app.domain.OcrEngine
 import com.techfactchecker.app.domain.OcrResult
-import com.techfactchecker.app.domain.AudioTranscriber
+import com.techfactchecker.app.domain.GroqTranscriber
 import com.techfactchecker.app.domain.WebValidator
 import kotlinx.coroutines.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -63,7 +63,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     private val llamaEngine = LocalLlamaEngine(reactContext)
     private val ocrEngine = OcrEngine()
     private val instagramExtractor = InstagramExtractor(reactContext)
-    private val audioTranscriber = AudioTranscriber(File(reactContext.filesDir, "models/whisper-tiny"))
+    private val transcriber = GroqTranscriber()
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
@@ -502,7 +502,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun analyzeAndVerify(url: String, useLocalLlm: Boolean, promise: Promise) {
+    fun analyzeAndVerify(url: String, useLocalLlm: Boolean, groqApiKey: String, promise: Promise) {
         scope.launch {
             try {
                 Log.e(TAG, "STEP 1: Starting analyzeAndVerify with url=$url, useLocalLlm=$useLocalLlm")
@@ -655,7 +655,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                         }
                     }
                     Log.i(TAG, "STEP 4d: Frames processed=$framesProcessed/$FRAME_SAMPLES, uniqueLines=${seenLines.size}")
-                    val transcriptFromAudio = audioTranscriber.transcribe(outputFile)
+                    val transcriptFromAudio = transcriber.transcribe(outputFile, groqApiKey, caption)
                     Log.i(TAG, "STEP 4e: Audio transcript chars=${transcriptFromAudio.length}")
                     retriever.release()
                     outputFile.delete()
@@ -715,7 +715,8 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 map.putInt("slidesJson", slidesJson)
                 map.putInt("slidesDom", slidesDom)
                 map.putInt("imagesUsed", imageUrlList.size)
-                map.putString("sttStats", audioTranscriber.lastStats)
+                // Image posts have no audio; do not carry over the previous video's line.
+                map.putString("sttStats", if (mediaType == "image") "" else transcriber.lastStats)
                 map.putString("ocrLens", ocrLens.joinToString(","))
                 // Cross-post contamination: the embed renders suggested posts
                 // beside the real one and their images share the CDN path shape,

@@ -166,7 +166,7 @@ export default function PermissionsScreen({ navigation, route }) {
         </TouchableOpacity>
         {!allRequiredDone && !!state && (
           <Text style={styles.footnote}>
-            You can come back to this from Setup. Without these, results only arrive while the app is open.
+            You can come back to this from Settings. Without these, results only arrive while the app is open.
           </Text>
         )}
       </ScrollView>

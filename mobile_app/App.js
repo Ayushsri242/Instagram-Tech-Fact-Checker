@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { DeviceEventEmitter, NativeModules } from 'react-native';
 const { TechFactChecker } = NativeModules;
 import { analyzeReelApi, sleep } from './src/services/api';
-import { saveReelResult } from './src/services/storage';
+import { saveReelResult, setOfflineMode } from './src/services/storage';
 import { beginAnalysis, finishAnalysis, failAnalysis } from './src/services/jobNotify';
 import { trace, shortRef } from './src/services/trace';
 import { setJobsWaiting } from './src/services/jobState';
@@ -29,6 +30,15 @@ export default function App() {
     AsyncStorage.getItem(PERMISSIONS_DONE_KEY)
       .then((v) => setFirstRoute(v === 'yes' ? 'Home' : 'Permissions'))
       .catch(() => setFirstRoute('Home'));
+  }, []);
+
+  // The on-device models are gone from this build: speech runs on Groq's
+  // Whisper and there is no offline Gemma. Reclaim the ~160 MB Whisper (and
+  // any 529 MB Gemma) earlier builds downloaded, and make sure nobody is left
+  // in an offline mode that can no longer run.
+  useEffect(() => {
+    FileSystem.deleteAsync(FileSystem.documentDirectory + 'models/', { idempotent: true }).catch(() => {});
+    setOfflineMode(false).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -140,7 +150,7 @@ export default function App() {
         <Stack.Screen
           name="Settings"
           component={SettingsScreen}
-          options={{ title: 'Local Setup' }}
+          options={{ title: 'Settings' }}
         />
         <Stack.Screen
           name="Permissions"
