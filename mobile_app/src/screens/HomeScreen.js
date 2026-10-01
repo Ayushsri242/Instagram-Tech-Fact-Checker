@@ -92,7 +92,7 @@ export default function HomeScreen({ navigation }) {
             {!!limitLine && <Text style={styles.limitText}>{limitLine}</Text>}
           </View>
           <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.iconButton}>
-            <Text style={styles.iconText}>Setup</Text>
+            <Text style={styles.iconText}>Settings</Text>
           </TouchableOpacity>
         </View>
 

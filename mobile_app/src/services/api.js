@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { NativeModules } from 'react-native';
-import { getGroqApiKey, getApiProvider, getApiModel } from './secrets';
+import { getGroqApiKey } from './secrets';
 import { getOfflineMode, saveApiLimits } from './storage';
 import { runVerifiers, fillMissingPageText } from './verifiers';
 import { logRun } from './runlog';
@@ -9,83 +9,22 @@ import { jobStage } from './jobState';
 
 const { TechFactChecker } = NativeModules;
 
-// One row per provider. `models` is a fallback chain: callGroqJson/Text walk it
-// in order and keep the first that answers, so a retired model name costs a
-// round trip instead of the whole run.
-export const PROVIDERS = {
-  Groq: {
-    url: 'https://api.groq.com/openai/v1/chat/completions',
-    // Both confirmed live against this account. Do not add a third from memory:
-    // 'llama-3.3-70b-versatile' was added that way and returned model_not_found.
-    models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'],
-  },
-  OpenRouter: {
-    url: 'https://openrouter.ai/api/v1/chat/completions',
-    models: ['openai/gpt-4o-mini', 'meta-llama/llama-3.3-70b-instruct'],
-  },
-  NVIDIA: {
-    url: 'https://integrate.api.nvidia.com/v1/chat/completions',
-    models: ['meta/llama-3.3-70b-instruct', 'meta/llama3-70b-instruct'],
-  },
-  OpenAI: {
-    url: 'https://api.openai.com/v1/chat/completions',
-    models: ['gpt-4o-mini', 'gpt-3.5-turbo'],
-  },
-  Mistral: {
-    url: 'https://api.mistral.ai/v1/chat/completions',
-    models: ['mistral-large-latest', 'mistral-small-latest'],
-  },
-  Cohere: {
-    // Cohere's OpenAI-compatible door. Its native API lives at /v1/chat, so
-    // /v1/chat/completions on api.cohere.com is a 404.
-    url: 'https://api.cohere.ai/compatibility/v1/chat/completions',
-    models: ['command-r-plus', 'command-r'],
-  },
-  Google: {
-    url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-    models: ['gemini-2.0-flash', 'gemini-1.5-flash'],
-  },
+// Groq only. Every test set was run on Groq, and its key also covers the
+// Whisper transcription the native side does, so a second provider would mean
+// a second key for half the pipeline. Six other providers lived here, untested.
+//
+// `models` is a fallback chain: callGroqJson/Text walk it in order and keep the
+// first that answers, so a retired model name costs a round trip instead of
+// the whole run.
+const GROQ = {
+  url: 'https://api.groq.com/openai/v1/chat/completions',
+  // Both confirmed live against this account. Do not add a third from memory:
+  // 'llama-3.3-70b-versatile' was added that way and returned model_not_found.
+  models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'],
 };
 
-// Paste-only support. Groq/OpenRouter/NVIDIA/OpenAI/Google announce themselves
-// with a prefix; Mistral and Cohere keys are bare alphanumerics, so the only
-// tell left is length. Both shapes are stable but this is a heuristic, which is
-// why the Provider Override box still exists.
-export const detectProvider = (apiKey) => {
-  const key = (apiKey || '').trim();
-  if (!key) return null;
-  if (key.startsWith('gsk_')) return 'Groq';
-  if (key.startsWith('sk-or-v1-')) return 'OpenRouter';
-  if (key.startsWith('nvapi-')) return 'NVIDIA';
-  if (key.startsWith('AIza') || key.startsWith('AQ.')) return 'Google';
-  if (key.startsWith('sk-')) return 'OpenAI';
-  if (/^[A-Za-z0-9]{32}$/.test(key)) return 'Mistral';
-  if (/^[A-Za-z0-9]{40}$/.test(key)) return 'Cohere';
-  return null;
-};
-
-export const getApiConfig = (apiKey, manualProvider = null, manualModel = null) => {
-  if (!apiKey) return null;
-
-  // The override is a free-text box, so match it case-insensitively rather than
-  // silently ignoring "cohere" because the key in PROVIDERS is "Cohere".
-  const typed = (manualProvider || '').trim().toLowerCase();
-  const name =
-    Object.keys(PROVIDERS).find((p) => p.toLowerCase() === typed) || detectProvider(apiKey);
-
-  // An unrecognised key is an error worth naming, not a silent fall back to
-  // some other provider's endpoint with a model that may no longer exist.
-  if (!name) {
-    throw new Error(
-      'Could not tell which provider this API key belongs to. ' +
-        'Open Setup and type the provider name in "Provider Override" ' +
-        '(one of: ' + Object.keys(PROVIDERS).join(', ') + ').'
-    );
-  }
-
-  const models = manualModel && manualModel.trim() ? [manualModel.trim()] : PROVIDERS[name].models;
-  return { url: PROVIDERS[name].url, models, provider: name };
-};
+// Groq keys start with gsk_. Anything else is a key for some other service.
+export const isGroqKey = (apiKey) => String(apiKey || '').trim().startsWith('gsk_');
 
 // Providers that reject response_format still answer with prose or a fenced
 // code block around the JSON. Cut to the outermost braces before parsing.
@@ -184,9 +123,7 @@ const recordLimits = (headers) => {
 
 const callGroqJson = async (apiKey, messages) => {
   let lastError;
-  const provider = await getApiProvider();
-  const modelOverride = await getApiModel();
-  const config = getApiConfig(apiKey, provider, modelOverride);
+  const config = GROQ;
   for (const model of config.models) {
     for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -224,9 +161,7 @@ const callGroqJson = async (apiKey, messages) => {
 
 const callGroqText = async (apiKey, messages) => {
   let lastError;
-  const provider = await getApiProvider();
-  const modelOverride = await getApiModel();
-  const config = getApiConfig(apiKey, provider, modelOverride);
+  const config = GROQ;
   for (const model of config.models) {
     for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -1073,12 +1008,12 @@ export const analyzeReelApi = async (url) => {
   // Offline: the native 3-stage Gemma pipeline already produced the verdict,
   // the evidence and the markdown report. Nothing leaves the device.
   if (offline) {
-    const localResult = await TechFactChecker.analyzeAndVerify(url, true);
+    const localResult = await TechFactChecker.analyzeAndVerify(url, true, '');
     return { ...localResult, offline: true };
   }
 
   const apiKey = await getGroqApiKey();
-  if (!apiKey) throw new Error('Add your Groq API key in Setup first.');
+  if (!apiKey) throw new Error('Add your Groq API key in Settings first.');
 
   const startedAt = Date.now();
   // Per-stage timing, so "50 seconds" can be attributed instead of guessed at.
@@ -1088,7 +1023,7 @@ export const analyzeReelApi = async (url) => {
   let mark = startedAt;
   const lap = (name) => { stage[name] = Date.now() - mark; mark = Date.now(); };
   trace('pipeline start ' + shortRef(url));
-  const media = await TechFactChecker.analyzeAndVerify(url, false);
+  const media = await TechFactChecker.analyzeAndVerify(url, false, apiKey);
   lap('native');
   jobStage(1);
   trace('pipeline native done ' + shortRef(url) + ' in ' + stage.native + 'ms, reelId=' + media.reelId);
@@ -1310,7 +1245,7 @@ const performQuickSearch = async (query) => {
 export const chatWithAiApi = async (reel, userMessage, conversation = [], onSearchStart = null) => {
   const offline = await getOfflineMode();
   const apiKey = offline ? null : await getGroqApiKey();
-  if (!offline && !apiKey) throw new Error('Add your Groq API key in Setup first.');
+  if (!offline && !apiKey) throw new Error('Add your Groq API key in Settings first.');
   // Every follow-up used to re-send the whole research file: the full evidence
   // array with each row's scraped page text, the entire transcript, and eight
   // untruncated chat turns. A five-word question therefore cost 6,648 tokens,
