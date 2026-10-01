@@ -73,6 +73,22 @@ export default function SettingsScreen({ navigation }) {
     }
   };
 
+  // One fixed file, overwritten each time, so old copies never pile up and the
+  // batch can be pulled over adb without the Share sheet.
+  const saveRunLogCopy = async () => {
+    const csv = await readRunLog();
+    if (!csv) {
+      Alert.alert('Run log', 'No runs recorded yet.');
+      return;
+    }
+    try {
+      const path = await NativeModules.TechFactChecker.saveRunLogCopy(csv);
+      Alert.alert('Saved', runLogRows + ' run(s) saved to\n' + path + '\n\nThe previous copy was replaced.');
+    } catch (e) {
+      Alert.alert('Could not save', e.message);
+    }
+  };
+
   const clearRunLogFile = () => {
     Alert.alert(
       'Clear run log?',
@@ -421,6 +437,9 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.buttonRow}>
           <TouchableOpacity style={styles.downloadBtn} onPress={shareRunLog}>
             <Text style={styles.btnText}>Share CSV</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.downloadBtn} onPress={saveRunLogCopy}>
+            <Text style={styles.btnText}>Save CSV</Text>
           </TouchableOpacity>
           {runLogRows > 0 && (
             <TouchableOpacity style={styles.deleteBtn} onPress={clearRunLogFile}>

@@ -140,6 +140,39 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
         Log.i(FLOW, "js: " + message)
     }
 
+    /**
+     * A wait that also ends while the app is in the background. React Native
+     * pauses JS timers when no activity is visible, so a setTimeout cooldown
+     * only fired once the user reopened the app (bubble stuck orange).
+     */
+    /**
+     * Writes the run log to one fixed file, replacing the previous copy, so it
+     * can be pulled at any time without the Share sheet:
+     *   adb pull /sdcard/Android/data/com.techfactchecker.mobile/files/runlog.csv
+     * App-specific external storage: no permission needed, and adb can read it.
+     */
+    @ReactMethod
+    fun saveRunLogCopy(csv: String, promise: Promise) {
+        scope.launch {
+            try {
+                val dir = reactContext.getExternalFilesDir(null) ?: throw IllegalStateException("external storage unavailable")
+                val file = File(dir, "runlog.csv")
+                file.writeText(csv)
+                promise.resolve(file.absolutePath)
+            } catch (e: Exception) {
+                promise.reject("SAVE_ERROR", e.message)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun sleep(ms: Double, promise: Promise) {
+        scope.launch {
+            delay(ms.toLong())
+            promise.resolve(null)
+        }
+    }
+
     // ---- Permissions the app needs to work while the user is in another app ----
 
     @ReactMethod

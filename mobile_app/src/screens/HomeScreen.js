@@ -9,18 +9,40 @@ import {
   KeyboardAvoidingView,
   Platform,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
-import { getApiLimits, getOfflineMode, getLatestResult, markLatestSeen } from '../services/storage';
+import { getApiLimits, getOfflineMode, getUnseenResults, clearUnseenResults } from '../services/storage';
 import { describeLimits } from '../services/api';
+import { getJobState, subscribeJob, JOB_STAGES } from '../services/jobState';
+
+const elapsed = (ms) => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+};
 
 export default function HomeScreen({ navigation }) {
   const [url, setUrl] = useState('');
   const [limits, setLimits] = useState(null);
   const [isOffline, setIsOffline] = useState(false);
-  const [latest, setLatest] = useState(null);
+  const [unseen, setUnseen] = useState([]);
   const [now, setNow] = useState(Date.now());
+  const [job, setJob] = useState(getJobState());
+  const [tick, setTick] = useState(Date.now());
+
+  // The progress strip: live while Home is showing, gone on every other screen.
+  useFocusEffect(
+    useCallback(() => {
+      setJob(getJobState());
+      const unsubscribe = subscribeJob(setJob);
+      const timer = setInterval(() => setTick(Date.now()), 1000);
+      return () => {
+        unsubscribe();
+        clearInterval(timer);
+      };
+    }, [])
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -28,9 +50,8 @@ export default function HomeScreen({ navigation }) {
         const offline = await getOfflineMode();
         setIsOffline(offline);
         setLimits(offline ? null : await getApiLimits());
-        const l = await getLatestResult();
-        // Only a fresh, unopened result earns the banner.
-        setLatest(l && !l.seen && Date.now() - l.finishedAt < 24 * 3600000 ? l : null);
+        // Only fresh, unopened results earn the banner.
+        setUnseen(await getUnseenResults());
         setNow(Date.now());
       };
       refresh();
@@ -41,11 +62,11 @@ export default function HomeScreen({ navigation }) {
     }, [])
   );
 
-  const openLatest = async () => {
-    if (!latest) return;
-    await markLatestSeen();
-    setLatest(null);
-    navigation.navigate('Result', { reelId: latest.reelId });
+  // Opening any one closes the whole banner; the others stay in History.
+  const openUnseen = async (reelId) => {
+    await clearUnseenResults();
+    setUnseen([]);
+    navigation.navigate('Result', { reelId });
   };
 
   const limitLine = isOffline ? 'OFFLINE MODE' : describeLimits(limits, now);
@@ -75,14 +96,54 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
+        {/* A reel being analysed, or queued by the bubble. The notification says
+            the same, but a user who opens the app should not have to pull down
+            the shade to learn that work is still going on. */}
+        {!!job.running && (
+          <View style={styles.jobStrip}>
+            <View style={styles.jobRow}>
+              <ActivityIndicator size="small" color={colors.accentCyan} />
+              <Text style={styles.jobTitle} numberOfLines={1}>Checking reel {job.running.ref}</Text>
+              <Text style={styles.jobTime}>{elapsed(tick - job.running.startedAt)}</Text>
+            </View>
+            <Text style={styles.jobStage}>
+              {JOB_STAGES[job.running.step]}
+              {job.waiting > 0 ? ' · ' + job.waiting + ' more waiting' : ''}
+            </Text>
+            <View style={styles.jobTrack}>
+              <View style={[styles.jobFill, { width: ((job.running.step + 1) / JOB_STAGES.length) * 100 + '%' }]} />
+            </View>
+          </View>
+        )}
+        {!job.running && job.waiting > 0 && (
+          <View style={styles.jobStrip}>
+            <Text style={styles.jobTitle}>
+              {job.waiting} reel{job.waiting > 1 ? 's' : ''} waiting - next one starts within a minute
+            </Text>
+          </View>
+        )}
+
         {/* A result that finished while the user was elsewhere. Without this, a
             user who left mid-analysis and came back after Android had killed
             the app landed here with no sign anything had happened. */}
-        {!!latest && (
-          <TouchableOpacity style={styles.readyBanner} onPress={openLatest}>
-            <Text style={styles.readyTitle}>Verdict ready: {latest.verdict.replace('_', ' ')}</Text>
-            <Text style={styles.readySub} numberOfLines={1}>{latest.techName} - tap to open</Text>
+        {unseen.length === 1 && (
+          <TouchableOpacity style={styles.readyBanner} onPress={() => openUnseen(unseen[0].reelId)}>
+            <Text style={styles.readyTitle}>Verdict ready: {unseen[0].verdict.replace('_', ' ')}</Text>
+            <Text style={styles.readySub} numberOfLines={1}>{unseen[0].techName} - tap to open</Text>
           </TouchableOpacity>
+        )}
+        {unseen.length > 1 && (
+          <View style={styles.readyBanner}>
+            <Text style={styles.readyTitle}>{unseen.length} reels checked while you were away</Text>
+            <Text style={styles.readySub}>Check them below, or later in History</Text>
+            {unseen.map((r) => (
+              <TouchableOpacity key={r.reelId} style={styles.readyRow} onPress={() => openUnseen(r.reelId)}>
+                <Text style={styles.readyVerdict}>{r.verdict.replace('_', ' ')}</Text>
+                <Text style={styles.readyName} numberOfLines={1}>{r.techName}</Text>
+                <Text style={styles.readyOpen}>Open</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         )}
 
         {/* Center Title (Empty State) */}
@@ -172,8 +233,35 @@ const styles = StyleSheet.create({
     borderColor: colors.accentCyan,
     backgroundColor: colors.surface,
   },
+  jobStrip: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    backgroundColor: colors.surface,
+  },
+  jobRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  jobTitle: { flex: 1, color: colors.textPrimary, fontSize: 15, fontWeight: 'bold' },
+  jobTime: { color: colors.textMuted, fontSize: 13 },
+  jobStage: { color: colors.textMuted, fontSize: 13, marginTop: 6 },
+  jobTrack: { height: 4, borderRadius: 2, backgroundColor: colors.cardBorder, marginTop: 10, overflow: 'hidden' },
+  jobFill: { height: 4, backgroundColor: colors.accentCyan },
   readyTitle: { color: colors.accentCyan, fontSize: 15, fontWeight: 'bold' },
   readySub: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
+  readyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    marginTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.cardBorder,
+  },
+  readyVerdict: { color: colors.accentCyan, fontSize: 13, fontWeight: 'bold', minWidth: 110 },
+  readyName: { flex: 1, color: colors.textPrimary, fontSize: 14 },
+  readyOpen: { color: colors.accentCyan, fontSize: 13, fontWeight: '600' },
   centerContent: {
     flex: 1,
     justifyContent: 'center',

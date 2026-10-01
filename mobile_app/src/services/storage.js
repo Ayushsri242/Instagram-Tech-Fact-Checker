@@ -90,39 +90,55 @@ export const setOfflineMode = async (enabled) => {
 // and if Android kills the app in the meantime, reopening it lands on Home with
 // no sign that anything finished. Home reads this to show a "verdict ready"
 // banner until it is opened.
-const LATEST_RESULT_KEY = '@tech_fact_checker_latest_result';
+//
+// A list, not one slot: a user who taps the bubble on four reels and comes back
+// later must see all four verdicts, not only the last one.
+const UNSEEN_RESULTS_KEY = '@tech_fact_checker_unseen_results';
+const UNSEEN_MAX_AGE_MS = 24 * 3600000;
+const UNSEEN_MAX = 10;
 
-export const saveLatestResult = async (result) => {
+export const getUnseenResults = async () => {
   try {
-    await AsyncStorage.setItem(LATEST_RESULT_KEY, JSON.stringify({
+    const json = await AsyncStorage.getItem(UNSEEN_RESULTS_KEY);
+    const list = json ? JSON.parse(json) : [];
+    return list.filter((r) => Date.now() - r.finishedAt < UNSEEN_MAX_AGE_MS);
+  } catch (e) {
+    return [];
+  }
+};
+
+export const addUnseenResult = async (result) => {
+  try {
+    const list = (await getUnseenResults()).filter((r) => r.reelId !== result.reelId);
+    list.unshift({
       reelId: result.reelId,
       techName: result.techName || 'Fact check',
       verdict: result.verdict || 'UNKNOWN',
       finishedAt: Date.now(),
-      seen: false,
-    }));
+    });
+    await AsyncStorage.setItem(UNSEEN_RESULTS_KEY, JSON.stringify(list.slice(0, UNSEEN_MAX)));
   } catch (e) {
-    console.error('Failed to save latest result:', e);
+    console.error('Failed to save unseen result:', e);
   }
 };
 
-export const getLatestResult = async () => {
+// Opened from somewhere else (History, a notification): only that one is read.
+export const markResultSeen = async (reelId) => {
   try {
-    const json = await AsyncStorage.getItem(LATEST_RESULT_KEY);
-    return json ? JSON.parse(json) : null;
-  } catch (e) {
-    return null;
-  }
-};
-
-export const markLatestSeen = async () => {
-  try {
-    const latest = await getLatestResult();
-    if (latest && !latest.seen) {
-      await AsyncStorage.setItem(LATEST_RESULT_KEY, JSON.stringify({ ...latest, seen: true }));
-    }
+    const list = await getUnseenResults();
+    const rest = list.filter((r) => r.reelId !== reelId);
+    if (rest.length !== list.length) await AsyncStorage.setItem(UNSEEN_RESULTS_KEY, JSON.stringify(rest));
   } catch (e) {
     // nothing to mark
+  }
+};
+
+// Opened from the Home banner: the banner closes as a whole; the rest are in History.
+export const clearUnseenResults = async () => {
+  try {
+    await AsyncStorage.removeItem(UNSEEN_RESULTS_KEY);
+  } catch (e) {
+    // nothing to clear
   }
 };
 

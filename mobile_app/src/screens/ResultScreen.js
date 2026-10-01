@@ -10,7 +10,7 @@ import {
   Share,
 } from 'react-native';
 import { colors } from '../theme/colors';
-import { getReelById, getLatestResult, markLatestSeen } from '../services/storage';
+import { getReelById, markResultSeen } from '../services/storage';
 import ReportCard from '../components/ReportCard';
 import { trace } from '../services/trace';
 
@@ -48,9 +48,7 @@ export default function ResultScreen({ route, navigation }) {
   // is reading it, so the "verdict ready" banner must not reappear on Home.
   useEffect(() => {
     if (!reel || !reel.reelId) return;
-    getLatestResult().then((latest) => {
-      if (latest && latest.reelId === reel.reelId) markLatestSeen();
-    });
+    markResultSeen(reel.reelId);
   }, [reel && reel.reelId]);
 
   if (!reel) {
@@ -81,6 +79,10 @@ export default function ResultScreen({ route, navigation }) {
   };
 
   const badgeColor = getBadgeColor(reel?.verdict);
+
+  // The post this report is about, so the user can watch it again. The share
+  // tracking query (?stkn=..., ?igsh=...) is dropped; the post path is enough.
+  const postLink = String(reel.sourceUrl || '').split('?')[0];
 
   const handleShare = async () => {
     try {
@@ -113,6 +115,11 @@ export default function ResultScreen({ route, navigation }) {
             )}
           </View>
           <Text style={styles.authorText}>👤 @{reel.author || 'Creator'} • 💰 {reel.pricingModel || 'Open Source'}</Text>
+          {!!postLink && (
+            <TouchableOpacity onPress={() => Linking.openURL(postLink).catch(() => {})}>
+              <Text style={styles.linkText} numberOfLines={1}>🔗 {postLink}</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Action Row */}
@@ -207,6 +214,12 @@ const styles = StyleSheet.create({
   authorText: {
     color: colors.textSecondary,
     fontSize: 12,
+  },
+  linkText: {
+    color: colors.accentCyan,
+    fontSize: 12,
+    marginTop: 8,
+    textDecorationLine: 'underline',
   },
   actionRow: {
     flexDirection: 'row',

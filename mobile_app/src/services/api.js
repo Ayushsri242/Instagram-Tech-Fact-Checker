@@ -5,6 +5,7 @@ import { getOfflineMode, saveApiLimits } from './storage';
 import { runVerifiers, fillMissingPageText } from './verifiers';
 import { logRun } from './runlog';
 import { trace, shortRef } from './trace';
+import { jobStage } from './jobState';
 
 const { TechFactChecker } = NativeModules;
 
@@ -112,7 +113,10 @@ const rateLimitWaitMs = (error) => {
   return Math.min(Math.ceil(seconds * 1000) + 500, 30000);
 };
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Native wait: React Native pauses JS timers while the app is in the
+// background, so a setTimeout here would hang a rate-limited background run.
+export const sleep = (ms) =>
+  TechFactChecker?.sleep ? TechFactChecker.sleep(ms) : new Promise((r) => setTimeout(r, ms));
 
 // Groq states durations as "2m59.56s", "7.66s" or "1h2m3s".
 export const parseResetMs = (value) => {
@@ -1041,6 +1045,7 @@ export const analyzeReelApi = async (url) => {
   trace('pipeline start ' + shortRef(url));
   const media = await TechFactChecker.analyzeAndVerify(url, false);
   lap('native');
+  jobStage(1);
   trace('pipeline native done ' + shortRef(url) + ' in ' + stage.native + 'ms, reelId=' + media.reelId);
   const transcript = media.rawTranscript || '';
   const ocrText = media.ocrText || '';
@@ -1062,6 +1067,7 @@ export const analyzeReelApi = async (url) => {
 
   let claimsData = await extractClaims(apiKey, transcript, ocrText);
   lap('claims');
+  jobStage(2);
   // Kept because the picker overwrites tech_name below, and a replay of this
   // run has to see what the model originally said to measure a picker change.
   const modelTechName = claimsData.tech_name;
@@ -1076,6 +1082,7 @@ export const analyzeReelApi = async (url) => {
     ? await TechFactChecker.gatherEvidence(queries)
     : (media.sources || []);
   lap('search');
+  jobStage(3);
   // The pricing check needs the search results, so the router runs after them.
   // Its own lookups are already parallel inside runVerifiers.
   const verified = await runVerifiers(claimsData, transcript, ocrText, searched);
@@ -1111,6 +1118,7 @@ export const analyzeReelApi = async (url) => {
 
   const coverage = slideCoverage(ocrText, media.imagesUsed);
   if (coverage) log('COVERAGE', coverage);
+  jobStage(4);
   const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage);
   lap('synthesis');
   log('STAGE 3 RAW REPORT', report);
@@ -1215,6 +1223,8 @@ export const analyzeReelApi = async (url) => {
 
   return {
     ...media,
+    // The report shows this so the user can reopen the post.
+    sourceUrl: media.sourceUrl || url,
     // An honest blank beats a confident wrong: two of five recorded runs named
     // a window title and a caption headline.
     techName: subject.name || fallbackName || 'Unidentified',
