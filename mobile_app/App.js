@@ -1,4 +1,5 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
@@ -7,23 +8,38 @@ const { TechFactChecker } = NativeModules;
 import { analyzeReelApi } from './src/services/api';
 import { saveReelResult } from './src/services/storage';
 import { beginAnalysis, finishAnalysis, failAnalysis } from './src/services/jobNotify';
+import { trace, shortRef } from './src/services/trace';
 import HomeScreen from './src/screens/HomeScreen';
 import ResultScreen from './src/screens/ResultScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+import PermissionsScreen, { PERMISSIONS_DONE_KEY } from './src/screens/PermissionsScreen';
 import { colors } from './src/theme/colors';
 
 const Stack = createNativeStackNavigator();
 
 export default function App() {
+  // First launch shows the permissions screen; after that, straight to Home.
+  // Read before the navigator mounts so the first frame is the right screen. A
+  // deep link from a notification still wins - linking overrides this.
+  const [firstRoute, setFirstRoute] = useState(null);
+  useEffect(() => {
+    AsyncStorage.getItem(PERMISSIONS_DONE_KEY)
+      .then((v) => setFirstRoute(v === 'yes' ? 'Home' : 'Permissions'))
+      .catch(() => setFirstRoute('Home'));
+  }, []);
+
   useEffect(() => {
 // 1-minute Cooldown Queue implementation
     const queue = [];
     let isProcessing = false;
 
     const processQueue = async () => {
-      if (isProcessing || queue.length === 0) return;
+      if (isProcessing || queue.length === 0) {
+        if (queue.length) trace('doomscroll: ' + queue.length + ' waiting - previous reel still in cooldown');
+        return;
+      }
       isProcessing = true;
 
       const url = queue.shift();
@@ -34,7 +50,7 @@ export default function App() {
         TechFactChecker.setBubbleColor("#00E5FF");
         // Same keep-alive and notifications as the paste flow, so the two
         // entry points cannot drift apart again.
-        beginAnalysis();
+        beginAnalysis(shortRef(url));
 
         const result = await analyzeReelApi(url);
         await saveReelResult(result);
@@ -58,6 +74,8 @@ export default function App() {
 
     const sub = DeviceEventEmitter.addListener('ON_REEL_COPIED', (url) => {
       console.log('Doomscroll Mode: Caught URL ->', url);
+      // If the bubble logged a copy and this line is missing, JS was frozen.
+      trace('doomscroll: JS received reel ' + shortRef(url) + ', queue now ' + (queue.length + 1));
       queue.push(url);
       processQueue();
     });
@@ -75,10 +93,13 @@ export default function App() {
     },
   };
 
+  if (!firstRoute) return null;
+
   return (
     <NavigationContainer linking={linking}>
       <StatusBar style="light" backgroundColor={colors.background} />
       <Stack.Navigator
+        initialRouteName={firstRoute}
         screenOptions={{
           headerStyle: {
             backgroundColor: colors.surface,
@@ -116,6 +137,11 @@ export default function App() {
           name="Settings"
           component={SettingsScreen}
           options={{ title: 'Local Setup' }}
+        />
+        <Stack.Screen
+          name="Permissions"
+          component={PermissionsScreen}
+          options={{ title: 'Permissions' }}
         />
       </Stack.Navigator>
     </NavigationContainer>

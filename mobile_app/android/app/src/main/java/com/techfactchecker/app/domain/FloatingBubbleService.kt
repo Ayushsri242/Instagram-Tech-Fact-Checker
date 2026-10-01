@@ -21,6 +21,11 @@ import androidx.core.app.NotificationCompat
 
 class FloatingBubbleService : Service() {
 
+    private companion object {
+        const val FLOW_TAG = AnalysisService.FLOW_TAG
+        const val PROGRESS_CHANNEL_ID = AnalysisService.CHANNEL_ID
+    }
+
     private lateinit var windowManager: WindowManager
     private lateinit var floatingView: View
     private lateinit var closeView: View
@@ -254,11 +259,48 @@ class FloatingBubbleService : Service() {
                     val shape = it.background as android.graphics.drawable.GradientDrawable
                     shape.setColor(Color.parseColor("#FF9800"))
                 }
+                Log.i(FLOW_TAG, "bubble: reel link copied, handing to JS: " + text.take(80))
+                postReceivedNotification()
                 val intent = Intent("com.techfactchecker.REEL_COPIED")
                 intent.setPackage(packageName)
                 intent.putExtra("url", text)
                 sendBroadcast(intent)
+            } else {
+                Log.i(FLOW_TAG, "bubble: tapped, but clipboard has no instagram link")
             }
+        } else {
+            Log.i(FLOW_TAG, "bubble: tapped, clipboard empty or unreadable")
+        }
+    }
+
+    /**
+     * Confirms the tap natively, the instant it happens.
+     *
+     * Everything after the tap - turning the bubble blue, the "analysing"
+     * notification, the analysis itself - runs in JavaScript. On the OnePlus test
+     * phone the OEM freezer (`OplusHansManager: freeze uid ...`) suspended the
+     * app process while Instagram was in front, so JS did not run until the app
+     * was reopened: the bubble sat orange and nothing told the user their tap had
+     * registered at all. This notification does not depend on JS. When JS does
+     * run, AnalysisService posts into the same slot and replaces it.
+     */
+    private fun postReceivedNotification() {
+        try {
+            val manager = getSystemService(NotificationManager::class.java) ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                manager.createNotificationChannel(
+                    NotificationChannel(PROGRESS_CHANNEL_ID, "Analysis progress", NotificationManager.IMPORTANCE_LOW)
+                )
+            }
+            val notification = NotificationCompat.Builder(this, PROGRESS_CHANNEL_ID)
+                .setContentTitle("Reel received")
+                .setContentText("Starting the fact check...")
+                .setSmallIcon(android.R.drawable.ic_menu_search)
+                .setProgress(0, 0, true)
+                .build()
+            manager.notify(AnalysisService.NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            Log.w(FLOW_TAG, "bubble: could not post received notification: " + e.message)
         }
     }
 

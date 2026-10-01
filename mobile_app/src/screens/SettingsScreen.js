@@ -7,7 +7,7 @@ import { getOfflineMode, setOfflineMode } from '../services/storage';
 import { detectProvider } from '../services/api';
 import { readRunLog, clearRunLog, RUN_LOG_PATH } from '../services/runlog';
 
-export default function SettingsScreen() {
+export default function SettingsScreen({ navigation }) {
   const [modelExists, setModelExists] = useState(false);
   const [sttExists, setSttExists] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -382,6 +382,23 @@ export default function SettingsScreen() {
             )}
           </View>
         )}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.title}>Background Permissions</Text>
+        <Text style={styles.desc}>
+          Notifications, running in the background, the doomscroll bubble and
+          your phone's auto-start setting. Without them, results only arrive
+          while the app is open.
+        </Text>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={styles.downloadBtn}
+            onPress={() => navigation.navigate('Permissions', { fromSettings: true })}
+          >
+            <Text style={styles.btnText}>Review Permissions</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* The run log is one CSV row per analysis and it is how a batch of reels

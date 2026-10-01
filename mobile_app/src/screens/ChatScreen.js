@@ -15,6 +15,7 @@ import ReportCard from '../components/ReportCard';
 import { chatWithAiApi, analyzeReelApi } from '../services/api';
 import { getChatHistory, saveChatMessage, saveReelResult } from '../services/storage';
 import { beginAnalysis, finishAnalysis, failAnalysis } from '../services/jobNotify';
+import { shortRef } from '../services/trace';
 
 // Date.now() collides when two messages are created in the same millisecond,
 // which is how a report and its follow-up ended up sharing a key.
@@ -113,7 +114,7 @@ export default function ChatScreen({ route, navigation }) {
       setLoading(true);
 
       // Keeps the process alive and shows "analysing" while the user is away.
-      beginAnalysis();
+      beginAnalysis(shortRef(initialUrl));
       try {
         const result = await analyzeReelApi(initialUrl);
         await saveReelResult(result);

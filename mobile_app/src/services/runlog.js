@@ -11,6 +11,7 @@ const FILE = FileSystem.documentDirectory + 'factcheck_runs.csv';
 const COLUMNS = [
   'timestamp',
   'shortcode',
+  'url',              // the link as pasted, so a batch can be re-run from the CSV alone
   'verdict',
   'verdictRaw',       // before the deterministic rules ran
   'techName',

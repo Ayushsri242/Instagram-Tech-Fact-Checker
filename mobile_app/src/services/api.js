@@ -4,6 +4,7 @@ import { getGroqApiKey, getApiProvider, getApiModel } from './secrets';
 import { getOfflineMode, saveApiLimits } from './storage';
 import { runVerifiers, fillMissingPageText } from './verifiers';
 import { logRun } from './runlog';
+import { trace, shortRef } from './trace';
 
 const { TechFactChecker } = NativeModules;
 
@@ -1037,8 +1038,10 @@ export const analyzeReelApi = async (url) => {
   const stage = {};
   let mark = startedAt;
   const lap = (name) => { stage[name] = Date.now() - mark; mark = Date.now(); };
+  trace('pipeline start ' + shortRef(url));
   const media = await TechFactChecker.analyzeAndVerify(url, false);
   lap('native');
+  trace('pipeline native done ' + shortRef(url) + ' in ' + stage.native + 'ms, reelId=' + media.reelId);
   const transcript = media.rawTranscript || '';
   const ocrText = media.ocrText || '';
   const log = (label, value) => {
@@ -1145,6 +1148,7 @@ export const analyzeReelApi = async (url) => {
   await logRun({
     timestamp: new Date().toISOString(),
     shortcode: (String(url).match(/(?:reel|p)\/([A-Za-z0-9_-]+)/) || [])[1] || url,
+    url: String(url),
     verdict: normalized.verdict,
     verdictRaw,
     techName: report.tech_name || claimsData.tech_name || '',
@@ -1205,6 +1209,8 @@ export const analyzeReelApi = async (url) => {
     caption: media.caption || '',
     author: media.author || '',
   });
+  trace('pipeline done ' + shortRef(url) + ' verdict=' + normalized.verdict +
+    ' subject=' + (subject.name || 'none') + ' total=' + (Date.now() - startedAt) + 'ms');
   delete normalized.__rules;
 
   return {
