@@ -19,8 +19,18 @@ const { TechFactChecker } = NativeModules;
 
 export const PERMISSIONS_DONE_KEY = '@tfc_permissions_done';
 // The auto-start setting lives in vendor screens with no API to read it back,
-// so the only record of it is the user saying they turned it on.
-const AUTOSTART_CONFIRMED_KEY = '@tfc_autostart_confirmed';
+// so the only record of it is the user saying they turned it on. _v2: the first
+// version saved 'yes' the moment the screen opened, so every old 'yes' is void.
+const AUTOSTART_CONFIRMED_KEY = '@tfc_autostart_confirmed_v2';
+
+// What to do on the screen that actually opened. On OnePlus (OxygenOS 14/15)
+// none of the vendor auto-start screens can be opened by another app, so it
+// falls back to App info - which, with no instructions, left the user on a
+// screen with nothing obvious to change.
+const AUTOSTART_STEPS = {
+  oem: 'Find Tech Fact Checker in the list and switch it ON.',
+  app_details: 'On the App info screen: tap Battery usage, then turn ON "Allow auto launch" and "Allow background activity". (Names vary slightly by phone.)',
+};
 
 // Explain, then ask - one row at a time, never a wall of popups.
 //
@@ -35,6 +45,9 @@ export default function PermissionsScreen({ navigation, route }) {
   const fromSettings = route?.params?.fromSettings;
   const [state, setState] = useState(null);
   const [autostartDone, setAutostartDone] = useState(false);
+  // Which screen opened ('oem' | 'app_details'); set means "waiting for the
+  // user to say whether they turned it on".
+  const [autostartVia, setAutostartVia] = useState(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -79,8 +92,15 @@ export default function PermissionsScreen({ navigation, route }) {
   const openAutostart = async () => {
     const via = await TechFactChecker.openAutostartSettings().catch(() => null);
     trace('permissions: autostart screen opened via ' + via);
-    // There is no way to read the vendor toggle back. Opening the screen is the
-    // best signal available; the user can always come back here.
+    // Opening the screen proves nothing - the toggle cannot be read back. Ask
+    // when the user returns instead of marking it done on the tap.
+    setAutostartVia(via === 'oem' ? 'oem' : 'app_details');
+  };
+
+  const confirmAutostart = async (turnedOn) => {
+    trace('permissions: autostart confirmed=' + turnedOn);
+    setAutostartVia(null);
+    if (!turnedOn) return;
     await AsyncStorage.setItem(AUTOSTART_CONFIRMED_KEY, 'yes').catch(() => {});
     setAutostartDone(true);
   };
@@ -118,11 +138,14 @@ export default function PermissionsScreen({ navigation, route }) {
     },
     ...(state.hasAutostartScreen ? [{
       key: 'autostart',
-      title: 'Auto-start',
-      why: (maker ? maker.charAt(0).toUpperCase() + maker.slice(1) : 'Your phone') +
-        ' has its own app freezer on top of Android. Turn Tech Fact Checker ON in the screen that opens.',
+      title: 'Keep running after restart',
+      why: autostartVia
+        ? AUTOSTART_STEPS[autostartVia]
+        : (maker ? maker.charAt(0).toUpperCase() + maker.slice(1) : 'Your phone') +
+          ' can stop apps on its own, e.g. after a restart. Opens a settings screen - this row then tells you what to switch on.',
       done: autostartDone,
       action: openAutostart,
+      asking: !!autostartVia,
     }] : []),
   ] : [];
 
@@ -141,18 +164,34 @@ export default function PermissionsScreen({ navigation, route }) {
         {!state && <Text style={styles.subtitle}>Checking...</Text>}
 
         {rows.map((r) => (
-          <View key={r.key} style={[styles.row, r.done && styles.rowDone]}>
+          <View key={r.key}>
+          <View style={[styles.row, r.done && styles.rowDone, r.asking && styles.rowAsking]}>
             <View style={{ flex: 1, paddingRight: 10 }}>
               <Text style={styles.rowTitle}>
                 {r.done ? 'Done: ' : ''}{r.title}{r.optional ? '  (optional)' : ''}
               </Text>
               <Text style={styles.rowWhy}>{r.why}</Text>
             </View>
-            {!r.done && (
+            {!r.done && !r.asking && (
               <TouchableOpacity style={styles.allowBtn} onPress={r.action}>
                 <Text style={styles.allowText}>Allow</Text>
               </TouchableOpacity>
             )}
+          </View>
+          {r.asking && (
+            <View style={styles.askRow}>
+              <Text style={styles.askText}>Did you turn it on?</Text>
+              <TouchableOpacity style={styles.allowBtn} onPress={() => confirmAutostart(true)}>
+                <Text style={styles.allowText}>Yes</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.askNo} onPress={r.action}>
+                <Text style={styles.askNoText}>Open again</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.askNo} onPress={() => confirmAutostart(false)}>
+                <Text style={styles.askNoText}>Not now</Text>
+              </TouchableOpacity>
+            </View>
+          )}
           </View>
         ))}
 
@@ -190,6 +229,25 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   rowDone: { borderColor: colors.success || '#22c55e', opacity: 0.75 },
+  rowAsking: { borderColor: colors.accentCyan, marginBottom: 0, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
+  askRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: colors.accentCyan,
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+    paddingHorizontal: 14,
+    paddingBottom: 12,
+    marginBottom: 10,
+  },
+  askText: { color: colors.textPrimary, fontSize: 14, fontWeight: '600', flexBasis: '100%', marginBottom: 2 },
+  askNo: { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 8, borderWidth: 1, borderColor: colors.cardBorder },
+  askNoText: { color: colors.textPrimary, fontWeight: '600' },
   rowTitle: { color: colors.textPrimary, fontSize: 15, fontWeight: '700' },
   rowWhy: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginTop: 3 },
   allowBtn: { backgroundColor: colors.accentCyan, paddingHorizontal: 16, paddingVertical: 9, borderRadius: 8 },

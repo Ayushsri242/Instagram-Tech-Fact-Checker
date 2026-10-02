@@ -82,7 +82,7 @@ class GroqTranscriber {
                 .addFormDataPart("model", MODEL)
                 .addFormDataPart("response_format", "verbose_json")
                 .addFormDataPart("temperature", "0")
-                .addFormDataPart("prompt", caption.take(PROMPT_CHARS))
+                .addFormDataPart("prompt", spellingHint(caption))
                 .addFormDataPart("file", upload.name, upload.asRequestBody("audio/mp4".toMediaType()))
                 .build()
 
@@ -135,6 +135,21 @@ class GroqTranscriber {
             audio.delete()
         }
     }
+
+    /**
+     * The caption as a spelling hint, minus what creators write for the
+     * algorithm rather than the viewer: hashtags, @mentions, and "comment X /
+     * follow / link in bio" lines. Whisper can echo prompt text into the
+     * transcript, and those words are not what the video says.
+     */
+    private fun spellingHint(caption: String): String =
+        caption.lines()
+            .filterNot { Regex("(?i)\\b(comment|follow|link in bio|dm me|save this|share this)\\b").containsMatchIn(it) }
+            .joinToString(" ")
+            .replace(Regex("[#@][\\w.]+"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(PROMPT_CHARS)
 
     /** Copies the first audio track into an .m4a container. False if there is none. */
     private fun extractAudio(video: File, out: File): Boolean {
