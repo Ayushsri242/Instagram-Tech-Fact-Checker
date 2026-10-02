@@ -29,7 +29,7 @@ const AUTOSTART_CONFIRMED_KEY = '@tfc_autostart_confirmed_v2';
 // screen with nothing obvious to change.
 const AUTOSTART_STEPS = {
   oem: 'Find Tech Fact Checker in the list and switch it ON.',
-  app_details: 'On the App info screen: tap Battery usage, then turn ON "Allow auto launch" and "Allow background activity". (Names vary slightly by phone.)',
+  app_details: 'Tap Allow, then Battery usage, and turn ON "Allow background activity".',
 };
 
 // Explain, then ask - one row at a time, never a wall of popups.
@@ -112,7 +112,6 @@ export default function PermissionsScreen({ navigation, route }) {
     else navigation.reset({ index: 0, routes: [{ name: 'Home' }] });
   };
 
-  const maker = String((state && state.manufacturer) || '').toLowerCase();
   const rows = state ? [
     {
       key: 'notifications',
@@ -139,10 +138,9 @@ export default function PermissionsScreen({ navigation, route }) {
     ...(state.hasAutostartScreen ? [{
       key: 'autostart',
       title: 'Keep running after restart',
-      why: autostartVia
-        ? AUTOSTART_STEPS[autostartVia]
-        : (maker ? maker.charAt(0).toUpperCase() + maker.slice(1) : 'Your phone') +
-          ' can stop apps on its own, e.g. after a restart. Opens a settings screen - this row then tells you what to switch on.',
+      // One plain instruction, shown before and after the tap - a promise that
+      // "this row then tells you" was easy to miss (user feedback, Oct 2).
+      why: AUTOSTART_STEPS[autostartVia || 'app_details'],
       done: autostartDone,
       action: openAutostart,
       asking: !!autostartVia,
