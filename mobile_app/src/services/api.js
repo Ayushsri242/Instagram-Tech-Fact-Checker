@@ -386,9 +386,24 @@ const rankEvidence = (evidence, techName, tools, pinned = []) => {
   }
   const uniq = [...new Set(needles.filter((n) => n.length >= 4))];
 
+  // Rows about the SUBJECT outrank rows about side tools. The pin above only
+  // covers a subject that is a GitHub repo; Jev (Oct 2) was a name from the
+  // caption, so all 12 seats went to Claude Code / Codex / TypeSafe pages, the
+  // model read nothing about Jev, called it "fabricated" and the verdict went
+  // MISLEADING -> FAKE between two runs. Matched at a word start, so a short
+  // name like "jev" does not hit the middle of unrelated words.
+  const subjectNeedles = [...new Set([
+    String(techName || '').toLowerCase().trim(),
+    String(techName || '').toLowerCase().replace(/[\s_.-]+/g, ''),
+    String(techName || '').toLowerCase().replace(/\s+/g, '-'),
+  ])].filter((n) => n.length >= 3);
+  const aboutSubject = (hay) =>
+    subjectNeedles.some((n) => new RegExp('(?:^|[^a-z0-9])' + escapeForRegex(n)).test(hay));
+
   const score = (item) => {
     const hay = `${item.url || ''} ${item.title || ''}`.toLowerCase();
     let s = isPinned(item) ? 100 : 0;
+    if (aboutSubject(hay)) s += 40;
     const onTopic = uniq.some((n) => hay.includes(n));
     if (onTopic) s += 10;
     // A bare domain root is usually a landing page rather than evidence - but
@@ -398,11 +413,27 @@ const rankEvidence = (evidence, techName, tools, pinned = []) => {
     return s;
   };
 
-  return [...(evidence || [])]
+  // Subject rows lead, but leave at least 4 seats for everything else: the
+  // report still has to check the side tools the post names.
+  const MAX_SUBJECT_ROWS = MAX_EVIDENCE_ROWS - 4;
+  const ranked = [...(evidence || [])]
     .map((item, i) => ({ item, i, s: score(item) }))
-    .sort((a, b) => (b.s - a.s) || (a.i - b.i))
-    .slice(0, MAX_EVIDENCE_ROWS)
-    .map((x) => x.item);
+    .sort((a, b) => (b.s - a.s) || (a.i - b.i));
+  const kept = [];
+  let subjectRows = 0;
+  for (const x of ranked) {
+    if (kept.length >= MAX_EVIDENCE_ROWS) break;
+    const isSubject = x.s >= 40 && !isPinned(x.item);
+    if (isSubject && subjectRows >= MAX_SUBJECT_ROWS) continue;
+    if (isSubject) subjectRows += 1;
+    kept.push(x.item);
+  }
+  // Seats the cap left empty go back to subject rows rather than staying unused.
+  for (const x of ranked) {
+    if (kept.length >= MAX_EVIDENCE_ROWS) break;
+    if (!kept.includes(x.item)) kept.push(x.item);
+  }
+  return kept;
 };
 
 // Carousels print their own slide counter - "01/07" on slide one. When the
