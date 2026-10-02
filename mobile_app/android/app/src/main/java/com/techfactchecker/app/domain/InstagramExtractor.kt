@@ -38,6 +38,8 @@ class InstagramExtractor(private val context: Context) {
     companion object {
         private const val TAG = "TFC_DEBUG"
         private const val HARD_TIMEOUT_MS = 25_000L
+        /** The full-page retry is a bonus attempt; never let it cost as much as the first. */
+        private const val FULL_PAGE_TIMEOUT_MS = 12_000L
         private const val SETTLE_AFTER_LOAD_MS = 3_000L
         private const val MOBILE_UA =
             "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -142,7 +144,9 @@ class InstagramExtractor(private val context: Context) {
         // A reel must yield a video. Images only would mean we grabbed the poster frame,
         // which used to sail through as a bogus "image" post - fail loudly instead.
         if (isReel && result.videoUrl.isNullOrBlank()) {
-            Log.e(TAG, "EXTRACT: reel had no video URL, rejecting so Render fallback runs")
+            Log.e(TAG, "EXTRACT: reel had no video URL in the embed, trying the full page")
+            tryFullPage(shortcode, activity, result)?.let { return it }
+            Log.e(TAG, "EXTRACT: full page gave no video either, rejecting so Render fallback runs")
             lastPartial = result
             return null
         }
@@ -152,7 +156,9 @@ class InstagramExtractor(private val context: Context) {
         // frame - one image, no video - and it used to be analysed as a one-image
         // post with no speech. A real one-image post costs one extra Render call.
         if (!isReel && result.videoUrl.isNullOrBlank() && result.imageUrls.size == 1) {
-            Log.e(TAG, "EXTRACT: /p/ post gave a single image and no video - asking Render whether it is a video")
+            Log.e(TAG, "EXTRACT: /p/ post gave a single image and no video - trying the full page")
+            tryFullPage(shortcode, activity, result)?.let { return it }
+            Log.e(TAG, "EXTRACT: full page gave no video - asking Render whether it is a video")
             lastPartial = result
             return null
         }
@@ -166,11 +172,49 @@ class InstagramExtractor(private val context: Context) {
         return result
     }
 
+    /**
+     * Second try before the Render backup server: the post's full page, logged
+     * out. Instagram leaves the video out of the EMBED page for some reels
+     * (licensed music, embedding turned off) but can still serve it on the
+     * public page. Logging in inside the app was ruled out - users will not hand
+     * their Instagram login to a third-party app.
+     *
+     * Accepted only as a single progressive file: a URL carrying a byte range is
+     * one piece of a split (DASH) stream, often video without audio.
+     */
+    private suspend fun tryFullPage(shortcode: String, activity: Activity?, embed: ExtractResult): ExtractResult? {
+        val fullUrl = "https://www.instagram.com/reel/" + shortcode + "/"
+        val full = withContext(Dispatchers.Main) { runWebView(fullUrl, true, activity, FULL_PAGE_TIMEOUT_MS) }
+        if (full == null) {
+            Log.i(TAG, "EXTRACT: full page result: nothing")
+            return null
+        }
+        val video = full.videoUrl
+        if (video.isNullOrBlank() || video.contains("bytestart") || video.contains("byteend")) {
+            Log.i(TAG, "EXTRACT: full page result: no usable video (" + (video?.take(80) ?: "none") + ")")
+            return null
+        }
+        Log.i(TAG, "EXTRACT: OK via=FULL_PAGE hasVideo=true embedCaptionChars=" + embed.caption.length)
+        return ExtractResult(
+            type = "video",
+            videoUrl = video,
+            imageUrls = emptyList(),
+            // The embed page carries the caption even when it hides the video.
+            caption = full.caption.ifBlank { embed.caption },
+            author = if (full.author.isBlank() || full.author == "Creator") embed.author else full.author,
+            via = "FULL_PAGE",
+            slidesJson = embed.slidesJson,
+            slidesDom = embed.slidesDom,
+            candidates = embed.candidates
+        )
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private suspend fun runWebView(
         embedUrl: String,
         isReel: Boolean,
-        activity: Activity?
+        activity: Activity?,
+        timeoutMs: Long = HARD_TIMEOUT_MS
     ): ExtractResult? = suspendCancellableCoroutine { continuation ->
         val handler = Handler(Looper.getMainLooper())
         val finished = AtomicBoolean(false)
@@ -334,7 +378,7 @@ class InstagramExtractor(private val context: Context) {
             finish(sniff)
         }
         timeoutRunnable = timeout
-        handler.postDelayed(timeout, HARD_TIMEOUT_MS)
+        handler.postDelayed(timeout, timeoutMs)
 
         continuation.invokeOnCancellation { finish(null) }
 
