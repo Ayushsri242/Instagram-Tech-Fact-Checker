@@ -250,14 +250,36 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
     return true;
   };
 
+  // Other slug-shaped text on screen is weaker: file paths and "A/B" pairs read
+  // exactly like owner/repo. On the AutoShorts reel, "M1/M2", "Users/nacbook",
+  // "Applications/AutoShorts.app" and "Debian/Ubuntu" were put FIRST, pushed the
+  // model's own searches past the 10-query cut, and the report then said no
+  // repo existed. Drop the path-shaped ones, and queue the rest AFTER the
+  // model's queries instead of before them.
+  const looksLikePath = (slug) => {
+    const [owner, repo] = slug.split('/');
+    if (OS_PATH_PARTS.has(owner.toLowerCase())) return true;                   // Users/..., Applications/...
+    if (/\.(app|dmg|exe|msi|zip|mp4|mov|png|jpe?g|gif|txt|md|json|ya?ml|pdf|csv|sh)$/i.test(repo)) return true;
+    if (owner.length <= 3 && repo.length <= 3) return true;                    // M1/M2, A/B
+    return false;
+  };
   const slugPattern = /\b([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)\b/g;
   let match = slugPattern.exec(ocrText || '');
   while (match !== null) {
     const slug = match[1];
-    if (!slug.startsWith('http') && isUsableSlug(slug)) {
-      if (!queries.includes(slug + ' github')) queries.unshift(slug + ' github');
+    if (!slug.startsWith('http') && isUsableSlug(slug) && !looksLikePath(slug)) {
+      if (!queries.includes(slug + ' github')) queries.push(slug + ' github');
     }
     match = slugPattern.exec(ocrText || '');
+  }
+  // A repo the post PRINTS as a github.com URL goes first. The pattern above
+  // stops at "github.com/jaywebtech" and never produced "jaywebtech/autoshorts",
+  // so the one repo the creator pointed at was never searched for directly.
+  for (const slug of printedGithubSlugs(ocrText).reverse()) {
+    const q = slug + ' github';
+    const at = queries.indexOf(q);
+    if (at !== -1) queries.splice(at, 1);
+    queries.unshift(q);
   }
 
   // Only search for tools the model actually anchored to a repo or package.
@@ -294,6 +316,27 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
   return data;
 };
 
+// Path segments that make "x/y" a file path, not a GitHub owner/repo.
+const OS_PATH_PARTS = new Set([
+  'users', 'user', 'home', 'applications', 'documents', 'downloads', 'desktop',
+  'library', 'usr', 'opt', 'var', 'tmp', 'etc', 'bin', 'volumes', 'system',
+  'program files', 'appdata', 'clips', 'shorts', 'videos', 'pictures', 'music',
+]);
+
+// Repos the post prints as a github.com URL, as owner/repo. OCR splits URLs
+// ("github. com/", "github.c om/"), so the separators are whitespace-tolerant.
+const printedGithubSlugs = (ocrText) => {
+  const out = [];
+  const re = /github\s*\.\s*c\s*o\s*m\s*\/\s*([\w.-]+)\s*\/\s*([\w.-]+)/gi;
+  for (const m of String(ocrText || '').matchAll(re)) {
+    const slug = m[1] + '/' + m[2].replace(/\.git$/i, '').replace(/\.+$/, '');
+    if (!GITHUB_RESERVED_PATHS.has(m[1].toLowerCase()) && !out.some((s) => s.toLowerCase() === slug.toLowerCase())) {
+      out.push(slug);
+    }
+  }
+  return out;
+};
+
 // Groq's free tier caps a single request at 8000 tokens for this org, and a
 // long reel (88s of transcript + 10 frames of OCR + 30 evidence rows) was
 // asking for 9050 - a hard failure that no amount of waiting fixes.
@@ -311,7 +354,18 @@ const MAX_OCR = 3000;
 // article - chrome that happens not to block scrapers. The actual repo page
 // scraped to zero characters. Having page text measures who allows scraping,
 // not who is relevant.
-const rankEvidence = (evidence, techName, tools) => {
+// `pinned` - repo slugs that must reach the model: the subject the picker chose
+// and any repo the post prints. The AutoShorts reel fetched JayWebtech/autoshorts
+// on all five runs, but on three of them rows about Homebrew, Winget, FFmpeg,
+// Rust and React filled the 12 seats first; the model then wrote "no public
+// repository was found" and the verdict went MISLEADING. Same post, same input,
+// TRUE / PARTIALLY_TRUE / MISLEADING depending on the order of the searches.
+const rankEvidence = (evidence, techName, tools, pinned = []) => {
+  const pins = pinned.map((s) => 'github.com/' + String(s).toLowerCase());
+  const isPinned = (item) => {
+    const url = String(item.url || '').toLowerCase();
+    return pins.some((p) => url.includes(p + '/') || url.endsWith(p) || url.includes(p + '?') || url.includes(p + '#'));
+  };
   const needles = [];
   if (techName) needles.push(String(techName).toLowerCase());
   for (const t of tools || []) {
@@ -334,7 +388,7 @@ const rankEvidence = (evidence, techName, tools) => {
 
   const score = (item) => {
     const hay = `${item.url || ''} ${item.title || ''}`.toLowerCase();
-    let s = 0;
+    let s = isPinned(item) ? 100 : 0;
     const onTopic = uniq.some((n) => hay.includes(n));
     if (onTopic) s += 10;
     // A bare domain root is usually a landing page rather than evidence - but
@@ -371,8 +425,8 @@ export const slideCoverage = (ocrText, imagesUsed) => {
   return declared > seen ? { declared, seen } : null;
 };
 
-const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, coverage) => {
-  const kept = rankEvidence(evidence, claimsData && claimsData.tech_name, claimsData && claimsData.tools);
+const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, coverage, keptRows) => {
+  const kept = keptRows || rankEvidence(evidence, claimsData && claimsData.tech_name, claimsData && claimsData.tools);
   if ((evidence || []).length > kept.length) {
     console.warn(`Evidence trimmed for token budget: ${evidence.length} -> ${kept.length} rows.`);
   }
@@ -904,7 +958,7 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
     if (!best.printed && modelScore > best.hits) {
       return { name: modelName, why: `model name, scores ${modelScore} against verified repo ${best.slug} at ${best.hits}` };
     }
-    return { name: best.name, why: `verified repo ${best.slug}, score ${best.hits}` + (best.printed ? ' (slug printed in the post)' : '') };
+    return { name: best.name, slug: best.slug, why: `verified repo ${best.slug}, score ${best.hits}` + (best.printed ? ' (slug printed in the post)' : '') };
   }
   if (candidates.length) {
     // Everything the evidence verified is something this post is arguing
@@ -1010,7 +1064,7 @@ const normalizeReport = (report, evidence) => {
 // and the normaliser without a device. Testing on hardware costs a build, an
 // Instagram fetch and an API call per case, which is why earlier sessions kept
 // tuning against a single reel and calling it a pass.
-export const __test = { pickSubject, normalizeReport, looksLikeSubject, applyEvidenceRules };
+export const __test = { pickSubject, normalizeReport, looksLikeSubject, applyEvidenceRules, rankEvidence, printedGithubSlugs };
 
 const normalizeTools = (tools) => (tools || []).map((tool) => ({
   name: tool.name || 'Tool',
@@ -1117,7 +1171,13 @@ export const analyzeReelApi = async (url) => {
   const coverage = slideCoverage(ocrText, media.imagesUsed);
   if (coverage) log('COVERAGE', coverage);
   jobStage(4);
-  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage);
+  // The rows the model will read, decided once here so the run log records
+  // exactly these. The CSV used to log evidence.slice(0, 12) - the first rows
+  // FOUND, not the ones ranked and sent - so "what the model saw" was wrong.
+  const pinned = [...new Set([subject.slug, ...printedGithubSlugs(ocrText)].filter(Boolean))];
+  const kept = rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned);
+  if (pinned.length) log('PINNED EVIDENCE', pinned);
+  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage, kept);
   lap('synthesis');
   log('STAGE 3 RAW REPORT', report);
   const verdictRaw = report.verdict;
@@ -1126,7 +1186,7 @@ export const analyzeReelApi = async (url) => {
     subjectNamed: Boolean(subject.name),
     coverage,
     toolsReal: normalized.toolsReal,
-    rowsWithText: evidence.slice(0, MAX_EVIDENCE_ROWS).filter((e) => (e.pagePreview || '').length > 0).length,
+    rowsWithText: kept.filter((e) => (e.pagePreview || '').length > 0).length,
     hasText: (ocrText.length + transcript.length) > 200,
   });
   log('CONFIDENCE', normalized.confidence);
@@ -1167,8 +1227,8 @@ export const analyzeReelApi = async (url) => {
     install: tools.map((t) => t.install).filter(Boolean).join(' ; '),
     structuredRows: structured.length,
     searchRows: searched.length,
-    keptRows: Math.min(evidence.length, 12),
-    keptWithPageText: evidence.slice(0, 12).filter((e) => (e.pagePreview || '').length > 0).length,
+    keptRows: kept.length,
+    keptWithPageText: kept.filter((e) => (e.pagePreview || '').length > 0).length,
     evidenceRules: (normalized.__rules || []).join(' ; '),
     claims: (normalized.claims || []).length,
     gotchas: (normalized.gotchas || []).length,
@@ -1203,7 +1263,7 @@ export const analyzeReelApi = async (url) => {
       search_queries: queries,
     }),
     evidenceJson: JSON.stringify(
-      evidence.slice(0, 12).map((e) => ({
+      kept.map((e) => ({
         t: e.title,
         u: e.url,
         p: (e.pagePreview || '').length,
