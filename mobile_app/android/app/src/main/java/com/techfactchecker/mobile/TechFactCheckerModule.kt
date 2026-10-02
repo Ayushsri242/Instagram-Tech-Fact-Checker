@@ -553,34 +553,59 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     Log.e(TAG, "STEP 2b: SOURCE=WEBVIEW via=${webResult.via} type=$mediaType images=${imageUrlList.size}")
                 } else {
                     mediaSource = "RENDER"
-                    Log.e(TAG, "STEP 2b: SOURCE=RENDER (WebView returned nothing, calling cloud service)")
-                    val jsonBody = JSONObject().put("url", url).toString()
-                    val requestBody = jsonBody.toRequestBody("application/json".toMediaType())
-                    val extractRequest = Request.Builder()
-                        .url(VIDEO_SERVICE_URL)
-                        .post(requestBody)
-                        .build()
+                    // What the WebView read before it handed over: Render sends no
+                    // caption, and the caption is the picker's strongest signal.
+                    val partial = instagramExtractor.lastPartial
+                    Log.e(TAG, "STEP 2b: SOURCE=RENDER (WebView returned nothing usable, calling cloud service; partial=${partial != null})")
+                    try {
+                        val jsonBody = JSONObject().put("url", url).toString()
+                        val requestBody = jsonBody.toRequestBody("application/json".toMediaType())
+                        val extractRequest = Request.Builder()
+                            .url(VIDEO_SERVICE_URL)
+                            .post(requestBody)
+                            .build()
 
-                    val extractResponse = httpClient.newCall(extractRequest).execute()
-                    val responseBody = extractResponse.body?.string() ?: throw Exception("Empty response from video service")
-                    Log.i(TAG, "STEP 2c: Render HTTP=${extractResponse.code}, responseBytes=${responseBody.length}")
-                    Log.d(TAG, "STEP 2d: Render response preview=${responseBody.take(200)}")
+                        val extractResponse = httpClient.newCall(extractRequest).execute()
+                        val responseBody = extractResponse.body?.string() ?: throw Exception("Empty response from video service")
+                        Log.i(TAG, "STEP 2c: Render HTTP=${extractResponse.code}, responseBytes=${responseBody.length}")
+                        Log.d(TAG, "STEP 2d: Render response preview=${responseBody.take(200)}")
 
-                    val responseJson = JSONObject(responseBody)
-                    if (responseJson.has("error")) {
-                        throw Exception("Video service error: ${responseJson.getString("error")}")
-                    }
-
-                    mediaType = responseJson.optString("type", "video")
-                    author = responseJson.optString("author", "Creator")
-                    caption = responseJson.optString("caption", "")
-                    if (mediaType == "image") {
-                        val renderImages = responseJson.getJSONArray("image_urls")
-                        for (i in 0 until renderImages.length()) {
-                            imageUrlList.add(renderImages.getString(i))
+                        val responseJson = JSONObject(responseBody)
+                        if (responseJson.has("error")) {
+                            throw Exception("Video service error: ${responseJson.getString("error")}")
                         }
-                    } else {
-                        videoUrlValue = responseJson.getString("video_url")
+
+                        mediaType = responseJson.optString("type", "video")
+                        author = responseJson.optString("author", "Creator")
+                        caption = responseJson.optString("caption", "")
+                        if (mediaType == "image") {
+                            val renderImages = responseJson.getJSONArray("image_urls")
+                            for (i in 0 until renderImages.length()) {
+                                imageUrlList.add(renderImages.getString(i))
+                            }
+                        } else {
+                            videoUrlValue = responseJson.getString("video_url")
+                        }
+                    } catch (e: Exception) {
+                        // A /p/ post with one image goes to Render only to ask "is
+                        // this really a video?". If Render cannot answer, the image
+                        // the WebView found is still a valid post - use it rather
+                        // than failing an analysis that used to succeed.
+                        if (partial == null || partial.imageUrls.isEmpty()) throw e
+                        Log.w(TAG, "STEP 2e: Render failed (${e.message}); using the WebView's ${partial.imageUrls.size} image(s)")
+                        mediaSource = "WEBVIEW"
+                        mediaType = partial.type
+                        imageUrlList.clear()
+                        imageUrlList.addAll(partial.imageUrls)
+                        videoUrlValue = partial.videoUrl ?: ""
+                        extractVia = partial.via
+                        slidesJson = partial.slidesJson
+                        slidesDom = partial.slidesDom
+                        candidateUrls = partial.candidates
+                    }
+                    if (partial != null) {
+                        if (caption.isBlank()) caption = partial.caption
+                        if (author.isBlank() || author == "Creator") author = partial.author
                     }
                 }
 

@@ -112,8 +112,18 @@ class InstagramExtractor(private val context: Context) {
         val isEmpty: Boolean get() = videoUrl.isNullOrBlank() && imageUrls.isEmpty()
     }
 
+    /**
+     * What the WebView did recover when extract() still returned null to force
+     * the Render fallback - the caption and author in particular. Render returns
+     * no caption, so without this a fallback run lost it entirely (set 10,
+     * Dd3LYCHPsbB: captionChars=0).
+     */
+    var lastPartial: ExtractResult? = null
+        private set
+
     /** Returns null when nothing usable was recovered, so the caller can fall back. */
     suspend fun extract(sourceUrl: String, activity: Activity?): ExtractResult? {
+        lastPartial = null
         val shortcode = extractShortcode(sourceUrl)
         if (shortcode == null) {
             Log.e(TAG, "EXTRACT: no shortcode in url=" + sourceUrl)
@@ -133,6 +143,17 @@ class InstagramExtractor(private val context: Context) {
         // which used to sail through as a bogus "image" post - fail loudly instead.
         if (isReel && result.videoUrl.isNullOrBlank()) {
             Log.e(TAG, "EXTRACT: reel had no video URL, rejecting so Render fallback runs")
+            lastPartial = result
+            return null
+        }
+        // The same video shared from the home feed arrives as /p/<code>, not
+        // /reel/<code>, so the check above cannot fire. When the embed hides the
+        // video (licensed music, embedding off) all that is left is the cover
+        // frame - one image, no video - and it used to be analysed as a one-image
+        // post with no speech. A real one-image post costs one extra Render call.
+        if (!isReel && result.videoUrl.isNullOrBlank() && result.imageUrls.size == 1) {
+            Log.e(TAG, "EXTRACT: /p/ post gave a single image and no video - asking Render whether it is a video")
+            lastPartial = result
             return null
         }
         Log.i(

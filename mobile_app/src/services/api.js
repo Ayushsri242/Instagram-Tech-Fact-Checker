@@ -689,6 +689,9 @@ const looksLikeSubject = (name) => {
 // Use Graphify. They Use BASE." - the mention was read, the stance was not.
 // Case 2 did the same with DeepCode.
 const DISMISSAL_VERBS = "don'?t use|do not use|stop using|no more|forget|replace[sd]?|instead of|rip|goodbye to|killer|kills|is dead|obsolete";
+// Words that put a name on the losing side of a comparison: "beat X", "faster
+// than X", "X vs Y" (Y), "compared to X".
+const BASELINE_WORDS = 'beat|beats|beating|outperforms?|outperformed|than|vs\\.?|versus|compared (?:to|with)';
 const escapeForRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Cheap Levenshtein, bounded: only ever called on short product names.
@@ -797,6 +800,11 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
   // "KAT-Coder-V2.5" appears nowhere in the OCR, but "AT-Coder-V2.5" does, and
   // they are the same product.
   const aliases = post.aliases || {};
+  // Tried and reverted (Oct 2): giving the caption weight only to names the
+  // video itself also shows or says, against algorithm-bait captions. It cost
+  // two correct titles - MiMo-V2.6-Distill-Qwen-9B (the slides spell it
+  // differently) and Claude (no speech recorded) - and no recorded run has yet
+  // been mis-titled by a bait caption. Revisit only with such a case in hand.
   const baseScore = (needle) => occurrences(needle) + CAPTION_WEIGHT * countOf(caption, needle);
   const score = (needle) => {
     const source = aliases[needle];
@@ -824,6 +832,16 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
     // Either order: "don't use Graphify" and "Graphify killer" both bury it.
     return new RegExp('(?:' + DISMISSAL_VERBS + ')\\s+(?:the\\s+)?' + n, 'i').test(ocr) ||
       new RegExp(n + '\\s+(?:is\\s+)?(?:killer|is dead|obsolete)', 'i').test(ocr);
+  };
+  // A name the post compares AGAINST is a baseline, not the subject. Phonon-2's
+  // caption says it "just beat Whisper large"; Whisper was named 13 times to
+  // Phonon's 5, and openai/whisper became the title. Same shape as GluFormer in
+  // a chart legend (set 5). The words are in the post, so this is a lookup.
+  const isBaseline = (name) => {
+    const n = escapeForRegex(String(name || '').toLowerCase());
+    if (n.length < 3) return false;
+    const re = new RegExp('(?:' + BASELINE_WORDS + ')\\s+(?:the\\s+|openai\\s+|google\\s+|meta\\s+)?' + n + '(?![\\w-])', 'i');
+    return re.test(ocr) || re.test(caption);
   };
 
   // 1. A repository the evidence confirmed, whose name the post shows - ranked,
@@ -859,7 +877,7 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
     const hits = score(repoName) + (printed ? 100 : 0);
     if (hits < 1) continue;
     if (candidates.some((c) => c.name.toLowerCase() === repoName.toLowerCase())) continue;
-    candidates.push({ name: repoName, slug: m[1] + '/' + m[2], hits, printed, dismissed: isDismissed(repoName) });
+    candidates.push({ name: repoName, slug: m[1] + '/' + m[2], hits, printed, dismissed: isDismissed(repoName) || isBaseline(repoName) });
   }
   // A tool the post promotes outranks one it dismisses, however often the
   // dismissed one is named; within a group, the more the post says it, the more
@@ -880,7 +898,7 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
     // fact, not a mention to be counted: by count, Requarks/wiki won on every
     // "wiki" in "LLM Wiki", and sglang (the engine the model runs on) beat the
     // model the caption had just named.
-    if (!best.printed && modelScore > 0 && namedInCaption(modelName) && !namedInCaption(best.name)) {
+    if (!best.printed && modelScore > 0 && namedInCaption(modelName) &&!namedInCaption(best.name)) {
       return { name: modelName, why: `named in the caption ("${modelName}"), over verified repo ${best.slug} at ${best.hits}` };
     }
     if (!best.printed && modelScore > best.hits) {
