@@ -591,7 +591,12 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                         // this really a video?". If Render cannot answer, the image
                         // the WebView found is still a valid post - use it rather
                         // than failing an analysis that used to succeed.
-                        if (partial == null || partial.imageUrls.isEmpty()) throw e
+                        // Never for a reel: its "images" are the cover plus thumbnails
+                        // of OTHER suggested posts. On Oct 2 a Render timeout sent
+                        // AutoShorts down this path and the app fact-checked a
+                        // different post ("AA, ASTRA, OPUS, JEV"), titled "opus".
+                        // A failed run is honest; a wrong post is not.
+                        if (partial == null || partial.imageUrls.isEmpty() || url.contains("/reel")) throw e
                         Log.w(TAG, "STEP 2e: Render failed (${e.message}); using the WebView's ${partial.imageUrls.size} image(s)")
                         mediaSource = "WEBVIEW"
                         mediaType = partial.type

@@ -1,0 +1,22 @@
+name: Keep video service awake
+
+# The app's backup extractor (video_service/, on Render's free tier) sleeps
+# after 15 minutes without traffic, and waking it took 20-60 s - long enough
+# that a request timed out on Oct 2. A /health ping every 10 minutes keeps it
+# warm. GitHub runs scheduled jobs on a best-effort basis (they can start a few
+# minutes late), and disables them after 60 days with no repository activity.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping /health
+        run: |
+          curl -fsS --max-time 90 --retry 2 --retry-delay 10 \
+            https://instagram-tech-fact-checker.onrender.com/health
