@@ -27,7 +27,7 @@ def extract_video_url():
         return jsonify({"error": "No URL provided"}), 400
     
     try:
-        cmd = ["yt-dlp", "--get-url", "-f", "best[ext=mp4]/best", "--no-warnings", "--no-check-certificates"]
+        cmd = ["yt-dlp", "--dump-json", "-f", "best[ext=mp4]/best", "--no-warnings", "--no-check-certificates"]
         
         # Use Instagram cookies if available
         cookies_content = os.environ.get("INSTAGRAM_COOKIES", "")
@@ -57,12 +57,19 @@ def extract_video_url():
                 return extract_image_post(url)
             return jsonify({"error": error_msg}), 500
         
-        video_url = result.stdout.strip()
+        import json
+        try:
+            info = json.loads(result.stdout.strip())
+            video_url = info.get("url", "")
+            caption = info.get("description", "")
+        except json.JSONDecodeError:
+            video_url = ""
+            caption = ""
         
         if not video_url:
             return jsonify({"error": "Could not extract video URL"}), 500
         
-        return jsonify({"video_url": video_url, "type": "video"})
+        return jsonify({"video_url": video_url, "caption": caption, "type": "video"})
     
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Request timed out"}), 504
