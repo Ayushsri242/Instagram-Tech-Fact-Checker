@@ -149,7 +149,6 @@ export default function HomeScreen({ navigation }) {
         {/* Center Title (Empty State) */}
         <View style={styles.centerContent}>
           <Text style={styles.title}>Tech Fact Checker</Text>
-          <Text style={styles.subtitle}>100% Free - Local-First Micro-Agent</Text>
           <TouchableOpacity 
             style={{ marginTop: 24, padding: 12, backgroundColor: colors.accentCyan, borderRadius: 8 }}
             onPress={async () => {
