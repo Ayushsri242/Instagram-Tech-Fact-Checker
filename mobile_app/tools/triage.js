@@ -211,6 +211,17 @@ for (const r of rows) {
   const label = worst === 'blind' ? 'BLIND  ' : worst === 'suspect' ? 'SUSPECT' : 'clean  ';
   console.log('\n' + label + '  ' + r.shortcode + '  [' + r.verdict + ']  ' + (r.techName || ''));
   for (const h of hits) console.log('   - (' + h.id + ') ' + h.reason);
+  if (worst !== 'clean') {
+    try {
+      const claims = JSON.parse(r.claimsJson || '{}');
+      if (claims.search_queries && claims.search_queries.length) {
+        console.log('     * Queries: ' + claims.search_queries.join(', '));
+      }
+      if (claims.tools && claims.tools.length) {
+        console.log('     * Tools Found: ' + claims.tools.map(t => t.name).join(', '));
+      }
+    } catch (e) {}
+  }
 }
 
 console.log('\n' + '-'.repeat(60));

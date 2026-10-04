@@ -87,6 +87,7 @@ export default function App() {
 
     const sub = DeviceEventEmitter.addListener('ON_REEL_COPIED', (url) => {
       console.log('Doomscroll Mode: Caught URL ->', url);
+      TechFactChecker.setBubbleColor("#00E5FF"); // Immediately reset to blue so user can queue next reel
       // If the bubble logged a copy and this line is missing, JS was frozen.
       trace('doomscroll: JS received reel ' + shortRef(url) + ', queue now ' + (queue.length + 1));
       queue.push(url);

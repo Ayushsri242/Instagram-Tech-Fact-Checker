@@ -212,12 +212,13 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
     ocrText,
     '',
     'Task:',
-    '1. Determine if this post is about a SINGLE tool/technique or MULTIPLE tools/libraries (e.g. "5 LLM Libraries", listicle carousel).',
-    '2. Extract all distinct tools/libraries/frameworks mentioned or shown on screen. Look specifically for GitHub repo names (e.g. owner/repo), pip package names, and domain URLs.',
-    '3. Generate precise DuckDuckGo search queries. If GitHub repo or pip package names are present, include queries like "owner/repo github" or "pip install packagename".',
+    '1. Determine if this post is about a SINGLE tool/technique or MULTIPLE items (e.g. "5 LLM Libraries", "4 Side Hustle Websites").',
+    '2. Extract all distinct tools/libraries/websites/platforms mentioned or shown on screen. Look specifically for GitHub repo names, domain URLs, and platform names.',
+    '3. Generate precise DuckDuckGo search queries. Include queries like "owner/repo github", "pip install packagename", or "site:domain.com" / "domain.com reviews".',
+    '4. Audio transcription often misspells names (e.g. hearing "Zev" when the screen says "Zed"). ALWAYS trust the exact spelling shown in the On-Screen Text over the audio.',
     '',
     'Respond ONLY with valid JSON in this exact structure:',
-    '{"tech_name":"Primary title or main tool name","is_multi_tool":true,"tools":[{"name":"Tool Name","github_repo":"owner/repo or null","pip_command":"pip install ... or null","claim":"Core feature or claim stated"}],"claimed_features":["claim 1","claim 2"],"search_queries":["query 1","query 2"]}',
+    '{"tech_name":"Primary title or main tool/website name","is_multi_tool":true,"tools":[{"name":"Tool or Website Name","github_repo":"owner/repo or null","domain_url":"domain.com or null","pip_command":"pip install ... or null","claim":"Core feature or claim stated"}],"claimed_features":["claim 1","claim 2"],"search_queries":["query 1","query 2"]}',
   ].join('\n');
 
   const data = await callGroqJson(apiKey, [
@@ -527,24 +528,24 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     '- If SINGLE-TOOL: evaluate the single tool deeply.',
     '- Practical Utility First: if a shorthand trick or prompt (e.g. "/eli5") actually produces the claimed result in practice because the AI understands the intent, mark it TRUE or PARTIALLY_TRUE and explain prompt semantics vs native command.',
     '- Name Collision Warning: If a repository or package shares the name of the tool in the post but does something fundamentally different, mark the post MISLEADING or FAKE. The exact tool claimed must exist, not just any project with that name.',
-    '- TRUE: the exact tools/repos claimed exist, are open-source / usable, and work as demonstrated.',
-    '- PARTIALLY_TRUE: the exact tools/repos claimed exist, but with minor technical caveats (early alpha, semantic shortcut, setup prerequisites).',
-    '- HYPE: the underlying concept exists, but marketing claims ("100% replaces everything", "zero effort") are exaggerated.',
-    '- MISLEADING: omits critical limitations, severe pricing catches, or misrepresents functionality.',
+    '- TRUE: the exact tools/repos/platforms claimed exist, are accessible, and work as demonstrated.',
+    '- PARTIALLY_TRUE: the exact tools/repos/platforms claimed exist, but with minor technical caveats (early alpha, semantic shortcut, hidden fees, low gig pay).',
+    '- HYPE: the underlying concept exists, but marketing claims ("100% replaces everything", "zero effort", "instant cash") are exaggerated.',
+    '- MISLEADING: omits critical limitations, severe pricing catches, impossible earnings, or misrepresents functionality.',
     '- FAKE: completely fabricated tools, non-existent repos, scams, or relying on name collisions of unrelated projects.',
     '',
     'Return FIELDS ONLY. Do not write markdown, headings, bullet characters, tables or emoji inside any value.',
     'BE BRIEF. This is a card the reader scans in five seconds, not an article; they ask follow-up questions in chat afterwards.',
-    '- factual_reality: AT MOST 2 sentences, under 220 characters total. Say what the tool is and whether the claim holds. No preamble.',
+    '- factual_reality: AT MOST 2 sentences, under 220 characters total. Say what the tool/platform is and whether the claim holds. No preamble.',
     '- claims: at most 4 items, each one short sentence under 100 characters.',
     '- gotchas: at most 4 items, each one short sentence under 100 characters. Only real blockers, not generic advice.',
     '- tools[].what_it_does: ONE short sentence, under 90 characters.',
-    '- tools: ONLY software the post tells the viewer to install or use. Do NOT list messaging platforms, websites, companies, concepts, architectures or section headings as tools. A product being compared against counts only if the post presents it as an alternative to use.',
-    'Ground every tool entry in the evidence above. Set "status" to "verified" only when the evidence shows the repo exists, "not_found" when it does not. Never invent a repo, install command, URL, price or hardware requirement.',
+    '- tools: ONLY software, platforms, or websites the post tells the viewer to use. Do NOT list generic concepts or section headings as tools.',
+    'Ground every tool/platform entry in the evidence above. Set "status" to "verified" if the evidence confirms the GitHub repo OR the official website/platform exists. Set to "not_found" if neither can be found. Never invent a repo, install command, URL, price or hardware requirement.',
     'Prefer the canonical repository over a fork or mirror. If a repo looks like a fork of a more popular project, name the original.',
     '',
     'Return ONLY JSON:',
-    '{"tech_name":"string","verdict":"TRUE","pricing_model":"Open Source","github_url":"https://github.com/... or null","factual_reality":"2-4 sentence explanation","claims":["one plain sentence per claim"],"tools":[{"name":"Tool Name","repo":"owner/repo or null","install":"pip install x or null","what_it_does":"one plain sentence","caveat":"one plain sentence or null","status":"verified"}],"gotchas":["one plain sentence per caveat"]}',
+    '{"tech_name":"string","verdict":"TRUE","pricing_model":"Open Source or Commercial","github_url":"https://github.com/... or null","factual_reality":"2-4 sentence explanation","claims":["one plain sentence per claim"],"tools":[{"name":"Tool or Website Name","repo":"owner/repo or null","website":"domain.com or null","install":"pip install x or null","what_it_does":"one plain sentence","caveat":"one plain sentence or null","status":"verified"}],"gotchas":["one plain sentence per caveat"]}',
   ].join('\n');
   return callGroqJson(apiKey, [
     { role: 'system', content: 'You are a precise, objective AI technical fact checker. Output strictly valid JSON.' },
@@ -863,6 +864,12 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
   };
   const countIn = (hay, n) => {
     if (n.length < 3) return 0;
+    if (n.length === 3) {
+      // Enforce word boundaries for 3-letter acronyms to prevent substring overcounting (e.g. 'rlm' in 'world')
+      const escaped = n.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+      const match = hay.match(new RegExp(`\\b${escaped}\\b`, 'gi'));
+      return match ? match.length : 0;
+    }
     let count = 0, i = 0;
     while ((i = hay.indexOf(n, i)) !== -1) { count += 1; i += n.length; }
     return count;
@@ -949,8 +956,8 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
     // A three-letter repo name is an acronym for a concept, not the product a
     // post is about, and counting substrings flatters it: "rlm" scored 13 hits
     // against "prime-agent"'s 11 on a post whose every frame says Prime Agent,
-    // because RLM is the technique the harness is built on.
-    if (repoName.length < 4) continue;
+    // because RLM is the technique the harness is built on. (Fixed: 3-letter words now require boundaries)
+    if (repoName.length < 3) continue;
     // The creator's handle is not the product, however often it is stamped on
     // the slides.
     if (isAuthorHandle(repoName)) continue;
@@ -1061,6 +1068,7 @@ const normalizeReport = (report, evidence) => {
     .map((t) => ({
       name: cleanLine(t.name),
       repo: cleanLine(t.repo) || null,
+      website: cleanLine(t.website) || null,
       install: cleanLine(t.install) || null,
       whatItDoes: clampSentences(cleanLine(t.what_it_does), 1, 100),
       caveat: cleanLine(t.caveat) || null,
@@ -1068,9 +1076,9 @@ const normalizeReport = (report, evidence) => {
     }))
     // The model keeps listing non-tools: "Telegram", "WhatsApp", "ZArchitecture"
     // (OCR noise from a heading) and outright inventions. An entry with no repo,
-    // no install command and nothing verified is not a tool - it is a sentence
+    // no website, no install command and nothing verified is not a tool - it is a sentence
     // wearing a badge, and it makes the card longer while saying less.
-    .filter((t) => t.repo || t.install || t.status === 'verified')
+    .filter((t) => t.repo || t.website || t.install || t.status === 'verified')
     .slice(0, 6);
   // References come from pages we actually fetched, so they cannot be invented.
   const references = [];
