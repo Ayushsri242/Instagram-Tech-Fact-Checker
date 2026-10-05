@@ -11,6 +11,7 @@ import {
   StatusBar,
   ActivityIndicator,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import { getApiLimits, getOfflineMode, getUnseenResults, clearUnseenResults } from '../services/storage';
@@ -31,9 +32,25 @@ export default function HomeScreen({ navigation }) {
   const [job, setJob] = useState(getJobState());
   const [tick, setTick] = useState(Date.now());
 
+  // Coach Mark state
+  const [tutorialStep, setTutorialStep] = useState(0); // 0 = off, 1 = input, 2 = history, 3 = settings
+  const [targetLayout, setTargetLayout] = useState(null);
+
+  const containerRef = React.useRef(null);
+  const inputRef = React.useRef(null);
+  const historyRef = React.useRef(null);
+  const settingsRef = React.useRef(null);
+
   // The progress strip: live while Home is showing, gone on every other screen.
   useFocusEffect(
     useCallback(() => {
+      AsyncStorage.getItem('@tfc_tutorial_done').then((done) => {
+        if (done !== 'yes') {
+          // Add a small delay to let UI render before starting
+          setTimeout(() => setTutorialStep(1), 500);
+        }
+      });
+
       setJob(getJobState());
       const unsubscribe = subscribeJob(setJob);
       const timer = setInterval(() => setTick(Date.now()), 1000);
@@ -43,6 +60,38 @@ export default function HomeScreen({ navigation }) {
       };
     }, [])
   );
+
+  React.useEffect(() => {
+    if (!tutorialStep || !containerRef.current) return;
+
+    let targetRef = null;
+    if (tutorialStep === 1) targetRef = inputRef;
+    else if (tutorialStep === 2) targetRef = historyRef;
+    else if (tutorialStep === 3) targetRef = settingsRef;
+
+    if (targetRef && targetRef.current) {
+      setTimeout(() => {
+        targetRef.current.measureLayout(
+          containerRef.current,
+          (left, top, width, height) => {
+            setTargetLayout({ x: left, y: top, width, height });
+          },
+          () => {
+            console.log('measureLayout failed');
+          }
+        );
+      }, 100);
+    } else if (tutorialStep > 3) {
+      AsyncStorage.setItem('@tfc_tutorial_done', 'yes');
+      setTutorialStep(0);
+      setTargetLayout(null);
+    }
+  }, [tutorialStep]);
+
+  const advanceTutorial = () => {
+    setTargetLayout(null);
+    setTutorialStep(s => s + 1);
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -83,18 +132,23 @@ export default function HomeScreen({ navigation }) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.navigate('History')} style={styles.iconButton}>
-            <Text style={styles.iconText}>History</Text>
-          </TouchableOpacity>
-          <View style={{ flex: 1, alignItems: 'center' }}>
-            {!!limitLine && <Text style={styles.limitText}>{limitLine}</Text>}
+        <View style={{ flex: 1 }} ref={containerRef}>
+          {/* Header */}
+          <View style={styles.header}>
+            <View ref={historyRef}>
+              <TouchableOpacity onPress={() => navigation.navigate('History')} style={styles.iconButton}>
+                <Text style={styles.iconText}>History</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              {!!limitLine && <Text style={styles.limitText}>{limitLine}</Text>}
+            </View>
+            <View ref={settingsRef}>
+              <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.iconButton}>
+                <Text style={styles.iconText}>Settings</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-          <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.iconButton}>
-            <Text style={styles.iconText}>Settings</Text>
-          </TouchableOpacity>
-        </View>
 
         {/* A reel being analysed, or queued by the bubble. The notification says
             the same, but a user who opens the app should not have to pull down
@@ -166,7 +220,7 @@ export default function HomeScreen({ navigation }) {
         </View>
 
         {/* Input Bar at Bottom */}
-        <View style={styles.inputContainer}>
+        <View style={styles.inputContainer} ref={inputRef}>
           <TextInput
             style={styles.input}
             placeholder="Paste Instagram link here..."
@@ -182,6 +236,46 @@ export default function HomeScreen({ navigation }) {
           >
             <Text style={styles.sendText}>Check</Text>
           </TouchableOpacity>
+        </View>
+
+        {/* Coach Mark Overlay */}
+        {tutorialStep > 0 && targetLayout && (
+          <View style={[StyleSheet.absoluteFill, { zIndex: 1000 }]}>
+            {/* Dark overlays around the target */}
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: targetLayout.y, backgroundColor: 'rgba(0,0,0,0.7)' }} />
+            <View style={{ position: 'absolute', top: targetLayout.y + targetLayout.height, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)' }} />
+            <View style={{ position: 'absolute', top: targetLayout.y, left: 0, width: targetLayout.x, height: targetLayout.height, backgroundColor: 'rgba(0,0,0,0.7)' }} />
+            <View style={{ position: 'absolute', top: targetLayout.y, left: targetLayout.x + targetLayout.width, right: 0, height: targetLayout.height, backgroundColor: 'rgba(0,0,0,0.7)' }} />
+
+            {/* Target Highlight Ring */}
+            <View style={{ position: 'absolute', top: targetLayout.y - 2, left: targetLayout.x - 2, width: targetLayout.width + 4, height: targetLayout.height + 4, borderWidth: 2, borderColor: colors.accentCyan, borderRadius: 8 }} />
+
+            {/* Tooltip Box */}
+            <View style={{
+              position: 'absolute',
+              top: tutorialStep === 1 ? targetLayout.y - 100 : targetLayout.y + targetLayout.height + 16,
+              left: 20, right: 20,
+              backgroundColor: colors.surface,
+              padding: 16,
+              borderRadius: 12,
+              alignItems: 'center',
+              borderWidth: 1,
+              borderColor: colors.cardBorder,
+            }}>
+              <Text style={{ color: colors.textPrimary, fontSize: 16, fontWeight: 'bold', marginBottom: 16, textAlign: 'center' }}>
+                {tutorialStep === 1 && "Paste any link here to fact-check it."}
+                {tutorialStep === 2 && "See past verdicts here."}
+                {tutorialStep === 3 && "Manage keys and settings here."}
+              </Text>
+              <TouchableOpacity
+                style={{ backgroundColor: colors.accentCyan, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 }}
+                onPress={advanceTutorial}
+              >
+                <Text style={{ color: '#000', fontWeight: 'bold' }}>{tutorialStep === 3 ? "Got it!" : "Next"}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
