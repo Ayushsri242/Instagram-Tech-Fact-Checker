@@ -24,8 +24,9 @@ export const PERMISSIONS_DONE_KEY = '@tfc_permissions_done';
 
 export default function WelcomeScreen({ navigation, route }) {
   const fromSettings = route?.params?.fromSettings;
+  const initialSlide = route?.params?.initialSlide || 0;
   const { width } = useWindowDimensions();
-  const [currentSlide, setCurrentSlide] = useState(0);
+  const [currentSlide, setCurrentSlide] = useState(initialSlide);
   const scrollRef = useRef(null);
 
   const [hasGroqKey, setHasGroqKey] = useState(false);
@@ -143,6 +144,28 @@ export default function WelcomeScreen({ navigation, route }) {
 
   const canStart = permState.overlay && hasGroqKey;
 
+  useEffect(() => {
+    if (currentSlide < 2) {
+      navigation.setOptions({
+        headerRight: () => (
+          <TouchableOpacity
+            style={{ paddingHorizontal: 10 }}
+            onPress={() => {
+              scrollRef.current?.scrollTo({ x: 2 * width, animated: true });
+              setCurrentSlide(2);
+            }}
+          >
+            <Text style={{ color: colors.textSecondary, fontSize: 16, fontWeight: 'bold' }}>
+              (Skip)
+            </Text>
+          </TouchableOpacity>
+        ),
+      });
+    } else {
+      navigation.setOptions({ headerRight: () => null });
+    }
+  }, [navigation, currentSlide, width]);
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
@@ -152,6 +175,7 @@ export default function WelcomeScreen({ navigation, route }) {
         showsHorizontalScrollIndicator={false}
         onMomentumScrollEnd={handleScroll}
         scrollEventThrottle={16}
+        contentOffset={{ x: initialSlide * width, y: 0 }}
       >
         {/* Slide 1: Welcome */}
         <View style={[styles.slide, { width }]}>
@@ -255,7 +279,7 @@ export default function WelcomeScreen({ navigation, route }) {
             {permState.hasAutostartScreen && (
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>5. Keep running after restart <Text style={styles.optionalBadge}>(Optional)</Text></Text>
-                <Text style={styles.cardDesc}>Keeps the app running even after a device reboot.</Text>
+                <Text style={styles.cardDesc}>In battery usage, enable 'allow background activity' so the app continues to process.</Text>
                 <TouchableOpacity 
                   style={styles.actionBtn} 
                   onPress={askAutostart}
@@ -264,6 +288,11 @@ export default function WelcomeScreen({ navigation, route }) {
                 </TouchableOpacity>
               </View>
             )}
+
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>6. In-App Updates <Text style={styles.optionalBadge}>(Built-in)</Text></Text>
+              <Text style={styles.cardDesc}>I will edit your AndroidManifest.xml to add REQUEST_INSTALL_PACKAGES. Without this, Android blocks apps from updating themselves.</Text>
+            </View>
 
             <TouchableOpacity
               style={[styles.startBtn, !canStart && styles.startBtnDisabled]}
@@ -288,6 +317,8 @@ export default function WelcomeScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  skipBtn: { position: 'absolute', top: Platform.OS === 'android' ? 10 : 20, right: 16, zIndex: 10, padding: 8 },
+  skipText: { color: colors.textSecondary, fontSize: 16, fontWeight: 'bold' },
   slide: { flex: 1, padding: 24, justifyContent: 'center' },
   title: { color: colors.textPrimary, fontSize: 32, fontWeight: 'bold', marginBottom: 12, textAlign: 'center' },
   subtitle: { color: colors.textSecondary, fontSize: 16, marginBottom: 24, textAlign: 'center' },

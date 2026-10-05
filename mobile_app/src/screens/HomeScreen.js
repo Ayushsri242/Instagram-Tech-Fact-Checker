@@ -17,6 +17,7 @@ import { colors } from '../theme/colors';
 import { getApiLimits, getOfflineMode, getUnseenResults, clearUnseenResults } from '../services/storage';
 import { describeLimits } from '../services/api';
 import { getJobState, subscribeJob, JOB_STAGES } from '../services/jobState';
+import { checkForUpdates } from '../services/updater';
 
 const elapsed = (ms) => {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -31,6 +32,7 @@ export default function HomeScreen({ navigation }) {
   const [now, setNow] = useState(Date.now());
   const [job, setJob] = useState(getJobState());
   const [tick, setTick] = useState(Date.now());
+  const [updateProgress, setUpdateProgress] = useState(null);
 
   // Coach Mark state
   const [tutorialStep, setTutorialStep] = useState(0); // 0 = off, 1 = input, 2 = history, 3 = settings
@@ -40,6 +42,11 @@ export default function HomeScreen({ navigation }) {
   const inputRef = React.useRef(null);
   const historyRef = React.useRef(null);
   const settingsRef = React.useRef(null);
+
+  // Check for updates on mount
+  React.useEffect(() => {
+    checkForUpdates(setUpdateProgress);
+  }, []);
 
   // The progress strip: live while Home is showing, gone on every other screen.
   useFocusEffect(
@@ -149,6 +156,15 @@ export default function HomeScreen({ navigation }) {
               </TouchableOpacity>
             </View>
           </View>
+
+        {updateProgress !== null && (
+          <View style={styles.updateBanner}>
+            <Text style={styles.updateTitle}>Downloading Update... {Math.round(updateProgress)}%</Text>
+            <View style={styles.jobTrack}>
+              <View style={[styles.jobFill, { width: `${updateProgress}%` }]} />
+            </View>
+          </View>
+        )}
 
         {/* A reel being analysed, or queued by the bubble. The notification says
             the same, but a user who opens the app should not have to pull down
@@ -316,6 +332,20 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.cardBorder,
+  },
+  updateBanner: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.surface,
+  },
+  updateTitle: {
+    color: colors.primary,
+    fontSize: 15,
+    fontWeight: 'bold',
   },
   readyBanner: {
     marginHorizontal: 16,
