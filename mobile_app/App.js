@@ -16,7 +16,7 @@ import ResultScreen from './src/screens/ResultScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
-import PermissionsScreen, { PERMISSIONS_DONE_KEY } from './src/screens/PermissionsScreen';
+import WelcomeScreen, { PERMISSIONS_DONE_KEY } from './src/screens/WelcomeScreen';
 import { colors } from './src/theme/colors';
 
 const Stack = createNativeStackNavigator();
@@ -155,8 +155,8 @@ export default function App() {
         />
         <Stack.Screen
           name="Permissions"
-          component={PermissionsScreen}
-          options={{ title: 'Permissions' }}
+          component={WelcomeScreen}
+          options={{ title: 'Welcome' }}
         />
       </Stack.Navigator>
     </NavigationContainer>
