@@ -11,6 +11,7 @@ import {
   useWindowDimensions,
   Linking,
   Platform,
+  PermissionsAndroid
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
@@ -27,13 +28,23 @@ export default function WelcomeScreen({ navigation, route }) {
   const [currentSlide, setCurrentSlide] = useState(0);
   const scrollRef = useRef(null);
 
-  const [hasOverlay, setHasOverlay] = useState(false);
   const [hasGroqKey, setHasGroqKey] = useState(false);
+  const [permState, setPermState] = useState({
+    overlay: false,
+    notifications: false,
+    batteryUnrestricted: false,
+    hasAutostartScreen: false
+  });
   
   const refreshPermissions = useCallback(async () => {
     try {
       const s = await TechFactChecker.getPermissionState();
-      setHasOverlay(!!s.overlay);
+      setPermState(s || {
+        overlay: false,
+        notifications: false,
+        batteryUnrestricted: false,
+        hasAutostartScreen: false
+      });
     } catch (e) {
       console.log('Error reading permission state:', e);
     }
@@ -48,7 +59,6 @@ export default function WelcomeScreen({ navigation, route }) {
     }
   }, []);
 
-  // When returning from background (like from browser or settings), check clipboard and permissions
   useEffect(() => {
     refreshPermissions();
     checkGroqKey();
@@ -57,7 +67,6 @@ export default function WelcomeScreen({ navigation, route }) {
       if (next === 'active') {
         refreshPermissions();
         
-        // Clipboard sniffer
         try {
           const hasKey = await getGroqApiKey();
           if (!hasKey) {
@@ -66,7 +75,6 @@ export default function WelcomeScreen({ navigation, route }) {
               await saveGroqApiKey(clipboardContent.trim());
               await Clipboard.setStringAsync('');
               setHasGroqKey(true);
-              // alert is simple, maybe use a nicer UI later, but fine for now
               alert('Groq API Key automatically securely saved from clipboard!');
             }
           } else {
@@ -104,6 +112,26 @@ export default function WelcomeScreen({ navigation, route }) {
     Linking.openURL('https://console.groq.com/keys');
   };
 
+  const askNotifications = async () => {
+    if (Platform.OS === 'android' && Platform.Version >= 33) {
+      const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+      if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN || result === PermissionsAndroid.RESULTS.DENIED) {
+        await TechFactChecker.openNotificationSettings().catch(() => {});
+      }
+    } else {
+      await TechFactChecker.openNotificationSettings().catch(() => {});
+    }
+    refreshPermissions();
+  };
+
+  const askBattery = () => {
+    TechFactChecker.requestBatteryUnrestricted().catch(() => {});
+  };
+
+  const askAutostart = () => {
+    TechFactChecker.openAutostartSettings().catch(() => {});
+  };
+
   const finish = async () => {
     await AsyncStorage.setItem(PERMISSIONS_DONE_KEY, 'yes').catch(() => {});
     if (fromSettings) {
@@ -113,7 +141,7 @@ export default function WelcomeScreen({ navigation, route }) {
     }
   };
 
-  const canStart = hasOverlay && hasGroqKey;
+  const canStart = permState.overlay && hasGroqKey;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -130,7 +158,7 @@ export default function WelcomeScreen({ navigation, route }) {
           <Text style={styles.title}>Welcome to Assay</Text>
           <Text style={styles.subtitle}>Don't get scammed by fake tech reels.</Text>
           <Text style={styles.desc}>
-            Assay runs directly over your favorite apps to fact-check tech content in real-time.
+            Assay helps you fact-check Instagram tech reels in real-time using AI.
           </Text>
           <TouchableOpacity style={styles.btn} onPress={goToNextSlide}>
             <Text style={styles.btnText}>Next</Text>
@@ -139,54 +167,112 @@ export default function WelcomeScreen({ navigation, route }) {
 
         {/* Slide 2: How to Use */}
         <View style={[styles.slide, { width }]}>
-          <Text style={styles.title}>How to Use</Text>
-          <View style={styles.instructionList}>
-            <Text style={styles.desc}>1. Keep the Assay Bubble enabled.</Text>
-            <Text style={styles.desc}>2. Watch an Instagram Reel.</Text>
-            <Text style={styles.desc}>3. Tap 'Copy Link' on the reel.</Text>
-            <Text style={styles.desc}>Alternatively, manually paste the link into the app.</Text>
-          </View>
-          <TouchableOpacity style={styles.btn} onPress={goToNextSlide}>
-            <Text style={styles.btnText}>Next</Text>
-          </TouchableOpacity>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40, justifyContent: 'center', flexGrow: 1 }}>
+            <Text style={styles.title}>How to Use</Text>
+            
+            <View style={styles.instructionBlock}>
+              <Text style={styles.instructionTitle}>1. The Doomscroll Bubble</Text>
+              <Text style={styles.desc}>Tap 'Start Doomscroll Mode' on Home to spawn the bubble. Open Instagram, copy a tech reel's link, then tap the bubble. It turns orange, then blue when the link is received by the app.</Text>
+            </View>
+
+            <View style={styles.instructionBlock}>
+              <Text style={styles.instructionTitle}>2. Manual Check</Text>
+              <Text style={styles.desc}>Alternatively, copy an Instagram link, open Assay, paste it, and tap 'Check'. Wait for the analysis to finish.</Text>
+            </View>
+
+            <View style={styles.instructionBlock}>
+              <Text style={styles.instructionTitle}>Notifications & Verdicts</Text>
+              <Text style={styles.desc}>If notifications are enabled, you will receive updates about processing and when the verdict is ready. Click the notification or go to the History tab to view the summary.</Text>
+            </View>
+
+            <View style={styles.instructionBlock}>
+              <Text style={styles.instructionTitle}>Ask AI</Text>
+              <Text style={styles.desc}>Inside the fact-check report, use the 'Ask AI' button to chat with our chatbot for more information about the reel.</Text>
+            </View>
+
+            <TouchableOpacity style={styles.btn} onPress={goToNextSlide}>
+              <Text style={styles.btnText}>Next</Text>
+            </TouchableOpacity>
+          </ScrollView>
         </View>
 
-        {/* Slide 3: Hard Gate */}
-        <View style={[styles.slide, { width }]}>
-          <Text style={styles.title}>Setup Requirements</Text>
-          <Text style={styles.subtitle}>We need two things to get started.</Text>
+        {/* Slide 3: Hard Gate + Permissions */}
+        <View style={[styles.slide, { width, paddingHorizontal: 0 }]}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 24, paddingBottom: 60, flexGrow: 1, justifyContent: 'center' }}>
+            <Text style={styles.title}>Setup Requirements</Text>
+            <Text style={styles.subtitle}>Configure these to let Assay work smoothly.</Text>
 
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>1. Display over other apps</Text>
-            <Text style={styles.cardDesc}>Needed for the doomscroll bubble.</Text>
-            <TouchableOpacity 
-              style={[styles.actionBtn, hasOverlay && styles.actionBtnDone]} 
-              onPress={openOverlaySettings}
-              disabled={hasOverlay}
+            {/* MANDATORY / HARD GATES */}
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>1. Groq API Key <Text style={styles.mandatoryBadge}>(Required)</Text></Text>
+              <Text style={styles.cardDesc}>Powers the AI analysis. Get one free, then return here.</Text>
+              <TouchableOpacity 
+                style={[styles.actionBtn, hasGroqKey && styles.actionBtnDone]} 
+                onPress={openGroqSettings}
+                disabled={hasGroqKey}
+              >
+                <Text style={styles.btnText}>{hasGroqKey ? 'Connected ✓' : 'Get Free AI Key'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>2. Display over other apps <Text style={styles.mandatoryBadge}>(Required)</Text></Text>
+              <Text style={styles.cardDesc}>Required for the doomscroll bubble to appear over Instagram.</Text>
+              <TouchableOpacity 
+                style={[styles.actionBtn, permState.overlay && styles.actionBtnDone]} 
+                onPress={openOverlaySettings}
+                disabled={permState.overlay}
+              >
+                <Text style={styles.btnText}>{permState.overlay ? 'Granted ✓' : 'Grant Permission'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* OPTIONAL */}
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>3. Notifications <Text style={styles.optionalBadge}>(Optional)</Text></Text>
+              <Text style={styles.cardDesc}>Receive updates when a verdict is ready after you leave the app.</Text>
+              <TouchableOpacity 
+                style={[styles.actionBtn, permState.notifications && styles.actionBtnDone]} 
+                onPress={askNotifications}
+                disabled={permState.notifications}
+              >
+                <Text style={styles.btnText}>{permState.notifications ? 'Granted ✓' : 'Grant Permission'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>4. Run in background <Text style={styles.optionalBadge}>(Optional)</Text></Text>
+              <Text style={styles.cardDesc}>Lets the fact-check keep going while you are in Instagram.</Text>
+              <TouchableOpacity 
+                style={[styles.actionBtn, permState.batteryUnrestricted && styles.actionBtnDone]} 
+                onPress={askBattery}
+                disabled={permState.batteryUnrestricted}
+              >
+                <Text style={styles.btnText}>{permState.batteryUnrestricted ? 'Granted ✓' : 'Grant Permission'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {permState.hasAutostartScreen && (
+              <View style={styles.card}>
+                <Text style={styles.cardTitle}>5. Keep running after restart <Text style={styles.optionalBadge}>(Optional)</Text></Text>
+                <Text style={styles.cardDesc}>Keeps the app running even after a device reboot.</Text>
+                <TouchableOpacity 
+                  style={styles.actionBtn} 
+                  onPress={askAutostart}
+                >
+                  <Text style={styles.btnText}>Open Settings</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[styles.startBtn, !canStart && styles.startBtnDisabled]}
+              onPress={finish}
+              disabled={!canStart}
             >
-              <Text style={styles.btnText}>{hasOverlay ? 'Granted ✓' : 'Grant Permission'}</Text>
+              <Text style={styles.btnText}>{fromSettings ? 'Save & Close' : 'Start App'}</Text>
             </TouchableOpacity>
-          </View>
-
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>2. Groq API Key</Text>
-            <Text style={styles.cardDesc}>Powers the AI analysis. Get one free, then return here.</Text>
-            <TouchableOpacity 
-              style={[styles.actionBtn, hasGroqKey && styles.actionBtnDone]} 
-              onPress={openGroqSettings}
-              disabled={hasGroqKey}
-            >
-              <Text style={styles.btnText}>{hasGroqKey ? 'Connected ✓' : 'Get Free AI Key'}</Text>
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity
-            style={[styles.startBtn, !canStart && styles.startBtnDisabled]}
-            onPress={finish}
-            disabled={!canStart}
-          >
-            <Text style={styles.btnText}>Start App</Text>
-          </TouchableOpacity>
+          </ScrollView>
         </View>
       </ScrollView>
 
@@ -202,21 +288,24 @@ export default function WelcomeScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  slide: { flex: 1, padding: 30, justifyContent: 'center' },
+  slide: { flex: 1, padding: 24, justifyContent: 'center' },
   title: { color: colors.textPrimary, fontSize: 32, fontWeight: 'bold', marginBottom: 12, textAlign: 'center' },
-  subtitle: { color: colors.textSecondary, fontSize: 18, marginBottom: 30, textAlign: 'center' },
-  desc: { color: colors.textPrimary, fontSize: 16, lineHeight: 24, marginBottom: 16, textAlign: 'center' },
-  instructionList: { marginBottom: 30 },
-  btn: { backgroundColor: colors.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 20 },
-  btnText: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
-  card: { backgroundColor: colors.surface, padding: 20, borderRadius: 12, marginBottom: 16 },
-  cardTitle: { color: colors.textPrimary, fontSize: 18, fontWeight: 'bold', marginBottom: 6 },
-  cardDesc: { color: colors.textSecondary, fontSize: 14, marginBottom: 16 },
+  subtitle: { color: colors.textSecondary, fontSize: 16, marginBottom: 24, textAlign: 'center' },
+  desc: { color: colors.textPrimary, fontSize: 15, lineHeight: 22 },
+  instructionBlock: { marginBottom: 20, backgroundColor: colors.surface, padding: 16, borderRadius: 12 },
+  instructionTitle: { color: colors.accentCyan, fontSize: 18, fontWeight: 'bold', marginBottom: 6 },
+  btn: { backgroundColor: colors.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 10 },
+  btnText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
+  card: { backgroundColor: colors.surface, padding: 16, borderRadius: 12, marginBottom: 12 },
+  cardTitle: { color: colors.textPrimary, fontSize: 16, fontWeight: 'bold', marginBottom: 4 },
+  mandatoryBadge: { color: colors.error || '#f87171', fontSize: 12, fontWeight: 'normal' },
+  optionalBadge: { color: colors.textMuted, fontSize: 12, fontWeight: 'normal' },
+  cardDesc: { color: colors.textSecondary, fontSize: 13, marginBottom: 12 },
   actionBtn: { backgroundColor: colors.accentCyan, padding: 12, borderRadius: 8, alignItems: 'center' },
   actionBtnDone: { backgroundColor: colors.success || '#22c55e' },
-  startBtn: { backgroundColor: colors.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 20 },
+  startBtn: { backgroundColor: colors.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 10 },
   startBtnDisabled: { backgroundColor: colors.surfaceLight || '#333', opacity: 0.5 },
-  pagination: { flexDirection: 'row', justifyContent: 'center', position: 'absolute', bottom: 40, width: '100%' },
-  dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.cardBorder, marginHorizontal: 6 },
+  pagination: { flexDirection: 'row', justifyContent: 'center', position: 'absolute', bottom: 20, width: '100%' },
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.cardBorder, marginHorizontal: 6 },
   dotActive: { backgroundColor: colors.primary },
 });
