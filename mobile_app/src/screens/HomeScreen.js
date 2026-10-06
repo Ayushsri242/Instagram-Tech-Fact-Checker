@@ -17,7 +17,7 @@ import { colors } from '../theme/colors';
 import { getApiLimits, getOfflineMode, getUnseenResults, clearUnseenResults } from '../services/storage';
 import { describeLimits } from '../services/api';
 import { getJobState, subscribeJob, JOB_STAGES } from '../services/jobState';
-import { checkForUpdates } from '../services/updater';
+import { subscribeUpdateProgress } from '../services/updater';
 
 const elapsed = (ms) => {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -43,10 +43,9 @@ export default function HomeScreen({ navigation }) {
   const historyRef = React.useRef(null);
   const settingsRef = React.useRef(null);
 
-  // Check for updates on mount
-  React.useEffect(() => {
-    checkForUpdates(setUpdateProgress);
-  }, []);
+  // The update check itself runs from App.js at launch; Home only shows the
+  // download progress once the user accepts an update.
+  React.useEffect(() => subscribeUpdateProgress(setUpdateProgress), []);
 
   // The progress strip: live while Home is showing, gone on every other screen.
   useFocusEffect(

@@ -41,7 +41,9 @@ const Bullet = ({ children }) => (
 
 const openUrl = (url) => Linking.openURL(url).catch(() => {});
 
-export default function ReportCard({ report, techName }) {
+// onAskTool(tool) - provided by the screen; opens chat about one tool the report
+// had no room to check. Without it the chips are shown but not tappable.
+export default function ReportCard({ report, techName, onAskTool }) {
   if (!report) return null;
   const [showSources, setShowSources] = useState(false);
   const verdict = VERDICT_STYLE[report.verdict] || VERDICT_STYLE.UNKNOWN;
@@ -123,7 +125,7 @@ export default function ReportCard({ report, techName }) {
       {otherTools.length > 0 && (
         <Section title="ALSO MENTIONED (TAP TO VERIFY)">
           {otherTools.map((t, i) => (
-            <TouchableOpacity key={i} style={styles.toolCard} onPress={() => navigation.navigate('Chat', { initialQuery: `Verify the tool "" for me.` })}>
+            <TouchableOpacity key={i} style={styles.toolCard} disabled={!onAskTool} onPress={() => onAskTool && onAskTool(t)}>
               <View style={styles.toolHeader}>
                 <Text style={styles.toolName}>{t.name}</Text>
                 <View style={[styles.badge, { backgroundColor: '#6c757d' }]}><Text style={styles.badgeText}>ASK AI</Text></View>

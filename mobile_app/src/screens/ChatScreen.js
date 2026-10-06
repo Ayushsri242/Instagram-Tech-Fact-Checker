@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { colors } from '../theme/colors';
 import ReportCard from '../components/ReportCard';
-import { chatWithAiApi, analyzeReelApi } from '../services/api';
+import { chatWithAiApi, analyzeReelApi, askToolQuestion } from '../services/api';
 import { getChatHistory, saveChatMessage, saveReelResult } from '../services/storage';
 import { beginAnalysis, finishAnalysis, failAnalysis } from '../services/jobNotify';
 import { shortRef } from '../services/trace';
@@ -39,7 +39,7 @@ export default function ChatScreen({ route, navigation }) {
   const { reel, initialUrl, initialQuery } = route.params || {};
   const [currentReel, setCurrentReel] = useState(reel || null);
   const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState(initialQuery || '');
+  const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [isInitialAnalysis, setIsInitialAnalysis] = useState(false);
   const [progressMsg, setProgressMsg] = useState('Extracting information...');
@@ -51,6 +51,10 @@ export default function ChatScreen({ route, navigation }) {
   const aliveRef = useRef(true);
   useEffect(() => () => { aliveRef.current = false; }, []);
   const analysisStartedRef = useRef(false);
+  // A question handed over by the report's "ASK AI" chip is sent once, after
+  // the saved conversation has loaded (sending earlier would be overwritten).
+  const [historyReady, setHistoryReady] = useState(false);
+  const autoAskedRef = useRef(false);
 
   const reelId = currentReel?.reelId || 'unknown';
   const techName = currentReel?.techName || 'Unknown Tool';
@@ -184,18 +188,28 @@ export default function ChatScreen({ route, navigation }) {
         ]);
       }
       setLoading(false);
+      setHistoryReady(true);
     }
   };
+
+  useEffect(() => {
+    if (!historyReady || !initialQuery || autoAskedRef.current) return;
+    autoAskedRef.current = true;
+    setInput('');
+    handleSend(initialQuery);
+  }, [historyReady]);
 
   useEffect(() => {
     loadHistoryOrAnalyze();
   }, [currentReel]);
 
-  const handleSend = async () => {
-    if (!input.trim() || loading || !currentReel) return;
-
-    const textToSend = input.trim();
-    setInput('');
+  // `override` is a question sent without typing it (the ASK AI chips). The
+  // send button passes a press event, which is not a string.
+  const handleSend = async (override) => {
+    const typed = typeof override !== 'string';
+    const textToSend = (typed ? input : override).trim();
+    if (!textToSend || loading || !currentReel) return;
+    if (typed) setInput('');
     const userMsg = { id: newId(), sender: 'user', text: textToSend };
     setMessages((prev) => [...prev, userMsg]);
     setChatLoadingText('Thinking...');
@@ -254,7 +268,13 @@ export default function ChatScreen({ route, navigation }) {
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
           renderItem={({ item }) => {
             if (item.kind === 'report' && item.report) {
-              return <ReportCard report={item.report} techName={item.techName} />;
+              return (
+                <ReportCard
+                  report={item.report}
+                  techName={item.techName}
+                  onAskTool={(tool) => handleSend(askToolQuestion(tool))}
+                />
+              );
             }
             const isUser = item.sender === 'user';
             return (

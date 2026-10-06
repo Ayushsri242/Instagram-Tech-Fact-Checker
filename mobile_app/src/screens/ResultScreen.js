@@ -12,6 +12,7 @@ import {
 import { colors } from '../theme/colors';
 import { getReelById, markResultSeen } from '../services/storage';
 import ReportCard from '../components/ReportCard';
+import { askToolQuestion } from '../services/api';
 import { trace } from '../services/trace';
 
 export default function ResultScreen({ route, navigation }) {
@@ -148,7 +149,11 @@ export default function ResultScreen({ route, navigation }) {
             gotchas and sources - was never on screen at all, because only
             ReportCard draws `reel.report` and this screen never imported it. */}
         {reel.report ? (
-          <ReportCard report={reel.report} techName={reel.techName || reel.title} />
+          <ReportCard
+            report={reel.report}
+            techName={reel.techName || reel.title}
+            onAskTool={(tool) => navigation.navigate('Chat', { reel, initialQuery: askToolQuestion(tool) })}
+          />
         ) : (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Analysis Summary</Text>

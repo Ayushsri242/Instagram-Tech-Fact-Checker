@@ -48,6 +48,8 @@ class InstagramExtractor(private val context: Context) {
         private val VIDEO_URL_REGEX = Regex("\"video_url\":\"(.*?)\"")
         private val DISPLAY_URL_REGEX = Regex("\"display_url\":\"(.*?)\"")
         private val IMG_TAG_REGEX = Regex("<img[^>]*\\ssrc=\"(https://[^\"]+)\"")
+        /** A VIDEO slide in a carousel shows its content as the poster image. */
+        private val VIDEO_POSTER_REGEX = Regex("<video[^>]*\\sposter=\"(https://[^\"]+)\"")
         private val CAPTION_USER_REGEX = Regex("class=\"CaptionUsername\"[^>]*>([^<]+)</a>")
         private val OWNER_REGEX = Regex("\"username\":\"(.*?)\"")
         private val CAPTION_BLOCK_REGEX = Regex("class=\"Caption\"([\\s\\S]{0,6000}?)</div>")
@@ -303,7 +305,10 @@ class InstagramExtractor(private val context: Context) {
                         .map { cleanUrl(it.groupValues[1]) }
                         .filter { it.startsWith("http") && !isJunkImage(it) }
                         .toList()
-                    val fromDom = IMG_TAG_REGEX.findAll(html)
+                    // Video slides render a <video poster=...>, not an <img>. On the
+                    // "22 NLP techniques" post (Oct 6) all 13 slides were videos
+                    // and the 22 techniques lived only in those posters.
+                    val fromDom = (IMG_TAG_REGEX.findAll(html) + VIDEO_POSTER_REGEX.findAll(html))
                         .map { cleanUrl(it.groupValues[1]) }
                         .filter { it.startsWith("http") && !isJunkImage(it) }
                         .toList()
@@ -362,7 +367,7 @@ class InstagramExtractor(private val context: Context) {
             .filter { it.startsWith("http") && !isJunkImage(it) }
             .distinct()
             .toList()
-        val fromDom = IMG_TAG_REGEX.findAll(html)
+        val fromDom = (IMG_TAG_REGEX.findAll(html) + VIDEO_POSTER_REGEX.findAll(html))
             .map { cleanUrl(it.groupValues[1]) }
             .filter { it.startsWith("http") && !isJunkImage(it) }
             .distinct()
@@ -416,7 +421,12 @@ class InstagramExtractor(private val context: Context) {
         return ExtractResult(
             type = if (hasVideo) "video" else "image",
             videoUrl = videoUrl,
-            imageUrls = if (hasVideo) emptyList() else imageUrls,
+            // A /p/ carousel can mix a video with slide pictures, or be all
+            // video slides. Dropping the pictures whenever a video was found
+            // left slide 1 of 13 read on the 22-NLP-techniques post. Keep them;
+            // the module OCRs both. A reel's pictures are its poster frame and
+            // suggested posts, so those are still dropped.
+            imageUrls = if (hasVideo && isReel) emptyList() else imageUrls,
             caption = caption,
             author = author,
             via = "TIER_B_HTML",

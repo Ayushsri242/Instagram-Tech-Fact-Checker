@@ -281,11 +281,23 @@ export const readPage = async (url, maxChars = 8000) => {
  * Bounded deliberately: this is a network call per row, and the token budget
  * only shows the model 12 rows anyway.
  */
+// Hosts the reader cannot read: Reddit answers 403 "blocked by network
+// security" even through r.jina.ai (tested Oct 6), Glassdoor and the social
+// sites need a login. Asking for them only burned the few page reads there are.
+const UNREADABLE_HOSTS = /(^|\.)(reddit\.com|redditmedia\.com|glassdoor\.[a-z.]+|facebook\.com|instagram\.com|linkedin\.com|x\.com|twitter\.com|quora\.com)$/i;
+const isReadable = (url) => {
+  try {
+    return !UNREADABLE_HOSTS.test(new URL(url).hostname);
+  } catch (e) {
+    return false;
+  }
+};
+
 export const fillMissingPageText = async (rows, limit = 4) => {
   const targets = [];
   for (const r of rows) {
     if (targets.length >= limit) break;
-    if (!(r.pagePreview || '').length && r.url) targets.push(r);
+    if (!(r.pagePreview || '').length && r.url && isReadable(r.url)) targets.push(r);
   }
   if (!targets.length) return rows;
   const texts = await Promise.all(targets.map((r) => readPage(r.url)));
@@ -307,6 +319,25 @@ export const fillMissingPageText = async (rows, limit = 4) => {
 // conversation-length one that deleting log files genuinely helps, and a
 // server-side usage quota that it does not touch. The reel conflated them. That
 // is misapplication, not invention, and only a search of the claim reveals it.
+// A platform's Trustpilot page, read for real. Its search result alone is a
+// title ("GoTranscript | Read Customer Service Reviews") with no content, which
+// is all the model had on the first side-hustle runs. Trustpilot is readable
+// through the reader and its page states the score and recent reviews.
+export const checkTrustpilot = async (url, platform) => {
+  const text = await readPage(url, 5000);
+  if (!text) return [];
+  const score = (text.match(/TrustScore\s*([0-9.]+)\s*out of 5/i) || [])[1] || null;
+  const count = (text.match(/([\d,.]+k?)\s+(?:total\s+)?reviews/i) || [])[1] || null;
+  const summary = 'Trustpilot TrustScore ' + (score || 'unknown') + ' out of 5' +
+    (count ? ' from ' + count + ' reviews' : '');
+  return [row(
+    'Trustpilot - ' + platform + (score ? ' (' + score + '/5)' : ''),
+    url,
+    summary,
+    'USER REVIEWS FOR ' + String(platform).toUpperCase() + ': ' + summary + '. Review text: ' + text.slice(0, 3500)
+  )];
+};
+
 export const checkTechnique = async (claim, subject) => {
   const text = String(claim || '').trim();
   if (text.length < 12) return [];
@@ -400,7 +431,7 @@ const NEWS_HINT = /\b(launch|launched|release[ds]?|announce[ds]?|unveil|acquire[
  * Returns evidence rows in the same shape gatherEvidence produces, so nothing
  * downstream needs to know these came from an API rather than a search.
  */
-export const runVerifiers = async (claimsData, transcript = '', ocrText = '', evidence = []) => {
+export const runVerifiers = async (claimsData, transcript = '', ocrText = '', evidence = [], opts = {}) => {
   const tech = String((claimsData && claimsData.tech_name) || '').trim();
   const tools = (claimsData && claimsData.tools) || [];
   const claims = (claimsData && claimsData.claimed_features) || [];
@@ -413,6 +444,29 @@ export const runVerifiers = async (claimsData, transcript = '', ocrText = '', ev
     seen.add(key);
     jobs.push(fn().catch(() => []));
   };
+
+  // Money / side-hustle posts (opts.money): the platforms are websites, not
+  // code, so PyPI, Hugging Face, GitHub-name and Hacker News lookups only
+  // returned noise - "GitHub search - GoTranscript" (a stranger's repo) took a
+  // seat the model reads and even became the report's title. What answers an
+  // earnings claim is what users report: Trustpilot pages (readable) and
+  // searches about the specific pay claim.
+  if (opts.money) {
+    const done = new Set();
+    for (const r of evidence || []) {
+      const m = String(r.url || '').match(/trustpilot\.com\/review\/([^/?#]+)/i);
+      if (!m || done.has(m[1]) || done.size >= 4) continue;
+      done.add(m[1]);
+      const platform = (tools.find((t) => m[1].toLowerCase().includes(String(t.name || '').toLowerCase().replace(/[^a-z0-9]/g, ''))) || {}).name || m[1];
+      once('trustpilot:' + m[1], () => checkTrustpilot(r.url, platform));
+    }
+    for (const c of claims.slice(0, 4)) {
+      once(`tech:${c.slice(0, 30)}`, () => checkTechnique(c, tech));
+    }
+    const fired = [...seen];
+    const results = await Promise.all(jobs);
+    return { rows: results.flat().filter(Boolean), fired };
+  }
 
   // Packages named by the model, plus any install command spelled out anywhere.
   for (const tool of tools) {
