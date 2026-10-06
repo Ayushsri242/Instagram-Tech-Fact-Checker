@@ -214,7 +214,7 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
     'Task:',
     '1. Determine if this post is about a SINGLE tool/technique or MULTIPLE items (e.g. "5 LLM Libraries", "4 Side Hustle Websites").',
     '2. Extract all distinct tools/libraries/websites/platforms mentioned or shown on screen. Look specifically for GitHub repo names, domain URLs, and platform names.',
-    '3. Generate precise DuckDuckGo search queries. Include queries like "owner/repo github", "pip install packagename", or "site:domain.com" / "domain.com reviews".',
+    '3. Generate precise DuckDuckGo search queries. For developer tools, query "owner/repo github". For money-making, freelancing, or software sites, you MUST include terms like "reviews", "scam", or "reddit" (e.g. "Alignerr.com reviews scam reddit") to find truth.',
     '4. Audio transcription often misspells names (e.g. hearing "Zev" when the screen says "Zed"). ALWAYS trust the exact spelling shown in the On-Screen Text over the audio.',
     '',
     'Respond ONLY with valid JSON in this exact structure:',
@@ -721,8 +721,17 @@ const applyEvidenceRules = (report, evidence, techName) => {
   if (report.verdict === 'TRUE' && (missing > 0 || verified === 0)) {
     notes.push(`Downgraded TRUE (verified=${verified}, missing=${missing}).`);
     report.verdict = 'PARTIALLY_TRUE';
-  }
-  // A MISLEADING -> HYPE softening rule used to sit here. It fired twice and
+    }
+    const allClaimedTools = claimsData?.tools || [];
+    const verifiedNames = new Set((report.tools || []).map(t => (t.name || '').toLowerCase().trim()));
+    report.otherTools = allClaimedTools.filter(t => {
+      const n = (t.name || '').toLowerCase().trim();
+      return n && !verifiedNames.has(n);
+    }).map(t => ({
+      name: t.name,
+      description: t.claim
+    }));
+    // A MISLEADING -> HYPE softening rule used to sit here. It fired twice and
   // was wrong both times, most damagingly on a reel about resetting Claude
   // Code's usage limit: "Claude Code" is obviously a real tool, so the rule
   // softened a correct MISLEADING to HYPE. Whether a tool exists says nothing
@@ -1114,6 +1123,7 @@ const normalizeTools = (tools) => (tools || []).map((tool) => ({
 }));
 
 export const analyzeReelApi = async (url) => {
+  try {
   if (!TechFactChecker) throw new Error('Native mobile module is unavailable. Rebuild the Android dev app.');
   const offline = await getOfflineMode();
 
@@ -1326,7 +1336,7 @@ export const analyzeReelApi = async (url) => {
     sourceUrl: media.sourceUrl || url,
     // An honest blank beats a confident wrong: two of five recorded runs named
     // a window title and a caption headline.
-    techName: subject.name || fallbackName || 'Unidentified',
+    techName: subject.name || fallbackName || claimsData.tech_name || 'Unidentified',
     subjectWhy: subject.why,
     // The verdict AFTER the evidence rules. This used to return the model's raw
     // verdict, so a run the rules downgraded TRUE -> PARTIALLY_TRUE still showed
@@ -1345,6 +1355,16 @@ export const analyzeReelApi = async (url) => {
     claims: claimsData.claimed_features || [],
     sources: evidence,
   };
+  } catch (e) {
+    await logRun({
+      timestamp: new Date().toISOString(),
+      shortcode: (String(url).match(/(?:reel|p)\/([A-Za-z0-9_-]+)/) || [])[1] || url,
+      url: String(url),
+      error: e.message || String(e),
+      durationMs: Date.now() - (Date.now()) // Just a filler
+    }).catch(() => {});
+    throw e;
+  }
 };
 
 const performQuickSearch = async (query) => {
@@ -1433,3 +1453,6 @@ export const chatWithAiApi = async (reel, userMessage, conversation = [], onSear
   }
   return res;
 };
+
+
+
