@@ -1,0 +1,69 @@
+name: Promote build to all phones
+
+# After a build has been tested, press "Run workflow" here, type its build
+# number, and every phone running an older version is offered it the next time
+# the app opens. The in-app updater (mobile_app/src/services/updater.js) reads
+# the release tagged "verified-production": its title must be the version and
+# it must carry app-release.apk.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: "Build number to promote (the N in mobile-release-N)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SOURCE: mobile-release-${{ inputs.build_number }}
+    steps:
+      - name: Find the tested build
+        run: |
+          if ! gh release view "$SOURCE" --repo "$REPO" > /dev/null 2>&1; then
+            echo "No release called $SOURCE. Promote a release build (build_type=release), not debug."
+            exit 1
+          fi
+          VERSION=$(gh release view "$SOURCE" --repo "$REPO" --json body -q .body | sed -n 's/^version=//p' | head -1)
+          if [ -z "$VERSION" ]; then
+            echo "$SOURCE has no version stamp - it was built before automatic versioning."
+            echo "Phones would not see it as newer. Build again and promote the new build."
+            exit 1
+          fi
+          COMMIT=$(gh release view "$SOURCE" --repo "$REPO" --json body -q .body | sed -n 's/^commit=//p' | head -1)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "COMMIT=$COMMIT" >> $GITHUB_ENV
+          echo "Promoting $SOURCE as version $VERSION (commit $COMMIT)"
+
+      - name: Refuse to go backwards
+        run: |
+          CURRENT=$(gh release view verified-production --repo "$REPO" --json name -q .name 2>/dev/null || echo "0.0.0")
+          echo "Phones are offered: $CURRENT  ->  promoting: $VERSION"
+          if [ "$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | tail -1)" != "$VERSION" ] || [ "$CURRENT" = "$VERSION" ]; then
+            echo "$VERSION is not newer than $CURRENT - phones would ignore it. Nothing changed."
+            exit 1
+          fi
+
+      - name: Publish to verified-production
+        run: |
+          gh release download "$SOURCE" --repo "$REPO" --pattern "app-release.apk" --dir out
+          NOTES=$(printf '%s\n' \
+            "version=$VERSION" \
+            "promoted_from=$SOURCE" \
+            "commit=$COMMIT" \
+            "promoted_at=$(date -u +%Y-%m-%dT%H:%MZ)")
+          if gh release view verified-production --repo "$REPO" > /dev/null 2>&1; then
+            gh release upload verified-production out/app-release.apk --repo "$REPO" --clobber
+            gh release edit verified-production --repo "$REPO" --title "$VERSION" --notes "$NOTES"
+          else
+            gh release create verified-production out/app-release.apk --repo "$REPO" --title "$VERSION" --notes "$NOTES"
+          fi
+          echo "Done. Phones on an older version will be offered $VERSION on next launch."
