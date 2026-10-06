@@ -616,30 +616,39 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
 
                 Log.e(TAG, "STEP 3: Media type = $mediaType (SOURCE=$mediaSource)")
 
+                // OCR every slide picture. Picture carousels use it, and so do
+                // carousels whose slides are VIDEOS: their poster images carry the
+                // content ("22 NLP techniques", Oct 6 - 13 video slides, only slide
+                // 1 was read). One slide failing to download must not fail a run.
+                fun ocrSlides(label: String) {
+                    Log.i(TAG, "STEP 4: Downloading ${imageUrlList.size} slide images for OCR ($label, SOURCE=$mediaSource)")
+                    for (i in imageUrlList.indices) {
+                        try {
+                            val imgRequest = Request.Builder().url(imageUrlList[i]).build()
+                            val imgResponse = httpClient.newCall(imgRequest).execute()
+                            val imgBytes = imgResponse.body?.bytes()
+                            Log.i(TAG, "STEP 4a: Image $i HTTP=${imgResponse.code}, bytes=${imgBytes?.size ?: 0}")
+                            if (imgBytes != null) {
+                                val bitmap = BitmapFactory.decodeByteArray(imgBytes, 0, imgBytes.size)
+                                if (bitmap != null) {
+                                    val ocrRes = ocrEngine.processImage(bitmap)
+                                    Log.i(TAG, "STEP 4b: OCR image $i textLength=${ocrRes.fullText.length}, repos=${ocrRes.detectedRepos.size}, urls=${ocrRes.detectedUrls.size}")
+                                    ocrLens.add(ocrRes.fullText.length)
+                                    combinedText.append(ocrRes.fullText).append("\n")
+                                    repos.addAll(ocrRes.detectedRepos)
+                                    urls.addAll(ocrRes.detectedUrls)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "STEP 4a: Image $i failed: ${e.message}")
+                        }
+                    }
+                }
+
                 if (mediaType == "image") {
                     // Handle image/carousel post
                     combinedText.append(caption).append("\n")
-
-                    Log.i(TAG, "STEP 4: Downloading ${imageUrlList.size} images for OCR (SOURCE=$mediaSource)")
-
-                    for (i in imageUrlList.indices) {
-                        val imgUrl = imageUrlList[i]
-                        val imgRequest = Request.Builder().url(imgUrl).build()
-                        val imgResponse = httpClient.newCall(imgRequest).execute()
-                        val imgBytes = imgResponse.body?.bytes()
-                        Log.i(TAG, "STEP 4a: Image $i HTTP=${imgResponse.code}, bytes=${imgBytes?.size ?: 0}")
-                        if (imgBytes != null) {
-                            val bitmap = BitmapFactory.decodeByteArray(imgBytes, 0, imgBytes.size)
-                            if (bitmap != null) {
-                                val ocrRes = ocrEngine.processImage(bitmap)
-                                Log.i(TAG, "STEP 4b: OCR image $i textLength=${ocrRes.fullText.length}, repos=${ocrRes.detectedRepos.size}, urls=${ocrRes.detectedUrls.size}")
-                                ocrLens.add(ocrRes.fullText.length)
-                                combinedText.append(ocrRes.fullText).append("\n")
-                                repos.addAll(ocrRes.detectedRepos)
-                                urls.addAll(ocrRes.detectedUrls)
-                            }
-                        }
-                    }
+                    ocrSlides("picture post")
                 } else {
                     // Handle video/reel
                     val videoUrl = videoUrlValue
@@ -691,6 +700,9 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     outputFile.delete()
                     audioTranscript = transcriptFromAudio
                     caption = listOf(caption, transcriptFromAudio).filter { it.isNotBlank() }.joinToString("\n")
+                    // A /p/ carousel with a video also brings its other slides'
+                    // pictures (the extractor no longer drops them).
+                    if (imageUrlList.isNotEmpty()) ocrSlides("carousel slides beside the video")
                 }
 
                 Log.i(TAG, "STEP 5: OCR complete. textLength=${combinedText.length}, repos=${repos.size}, urls=${urls.size}")

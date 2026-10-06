@@ -2,7 +2,7 @@ import axios from 'axios';
 import { NativeModules } from 'react-native';
 import { getGroqApiKey } from './secrets';
 import { getOfflineMode, saveApiLimits } from './storage';
-import { runVerifiers, fillMissingPageText } from './verifiers';
+import { runVerifiers, fillMissingPageText, readPage } from './verifiers';
 import { logRun } from './runlog';
 import { trace, shortRef } from './trace';
 import { jobStage } from './jobState';
@@ -226,6 +226,29 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
     { role: 'user', content: prompt },
   ]);
 
+  // Folder names on the creator's own computer are not tools. The PixelFriend
+  // demo (Oct 6) had VS Code's Welcome page behind it, whose "Recent" list
+  // reads "ScreenAlly ~/Projects | sipsip ~/Projects | finance-agent ...".
+  // Stage 1 listed all five as tools and spent 7 of 10 searches on them, so
+  // little evidence about the actual subject came back. A name the caption or
+  // speech uses is kept even if it is also a folder.
+  const folders = localFolderNames(ocrText);
+  if (folders.size) {
+    const said = flatKey(transcript);
+    const isFolder = (name) => {
+      const k = flatKey(name);
+      return k.length >= 3 && folders.has(k) && !said.includes(k);
+    };
+    const dropped = (data.tools || []).filter((t) => isFolder(t.name)).map((t) => t.name);
+    if (dropped.length) {
+      data.tools = data.tools.filter((t) => !isFolder(t.name));
+      data.search_queries = (data.search_queries || []).filter(
+        (q) => !dropped.some((n) => flatKey(q).includes(flatKey(n)))
+      );
+      console.warn('Dropped local folder names listed as tools: ' + dropped.join(', '));
+    }
+  }
+
   // Deterministic query enrichment, same as the Python side. A repo slug read
   // off the screen is checkable evidence and must not depend on the model
   // remembering to ask about it.
@@ -323,6 +346,176 @@ const OS_PATH_PARTS = new Set([
   'library', 'usr', 'opt', 'var', 'tmp', 'etc', 'bin', 'volumes', 'system',
   'program files', 'appdata', 'clips', 'shorts', 'videos', 'pictures', 'music',
 ]);
+
+// ---- Money / side-hustle posts --------------------------------------------
+//
+// The pipeline was built for developer tools: does the repo / package exist?
+// An earnings post ("These websites print money: Music Xray $5-20 per review,
+// GoTranscript paid per minute ...") is a different question. The sites almost
+// always exist; what needs checking is whether they pay what the post says.
+// On the first such runs the GitHub/Hacker News checks filled 4 of the 12
+// evidence seats, a stranger's GitHub repo titled the report, and the reviews
+// that answer the question reached the model as titles with no text.
+
+// Earning language only. Currency alone is not enough: "$20/month" is a price,
+// and an AI-tool pricing post must stay a tech post.
+const MONEY_HINT = /\b(?:earn|earns|earning|income|get paid|getting paid|paid per|pays? (?:you|up to|around)|side ?hustles?|make money|making money|prints? money|passive income|payouts?|work from home|cash ?out|withdraw(?:al)?)\b/i;
+// A pay RATE: a currency amount per unit of work ("$5 to $20 per review").
+// "Cost per task" on an AI pricing slide has no amount next to it and stays a
+// tech post; so does an app that "earned $1M" (past tense, a startup story).
+const PAY_RATE = /(?:\$|₹|rs\.?\s?|inr\s?)\d[\d,.]*k?\s*(?:(?:to|-)\s*(?:\$|₹|rs\.?\s?)?\d[\d,.]*k?\s*)?(?:per|\/|an?|each)\s*(?:review|survey|task|hour|hr|day|minute|min|video|episode|article|song|word|month)\b/i;
+
+// A money post: earning language, and nothing anchored to code (no repo, no
+// install command) - "earn with this Python bot" is still a tech post.
+export const moneyPost = (claimsData, text) => {
+  const tools = (claimsData && claimsData.tools) || [];
+  const codeAnchored = tools.some((t) => (t.github_repo && t.github_repo !== 'null') || t.pip_command) ||
+    printedGithubSlugs(text).length > 0 ||
+    /\b(?:pip3?|npm|brew|cargo)\s+install\b|\bnpm i\b/i.test(text);
+  if (codeAnchored) return false;
+  const said = [text, ...((claimsData && claimsData.claimed_features) || []), ...tools.map((t) => t.claim || '')].join(' ');
+  return MONEY_HINT.test(said) || PAY_RATE.test(said);
+};
+
+// The platforms the post names, in the order it names them.
+const moneyPlatforms = (claimsData) => {
+  const out = [];
+  for (const t of (claimsData && claimsData.tools) || []) {
+    const n = String(t.name || '').trim();
+    if (n.length >= 2 && !out.some((x) => x.toLowerCase() === n.toLowerCase())) out.push(n);
+  }
+  return out.slice(0, 5);
+};
+
+// Searches about the CLAIM, spread so every platform gets some: one query per
+// platform first, then a second round, and so on. The first run searched only
+// "<site> reviews scam reddit", and the last two platforms got no evidence at all.
+const moneyQueries = (platforms, claimsData, text) => {
+  const india = /\bindia\b|₹|\brupees?\b|\binr\b|\blakhs?\b/i.test(text);
+  const perPlatform = platforms.map((p) => [
+    p + ' reviews trustpilot',
+    p + ' how much can you really earn reddit',
+    p + ' payment proof withdrawal problems',
+    p + ' scam or legit',
+    ...(india ? [p + ' India payout'] : []),
+  ]);
+  const out = [];
+  for (let round = 0; out.length < 10 && round < 5; round++) {
+    for (const qs of perPlatform) {
+      if (out.length >= 10) break;
+      if (qs[round] && !out.includes(qs[round])) out.push(qs[round]);
+    }
+  }
+  // No named platform ("make $100 a day with ChatGPT"): search the claims.
+  for (const c of (claimsData && claimsData.claimed_features) || []) {
+    if (out.length >= 10) break;
+    const q = String(c).slice(0, 90) + ' reddit real experience';
+    if (!out.includes(q)) out.push(q);
+  }
+  for (const q of (claimsData && claimsData.search_queries) || []) {
+    if (out.length >= 10) break;
+    if (!out.includes(q)) out.push(q);
+  }
+  return out;
+};
+
+// The 12 rows the model reads for a money post: no code registries, the
+// Trustpilot readings and "what people say" rows first, and every platform
+// gets up to 3 seats before any platform gets a fourth.
+const CODE_REGISTRY = /github\.com|hn\.algolia\.com|news\.ycombinator\.com|pypi\.org|npmjs\.com|huggingface\.co/i;
+const rankMoneyEvidence = (evidence, platforms) => {
+  const rows = (evidence || []).filter((r) => !CODE_REGISTRY.test(String(r.url || '')));
+  const score = (r) =>
+    (/^(Trustpilot - |What people say about)/.test(String(r.title || '')) ? 30 : 0) +
+    ((r.pagePreview || '').length > 0 ? 10 : 0) +
+    ((r.snippet || '').length > 0 ? 2 : 0);
+  const sorted = rows.map((r, i) => ({ r, i, s: score(r) })).sort((a, b) => (b.s - a.s) || (a.i - b.i));
+  const keyOf = (r) => {
+    const raw = (String(r.title || '') + ' ' + String(r.url || '')).toLowerCase();
+    const hay = flatKey(raw);
+    // Short names ("Rev") must match as a word, or every "reviews" row is Rev's.
+    const p = platforms.find((x) => {
+      const k = flatKey(x);
+      if (k.length < 3) return false;
+      return k.length < 5 ? new RegExp('(^|[^a-z0-9])' + escapeForRegex(k) + '([^a-z0-9]|$)').test(raw) : hay.includes(k);
+    });
+    return p ? p.toLowerCase() : '_other';
+  };
+  const kept = [];
+  const perPlatform = {};
+  for (const cap of [1, 2, 3]) {
+    for (const x of sorted) {
+      if (kept.length >= MAX_EVIDENCE_ROWS) break;
+      if (kept.includes(x.r)) continue;
+      const k = keyOf(x.r);
+      if (k !== '_other' && (perPlatform[k] || 0) >= cap) continue;
+      if (k === '_other' && cap < 3) continue;
+      perPlatform[k] = (perPlatform[k] || 0) + 1;
+      kept.push(x.r);
+    }
+  }
+  for (const x of sorted) {
+    if (kept.length >= MAX_EVIDENCE_ROWS) break;
+    if (!kept.includes(x.r)) kept.push(x.r);
+  }
+  return kept;
+};
+
+// "Side hustles: Music Xray, GoTranscript, Upwork +1" rather than "Unidentified"
+// or a random repo name.
+const moneyTitle = (platforms, modelName, author) => {
+  if (platforms.length >= 2) {
+    const shown = platforms.slice(0, 3).join(', ');
+    return 'Side hustles: ' + shown + (platforms.length > 3 ? ' +' + (platforms.length - 3) : '');
+  }
+  if (platforms.length === 1) return platforms[0];
+  const handle = flatKey(author);
+  const name = String(modelName || '').trim();
+  if (name && !(handle && flatKey(name).includes(handle))) return name;
+  return 'Earning claim';
+};
+
+// ---- List posts ("22 NLP techniques", "top 5 recruiters") ------------------
+//
+// The subject picker abstains on these by design - a headline is not a product
+// - and the report was then titled "Unidentified" with -25 confidence for
+// "subject not confirmed", on posts that never had a single subject.
+
+const LIST_NAME = /^\s*(?:top\s*)?\d+\s+\S|\btop\s+\d+\b|\b\d+\s+(?:tools|websites|sites|apps|techniques|ways|courses|repos|repositories|platforms|jobs|tips|libraries|projects|ideas|recruiters|companies|skills)\b/i;
+const isListPost = (modelName, tools) =>
+  ((tools || []).length >= 3) || LIST_NAME.test(String(modelName || ''));
+
+// The model's own name for the post, unless it is the creator's handle (the
+// picker rejects handles on purpose - the app once published one as the
+// product); otherwise the first tools it found.
+const listTitle = (modelName, tools, author) => {
+  const name = String(modelName || '').trim();
+  const handle = flatKey(author);
+  if (name && !(handle && handle.length >= 3 && flatKey(name).includes(handle))) return name;
+  const names = (tools || []).map((t) => String(t.name || '').trim()).filter(Boolean);
+  if (names.length >= 2) return names.slice(0, 3).join(', ') + (names.length > 3 ? ' +' + (names.length - 3) : '');
+  return names[0] || null;
+};
+
+// "busybee_website" and "busybee website" are the same name.
+const flatKey = (s) => String(s || '').toLowerCase().replace(/[\s_.\-]+/g, '');
+
+// Names OCR read as "<name> ~/Projects", "<name> /Projects", "<name> -/Projects"
+// or "<name> ~/.gemini/antigravity/scratch" - an IDE's recent-folders list.
+// OCR drops or mangles the "~", so the path word or a slash path is the tell.
+// The whole line must be exactly "<name> <home folder>" - a looser version
+// (any "name some/path") flagged real subjects like graphify and claude.
+const LOCAL_FOLDER_LINE = /^([A-Za-z][\w.-]{2,}(?: [A-Za-z][\w.-]+)?)\s*(?:~|-)?\/?(?:Projects|Documents|Desktop|Downloads|Developer|repos|workspace)\/?$/i;
+const localFolderNames = (ocrText) => {
+  const out = new Set();
+  for (const line of String(ocrText || '').split(/\s*\|\s*|\n/)) {
+    const m = line.trim().match(LOCAL_FOLDER_LINE);
+    if (m) out.add(flatKey(m[1]));
+  }
+  // One "Claude Projects" line is a product feature, not a folder list. A
+  // recent-folders list always has several entries.
+  return out.size >= 2 ? out : new Set();
+};
 
 // Repos the post prints as a github.com URL, as owner/repo. OCR splits URLs
 // ("github. com/", "github.c om/"), so the separators are whitespace-tolerant.
@@ -457,7 +650,7 @@ export const slideCoverage = (ocrText, imagesUsed) => {
   return declared > seen ? { declared, seen } : null;
 };
 
-const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, coverage, keptRows) => {
+const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, coverage, keptRows, post = {}) => {
   const kept = keptRows || rankEvidence(evidence, claimsData && claimsData.tech_name, claimsData && claimsData.tools);
   if ((evidence || []).length > kept.length) {
     console.warn(`Evidence trimmed for token budget: ${evidence.length} -> ${kept.length} rows.`);
@@ -520,6 +713,16 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
       'EXTRACTION WAS INCOMPLETE: this post declares ' + coverage.declared +
       ' slides and only ' + coverage.seen + ' were read. Anything the post promotes may be on a slide nobody saw,' +
       ' so do not state that a tool does not exist, has no repository or cannot be installed. Say the post was only partly readable instead.'] : []),
+    ...(post.money ? ['',
+      'THIS IS A MONEY / SIDE-HUSTLE POST about: ' + ((post.platforms || []).join(', ') || 'an earning method') + '.',
+      'The question is NOT whether the websites exist - it is whether the EARNING CLAIMS hold. For each platform, use the user reviews, Trustpilot scores and real-experience reports in the evidence: what people actually earn, whether it pays out, fees, payout minimums, tests to pass, country restrictions.',
+      'For this post these verdict rules replace the tool rules below:',
+      '- TRUE: legit platforms and the claimed pay matches what users report.',
+      '- PARTIALLY_TRUE: legit platforms, the pay is possible but lower, rarer or harder than claimed.',
+      '- HYPE: legit platforms, but the post sells easy or large money ("prints money", "passive income") that users do not report.',
+      '- MISLEADING: the pay claim is wrong, the platform does not pay for that work, or major catches (fees, payout thresholds, not open in the stated country) are hidden.',
+      '- FAKE: the platform has shut down, does not exist, or is widely reported as not paying / a scam.',
+      'List each platform in tools (status "verified" only if the evidence shows it operating today). Gotchas must be about money: real pay rates, fees, payout minimums, country limits, tests. Never cite a GitHub repository for a money post.'] : []),
     '',
     'Web Evidence Gathered:', evidenceText,
     '',
@@ -527,7 +730,9 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     '- If MULTI-TOOL list (e.g. 5 tools): check each tool against evidence. If real GitHub repositories / pip packages exist, the verdict should reflect their collective authenticity. In the summary, give a concise bulleted breakdown for EVERY tool with its repo, practical utility, and caveats.',
     '- If SINGLE-TOOL: evaluate the single tool deeply.',
     '- Practical Utility First: if a shorthand trick or prompt (e.g. "/eli5") actually produces the claimed result in practice because the AI understands the intent, mark it TRUE or PARTIALLY_TRUE and explain prompt semantics vs native command.',
-    '- Name Collision Warning: If a repository or package shares the name of the tool in the post but does something fundamentally different, mark the post MISLEADING or FAKE. The exact tool claimed must exist, not just any project with that name.',
+    '- Same-name projects: a repository or package with the same name but owned by an account other than the post author (' + (post.author ? '@' + post.author : 'unknown') + ') is SOMEONE ELSE\'S project unless the post prints its URL or names that account. Never present it as the post\'s repo or use it to call the post TRUE. A name collision makes the post MISLEADING or FAKE only when the post claims you can download, install or buy the tool and the only thing with that name is unrelated.',
+    '- Personal project demo: if the post shows the creator\'s OWN project working on screen and makes no checkable claim (no link, install command, price, benchmark number or availability promise), the verdict is TRUE. Say it is a personal project with no public repo or download found, and add the gotcha "Personal project - no public download found". Do not mark it MISLEADING or PARTIALLY_TRUE only because no repo exists.',
+    '- Background apps are not tools: apps that only appear in the dock, menu bar, browser tabs or the editor window behind the demo are not part of the claim. Do not list them as tools or write gotchas about them.',
     '- TRUE: the exact tools/repos/platforms claimed exist, are accessible, and work as demonstrated.',
     '- PARTIALLY_TRUE: the exact tools/repos/platforms claimed exist, but with minor technical caveats (early alpha, semantic shortcut, hidden fees, low gig pay).',
     '- HYPE: the underlying concept exists, but marketing claims ("100% replaces everything", "zero effort", "instant cash") are exaggerated.',
@@ -626,7 +831,7 @@ const fetchedRepoSlugs = (rows) => {
 };
 const repoKey = (slug) => String(slug || '').toLowerCase().replace(/[-_.]/g, '');
 
-const applyEvidenceRules = (report, evidence, techName) => {
+const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
   const notes = [];
   const rows = evidence || [];
   const hay = (r) => `${r.title || ''} ${r.snippet || ''} ${r.pagePreview || ''}`;
@@ -714,7 +919,9 @@ const applyEvidenceRules = (report, evidence, techName) => {
 
   // Code owns the existence half. The model may not call something fake when
   // the evidence verified it, nor real when the evidence says it is missing.
-  if (report.verdict === 'FAKE' && verified > 0 && missing === 0) {
+  // Not for money posts: a site that exists can still be a scam that never
+  // pays, and existence is all "verified" means here.
+  if (report.verdict === 'FAKE' && verified > 0 && missing === 0 && !opts.money) {
     notes.push(`Overrode FAKE: ${verified}/${tools.length} tools were verified to exist.`);
     report.verdict = 'MISLEADING';
   }
@@ -1060,7 +1267,7 @@ export const deriveConfidence = ({ subjectNamed, coverage, toolsReal, rowsWithTe
   return { score: Math.max(10, Math.min(95, score)), why };
 };
 
-const normalizeReport = (report, evidence) => {
+const normalizeReport = (report, evidence, opts = {}) => {
   const VERDICTS = ['TRUE', 'PARTIALLY_TRUE', 'HYPE', 'MISLEADING', 'FAKE'];
   const verdict = VERDICTS.includes(report.verdict) ? report.verdict : 'UNKNOWN';
   const tools = (Array.isArray(report.tools) ? report.tools : [])
@@ -1097,14 +1304,14 @@ const normalizeReport = (report, evidence) => {
     gotchas: cleanList(report.gotchas, 4).map((g) => clampSentences(g, 1, 110)),
     references,
     toolsReal: null,
-  }, evidence, report.tech_name);
+  }, evidence, report.tech_name, opts);
 };
 
 // Exposed for tools/replay.js, which re-runs recorded runs through the picker
 // and the normaliser without a device. Testing on hardware costs a build, an
 // Instagram fetch and an API call per case, which is why earlier sessions kept
 // tuning against a single reel and calling it a pass.
-export const __test = { pickSubject, normalizeReport, looksLikeSubject, applyEvidenceRules, rankEvidence, printedGithubSlugs };
+export const __test = { pickSubject, normalizeReport, looksLikeSubject, applyEvidenceRules, rankEvidence, printedGithubSlugs, moneyPlatforms, moneyQueries, rankMoneyEvidence, moneyTitle, isListPost, listTitle };
 
 const normalizeTools = (tools) => (tools || []).map((tool) => ({
   name: tool.name || 'Tool',
@@ -1165,7 +1372,13 @@ export const analyzeReelApi = async (url) => {
   // run has to see what the model originally said to measure a picker change.
   const modelTechName = claimsData.tech_name;
   log('STAGE 1 CLAIMS', claimsData);
-  const queries = (claimsData.search_queries || []).slice(0, 10);
+  // Money / side-hustle posts are checked differently - see moneyPost().
+  const money = moneyPost(claimsData, [media.caption, ocrText, transcript].join(' '));
+  const platforms = money ? moneyPlatforms(claimsData) : [];
+  const queries = money
+    ? moneyQueries(platforms, claimsData, [media.caption, ocrText, transcript].join(' '))
+    : (claimsData.search_queries || []).slice(0, 10);
+  if (money) log('MONEY MODE', { platforms });
   log('STAGE 2 QUERIES', queries);
 
   // Structured lookups and web search are independent, so run them together.
@@ -1178,7 +1391,7 @@ export const analyzeReelApi = async (url) => {
   jobStage(3);
   // The pricing check needs the search results, so the router runs after them.
   // Its own lookups are already parallel inside runVerifiers.
-  const verified = await runVerifiers(claimsData, transcript, ocrText, searched);
+  const verified = await runVerifiers(claimsData, transcript, ocrText, searched, { money });
   const structured = verified.rows;
   lap('verifiers');
   log('STAGE 2 STRUCTURED', structured.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet })));
@@ -1192,18 +1405,23 @@ export const analyzeReelApi = async (url) => {
   });
 
   // Rescue the rows that scraped to nothing, before ranking picks the 12.
-  await fillMissingPageText(evidence, 2);
+  // Money posts live or die on what users report, so read more of it.
+  await fillMissingPageText(evidence, money ? 4 : 2);
   lap('pagefill');
 
   // Decide the subject in code before the model writes anything about it.
   const namesSeen = [claimsData.tech_name, ...(claimsData.tools || []).map((t) => t.name)].filter(Boolean);
   const aliases = repairNames(namesSeen, evidence);
   if (Object.keys(aliases).length) log('NAME REPAIRS', aliases);
-  const subject = pickSubject(claimsData.tech_name, evidence, ocrText, {
-    author: media.author,
-    caption: media.caption,
-    aliases,
-  });
+  // A money post's subject is its platforms, never a GitHub repo: the
+  // side-hustle run was titled "gotranscript" after a stranger's repo.
+  const subject = money
+    ? { name: moneyTitle(platforms, modelTechName, media.author), why: 'money post: titled from its platforms (' + platforms.join(', ') + ')' }
+    : pickSubject(claimsData.tech_name, evidence, ocrText, {
+      author: media.author,
+      caption: media.caption,
+      aliases,
+    });
   log('SUBJECT', subject);
   if (subject.name !== undefined && subject.name !== claimsData.tech_name) {
     claimsData = { ...claimsData, tech_name: subject.name };
@@ -1216,15 +1434,20 @@ export const analyzeReelApi = async (url) => {
   // exactly these. The CSV used to log evidence.slice(0, 12) - the first rows
   // FOUND, not the ones ranked and sent - so "what the model saw" was wrong.
   const pinned = [...new Set([subject.slug, ...printedGithubSlugs(ocrText)].filter(Boolean))];
-  const kept = rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned);
+  const kept = money
+    ? rankMoneyEvidence(evidence, platforms)
+    : rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned);
   if (pinned.length) log('PINNED EVIDENCE', pinned);
-  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage, kept);
+  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage, kept, { author: media.author, money, platforms });
   lap('synthesis');
   log('STAGE 3 RAW REPORT', report);
   const verdictRaw = report.verdict;
-  const normalized = normalizeReport(report, evidence);
+  const normalized = normalizeReport(report, evidence, { money });
   normalized.confidence = deriveConfidence({
-    subjectNamed: Boolean(subject.name),
+    // A list of platforms has no single subject to confirm - not a weakness.
+    // A list post ("22 NLP techniques", "top 5 recruiters") has no single
+    // subject to confirm; being one is not a weakness of the run.
+    subjectNamed: Boolean(subject.name) || money || isListPost(modelTechName, claimsData.tools),
     coverage,
     toolsReal: normalized.toolsReal,
     rowsWithText: kept.filter((e) => (e.pagePreview || '').length > 0).length,
@@ -1242,6 +1465,9 @@ export const analyzeReelApi = async (url) => {
     })
     .map((t) => ({
       name: t.name,
+      // Kept so "Ask AI" can check the exact repo the post named, not a
+      // same-name project the search happens to find.
+      repo: t.github_repo && t.github_repo !== 'null' ? t.github_repo : null,
       description: t.claim || '',
     }));
 
@@ -1328,6 +1554,7 @@ export const analyzeReelApi = async (url) => {
     ocrText,
     caption: media.caption || '',
     author: media.author || '',
+    postMode: money ? 'money' : 'tech',
     fetchedRepos: fetchedRepoSlugs(evidence).join(' '),
   });
   trace('pipeline done ' + shortRef(url) + ' verdict=' + normalized.verdict +
@@ -1340,7 +1567,12 @@ export const analyzeReelApi = async (url) => {
     sourceUrl: media.sourceUrl || url,
     // An honest blank beats a confident wrong: two of five recorded runs named
     // a window title and a caption headline.
-    techName: subject.name || fallbackName || claimsData.tech_name || 'Unidentified',
+    // List posts get a title from the model's name or their items. A single-
+    // subject post the picker abstained on stays "Unidentified": those
+    // rejections are window titles and creator handles, which it must not print.
+    techName: subject.name || fallbackName ||
+      (isListPost(modelTechName, claimsData.tools) ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
+      'Unidentified',
     subjectWhy: subject.why,
     // The verdict AFTER the evidence rules. This used to return the model's raw
     // verdict, so a run the rules downgraded TRUE -> PARTIALLY_TRUE still showed
@@ -1384,6 +1616,13 @@ const performQuickSearch = async (query) => {
   }
 };
 
+// The question the report's "ASK AI" chip sends. Built by askToolQuestion so
+// the chip and the chat cannot drift apart.
+const VERIFY_TOOL_QUESTION = /^Verify the tool "(.+?)"(?: \(([\w.-]+\/[\w.-]+)\))?/i;
+export const askToolQuestion = (tool) =>
+  'Verify the tool "' + tool.name + '"' + (tool.repo ? ' (' + tool.repo + ')' : '') + ' mentioned in this post.' +
+  (tool.description ? ' The post says: ' + tool.description : '');
+
 export const chatWithAiApi = async (reel, userMessage, conversation = [], onSearchStart = null) => {
   const offline = await getOfflineMode();
   const apiKey = offline ? null : await getGroqApiKey();
@@ -1412,9 +1651,14 @@ export const chatWithAiApi = async (reel, userMessage, conversation = [], onSear
     'You are an expert AI and mobile engineer answering questions about one verified Instagram post.',
     'Tech: ' + (reel.techName || 'Unknown Technology'),
     'Transcript: ' + String(reel.rawTranscript || '').slice(0, 800),
+    'On-screen text the app read from the post: ' + (String(reel.ocrText || '').slice(0, 1200) || '(none)'),
     'Verified fact-check: ' + verdictLine,
     'Sources consulted (titles and links only):' + (sourceList ? '\n' + sourceList : ' none'),
     'CRITICAL RULES:',
+    // Oct 6: asked "what NLP techniques were present?" about a post whose 22
+    // techniques sat on slides the app never read, the chat answered in 1.5 s
+    // with an invented generic list of 24. It only had the cover text.
+    '0. What the POST says or lists comes ONLY from the transcript and on-screen text above. If the user asks what the post contains and it is not there, say the app could not read that part of the post (for example later slides) - never fill it in from general knowledge.',
     '1. Answer in 1-2 short sentences maximum. Be concise. Only provide long detailed answers if the user explicitly uses words like "explain", "detail", or "elaborate".',
     '2. If the user asks a question about something you have 0 knowledge about and it is not covered above, you MUST output EXACTLY the phrase: SEARCH: [your search query here] and nothing else. The system will perform the search and give you the answer to summarize. You are given source titles and links, not their contents, so use this whenever the answer would need the text of one of those pages.',
   ].join('\n\n');
@@ -1443,6 +1687,33 @@ export const chatWithAiApi = async (reel, userMessage, conversation = [], onSear
     { role: 'system', content: context },
     { role: 'user', content: recentChat + '\n\nCurrent question: ' + userMessage },
   ];
+
+  // "Ask AI" on a tool the report had no room to check (a "top 10 repos" post
+  // gets 5-6 checked within the token budget). Fetch the evidence FIRST: left
+  // to itself the model only searches when it decides it knows nothing, and a
+  // repo name it half-remembers would be "verified" from memory.
+  const verify = userMessage.match(VERIFY_TOOL_QUESTION);
+  if (verify) {
+    if (onSearchStart) onSearchStart();
+    const name = verify[1];
+    const repo = verify[2] || null;
+    const parts = [];
+    if (repo) {
+      const page = await readPage('https://github.com/' + repo, 3000);
+      parts.push('GitHub page github.com/' + repo + ':\n' +
+        (page || '(could not be fetched - the repository may not exist or may be private)'));
+    }
+    parts.push('Web search for "' + (repo || name) + '":\n' +
+      await performQuickSearch(repo ? repo + ' github' : name + ' github'));
+    messages.push({
+      role: 'user',
+      content: 'Evidence fetched just now:\n' + parts.join('\n\n') +
+        '\n\nUsing ONLY this evidence: does "' + name + '" exist, what does it actually do, and does that match what the post claims? ' +
+        'If the evidence does not show it, say it could not be found - do not answer from memory. Keep it to 2-4 short sentences.',
+    });
+    return callGroqText(apiKey, messages);
+  }
+
   let res = await callGroqText(apiKey, messages);
   if (res.includes('SEARCH:')) {
     const match = res.match(/SEARCH:\s*(.+)/);

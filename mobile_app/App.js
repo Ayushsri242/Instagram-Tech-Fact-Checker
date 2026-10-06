@@ -11,6 +11,7 @@ import { saveReelResult, setOfflineMode } from './src/services/storage';
 import { beginAnalysis, finishAnalysis, failAnalysis } from './src/services/jobNotify';
 import { trace, shortRef } from './src/services/trace';
 import { setJobsWaiting } from './src/services/jobState';
+import { checkForUpdates } from './src/services/updater';
 import HomeScreen from './src/screens/HomeScreen';
 import ResultScreen from './src/screens/ResultScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
@@ -26,6 +27,12 @@ export default function App() {
   // Read before the navigator mounts so the first frame is the right screen. A
   // deep link from a notification still wins - linking overrides this.
   const [firstRoute, setFirstRoute] = useState(null);
+  // Check for an update the moment the app opens. It used to wait for Home to
+  // mount, which on a first launch is only after the whole Welcome flow.
+  useEffect(() => {
+    checkForUpdates();
+  }, []);
+
   useEffect(() => {
     AsyncStorage.getItem(PERMISSIONS_DONE_KEY)
       .then((v) => setFirstRoute(v === 'yes' ? 'Home' : 'Permissions'))

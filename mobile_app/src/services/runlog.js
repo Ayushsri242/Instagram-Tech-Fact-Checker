@@ -58,6 +58,7 @@ const COLUMNS = [
   'caption',          // the picker weights caption mentions above slide mentions
   'author',           // so a replay can reject the creator's own handle
   'fetchedRepos',     // every GitHub repo actually fetched, not just the 12 kept rows
+  'postMode',         // 'money' (side hustle / earnings, checked against user reviews) or 'tech'
 ];
 
 const cell = (v) => {

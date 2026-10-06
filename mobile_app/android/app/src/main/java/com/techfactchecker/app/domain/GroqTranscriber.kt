@@ -37,6 +37,8 @@ class GroqTranscriber {
          * nobody was speaking; drop the segments it says are not speech.
          */
         private const val NO_SPEECH_MAX = 0.6
+        /** Shorter than this is noise (music, a breath), not speech. */
+        private const val MIN_SPEECH_CHARS = 20
         /** Groq's prompt limit is 224 tokens; the caption's opening is enough. */
         private const val PROMPT_CHARS = 500
     }
@@ -117,11 +119,21 @@ class GroqTranscriber {
             if (segments != null) {
                 for (i in 0 until segments.length()) {
                     val s = segments.getJSONObject(i)
-                    if (s.optDouble("no_speech_prob", 0.0) > NO_SPEECH_MAX) dropped++
-                    else kept.add(s.optString("text").trim())
+                    val text = s.optString("text").trim()
+                    if (s.optDouble("no_speech_prob", 0.0) > NO_SPEECH_MAX || isStockFiller(text)) dropped++
+                    else kept.add(text)
                 }
             }
-            val transcript = if (segments != null) kept.joinToString(" ").trim() else result.optString("text").trim()
+            var transcript = if (segments != null) kept.joinToString(" ").trim()
+                else result.optString("text").trim().let { if (isStockFiller(it)) "" else it }
+            // A music-only reel still comes back with a scrap of text - the
+            // PixelFriend demo (no voice at all) returned 1-6 characters of
+            // Tamil script on each of three runs. Nobody says anything checkable
+            // in under 20 characters; treat it as no speech.
+            if (transcript.length in 1 until MIN_SPEECH_CHARS) {
+                Log.i(TAG, "STT: dropped ${transcript.length}-char transcript as non-speech")
+                transcript = ""
+            }
             lastStats = "groq $MODEL upload=${upload.length() / 1024}kB " +
                 "duration=${"%.1f".format(result.optDouble("duration", 0.0))}s " +
                 "segments=${kept.size + dropped} dropped_no_speech=$dropped chars=${transcript.length}"
@@ -150,6 +162,24 @@ class GroqTranscriber {
             .replace(Regex("\\s+"), " ")
             .trim()
             .take(PROMPT_CHARS)
+
+    /**
+     * Whisper's well-known inventions over music or silence - it was trained on
+     * subtitled videos, so it "hears" their sign-offs. The "22 NLP techniques"
+     * carousel (no voice at all) came back as "Thanks for watching!", exactly
+     * 20 characters, which slipped past the length check.
+     */
+    private val STOCK_FILLERS = setOf(
+        "thanks for watching", "thank you for watching", "thanks for watching and see you next time",
+        "thank you", "thanks", "thank you so much", "please subscribe", "subscribe to my channel",
+        "like and subscribe", "dont forget to like and subscribe", "see you next time", "bye", "you",
+        "subtitles by the amaraorg community"
+    )
+
+    private fun isStockFiller(text: String): Boolean {
+        val norm = text.lowercase().replace(Regex("[^a-z ]"), "").replace(Regex("\\s+"), " ").trim()
+        return norm.isEmpty() || norm in STOCK_FILLERS
+    }
 
     /** Copies the first audio track into an .m4a container. False if there is none. */
     private fun extractAudio(video: File, out: File): Boolean {

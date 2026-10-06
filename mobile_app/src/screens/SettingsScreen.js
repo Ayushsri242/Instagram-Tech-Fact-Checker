@@ -4,11 +4,13 @@ import { colors } from '../theme/colors';
 import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey } from '../services/secrets';
 import { isGroqKey } from '../services/api';
 import { readRunLog, clearRunLog, RUN_LOG_PATH } from '../services/runlog';
+import { checkForUpdates, currentVersion } from '../services/updater';
 
 export default function SettingsScreen({ navigation }) {
   const [groqApiKey, setGroqApiKey] = useState('');
   const [hasGroqApiKey, setHasGroqApiKey] = useState(false);
   const [runLogRows, setRunLogRows] = useState(0);
+  const [updateStatus, setUpdateStatus] = useState('');
 
   useEffect(() => {
     checkGroqApiKey();
@@ -155,9 +157,50 @@ export default function SettingsScreen({ navigation }) {
         <View style={styles.buttonRow}>
           <TouchableOpacity
             style={styles.downloadBtn}
-            onPress={() => navigation.navigate('Permissions', { fromSettings: true })}
+            onPress={() => navigation.navigate('Permissions', { fromSettings: true, initialSlide: 2 })}
           >
             <Text style={styles.btnText}>Review Permissions</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.title}>How to Use Assay</Text>
+        <Text style={styles.desc}>
+          Read the instructions on how to use the Doomscroll Bubble, perform manual checks, and talk to the AI.
+        </Text>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={styles.downloadBtn}
+            onPress={() => navigation.navigate('Permissions', { fromSettings: true, initialSlide: 1 })}
+          >
+            <Text style={styles.btnText}>Read Instructions</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.title}>App Version</Text>
+        <Text style={styles.desc}>
+          Installed: v{currentVersion()}. Updates are checked every time the app opens; check now if you were told a new version is out.
+        </Text>
+        {!!updateStatus && <Text style={styles.statusText}>{updateStatus}</Text>}
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={styles.downloadBtn}
+            onPress={async () => {
+              setUpdateStatus('Checking...');
+              const r = await checkForUpdates();
+              setUpdateStatus(
+                r.status === 'latest' ? 'Up to date (v' + currentVersion() + ')'
+                  : r.status === 'available' ? 'Version ' + r.version + ' is available'
+                  : r.status === 'downloading' ? 'An update is already downloading'
+                  : r.status === 'none' ? 'No release published yet'
+                  : 'Could not check - are you online?'
+              );
+            }}
+          >
+            <Text style={styles.btnText}>Check for Updates</Text>
           </TouchableOpacity>
         </View>
       </View>
