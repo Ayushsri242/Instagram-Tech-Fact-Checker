@@ -786,10 +786,10 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
             } catch (e: Exception) {
                 Log.e(TAG, "FATAL CRASH: ${e.javaClass.name}: ${e.message}", e)
                 var msg = e.message ?: "unknown error"
-                  if (msg.contains("Instagram sent an empty media response") || msg.contains("login to view")) {
-                      msg = "This post requires an Instagram login to view. Open it in the Instagram app and tap the Assay floating bubble instead."
+                if (msg.contains("Instagram sent an empty media response") || msg.contains("login to view")) {
+                      msg = "Instagram blocked media download (login required or rate-limited). Configure INSTAGRAM_COOKIES on backend to bypass."
                   } else if (msg.contains("Video service error:")) {
-                      msg = "Cloud extraction failed. Try using the floating bubble instead."
+                      msg = "Cloud extraction failed: " + msg.substringAfter("Video service error:").take(120)
                   } else {
                       msg = "${e.javaClass.name}: ${msg}"
                   }

@@ -721,16 +721,7 @@ const applyEvidenceRules = (report, evidence, techName) => {
   if (report.verdict === 'TRUE' && (missing > 0 || verified === 0)) {
     notes.push(`Downgraded TRUE (verified=${verified}, missing=${missing}).`);
     report.verdict = 'PARTIALLY_TRUE';
-    }
-    const allClaimedTools = claimsData?.tools || [];
-    const verifiedNames = new Set((report.tools || []).map(t => (t.name || '').toLowerCase().trim()));
-    report.otherTools = allClaimedTools.filter(t => {
-      const n = (t.name || '').toLowerCase().trim();
-      return n && !verifiedNames.has(n);
-    }).map(t => ({
-      name: t.name,
-      description: t.claim
-    }));
+  }
     // A MISLEADING -> HYPE softening rule used to sit here. It fired twice and
   // was wrong both times, most damagingly on a reel about resetting Claude
   // Code's usage limit: "Claude Code" is obviously a real tool, so the rule
@@ -1240,6 +1231,19 @@ export const analyzeReelApi = async (url) => {
     hasText: (ocrText.length + transcript.length) > 200,
   });
   log('CONFIDENCE', normalized.confidence);
+
+  // Tools mentioned in the video/slides but not promoted to the top verified list
+  const allClaimedTools = claimsData?.tools || [];
+  const verifiedNames = new Set((normalized.tools || []).map((t) => (t.name || '').toLowerCase().trim()));
+  normalized.otherTools = allClaimedTools
+    .filter((t) => {
+      const n = (t.name || '').toLowerCase().trim();
+      return n && !verifiedNames.has(n);
+    })
+    .map((t) => ({
+      name: t.name,
+      description: t.claim || '',
+    }));
 
   // Last resort for the title, and it is still a lookup rather than a guess.
   //
