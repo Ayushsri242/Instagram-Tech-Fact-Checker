@@ -57,8 +57,9 @@ export default function App() {
       setJobsWaiting(queue.length);
       console.log('Doomscroll Mode: Processing URL ->', url);
 
+      let hadError = false;
       try {
-        // Bubble turns blue while processing.
+        // Bubble turns cyan/blue while processing.
         TechFactChecker.setBubbleColor("#00E5FF");
         // Same keep-alive and notifications as the paste flow, so the two
         // entry points cannot drift apart again.
@@ -73,14 +74,18 @@ export default function App() {
         // so always notify - even if this app happens to be in front.
         await finishAnalysis(result, { alwaysNotify: true });
       } catch (e) {
+        hadError = true;
         console.log('Doomscroll Mode: Failed ->', e.message);
         await failAnalysis(e && e.message);
+      } finally {
+        TechFactChecker.setBubbleColor("#00E5FF");
       }
 
-      // Enforce 1-minute (60000ms) cooldown before next item. Native sleep, not
-      // setTimeout: JS timers pause in the background, which left the next reel
-      // waiting (bubble orange) until the user reopened the app.
-      await sleep(60000);
+      // Enforce 1-minute (60000ms) cooldown before next item ONLY on success.
+      // If analysis failed, reset immediately so user isn't stuck waiting.
+      if (!hadError) {
+        await sleep(60000);
+      }
       isProcessing = false;
       processQueue();
     };
