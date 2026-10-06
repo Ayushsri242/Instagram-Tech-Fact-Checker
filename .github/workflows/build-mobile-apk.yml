@@ -72,6 +72,31 @@ jobs:
             echo "Plugin file not found, skipping patch"
           fi
 
+      # Every build gets its own, always-increasing version: 1.0.<run number>.
+      # The in-app updater offers a release only if its version is higher than
+      # the installed one, and the version used to change only when someone
+      # edited app.json by hand - so promoting a new build could reach nobody.
+      # app.json's version is what the app reads (expo-constants); versionCode
+      # and versionName are what Android shows in App info.
+      - name: Stamp version
+        run: |
+          VERSION="1.0.${{ github.run_number }}"
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+          node -e '
+            const fs = require("fs");
+            const p = "mobile_app/app.json";
+            const j = JSON.parse(fs.readFileSync(p, "utf8"));
+            j.expo.version = process.env.V;
+            j.expo.android = Object.assign({}, j.expo.android, { versionCode: Number(process.env.N) });
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
+          '
+          sed -i -E "s/versionCode [0-9]+/versionCode ${{ github.run_number }}/; s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" mobile_app/android/app/build.gradle
+          grep -n '"version"' mobile_app/app.json
+          grep -nE "versionCode|versionName" mobile_app/android/app/build.gradle
+        env:
+          V: 1.0.${{ github.run_number }}
+          N: ${{ github.run_number }}
+
       - name: Resolve build type
         run: |
           if [ "${{ inputs.build_type }}" = "debug" ]; then
@@ -103,6 +128,7 @@ jobs:
           TAG="mobile-${{ inputs.build_type }}-${{ github.run_number }}"
           NOTES=$(printf '%s\n' \
             "build_type=${{ inputs.build_type }}" \
+            "version=$APP_VERSION" \
             "branch=${{ github.ref_name }}" \
             "commit=${{ github.sha }}" \
             "" \
