@@ -45,7 +45,7 @@ export default function ReportCard({ report, techName }) {
   if (!report) return null;
   const [showSources, setShowSources] = useState(false);
   const verdict = VERDICT_STYLE[report.verdict] || VERDICT_STYLE.UNKNOWN;
-  const { claims = [], tools = [], gotchas = [], references = [], confidence = null } = report;
+  const { claims = [], tools = [], otherTools = [], gotchas = [], references = [], confidence = null } = report;
 
   return (
     <View style={styles.card}>
@@ -116,6 +116,21 @@ export default function ReportCard({ report, techName }) {
               </View>
             );
           })}
+        </Section>
+      )}
+
+
+      {otherTools.length > 0 && (
+        <Section title="ALSO MENTIONED (TAP TO VERIFY)">
+          {otherTools.map((t, i) => (
+            <TouchableOpacity key={i} style={styles.toolCard} onPress={() => navigation.navigate('Chat', { initialQuery: `Verify the tool "" for me.` })}>
+              <View style={styles.toolHeader}>
+                <Text style={styles.toolName}>{t.name}</Text>
+                <View style={[styles.badge, { backgroundColor: '#6c757d' }]}><Text style={styles.badgeText}>ASK AI</Text></View>
+              </View>
+              {!!t.description && <Text style={styles.toolDesc}>{t.description}</Text>}
+            </TouchableOpacity>
+          ))}
         </Section>
       )}
 
@@ -216,3 +231,4 @@ const styles = StyleSheet.create({
   sourceTitle: { color: colors.textPrimary, fontSize: 12.5, marginTop: 6 },
   sourceUrl: { color: colors.textMuted, fontSize: 11 },
 });
+

@@ -785,8 +785,17 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 promise.resolve(map)
             } catch (e: Exception) {
                 Log.e(TAG, "FATAL CRASH: ${e.javaClass.name}: ${e.message}", e)
-                promise.reject("FACT_CHECK_ERROR", "${e.javaClass.name}: ${e.message ?: "unknown error"}", e)
+                var msg = e.message ?: "unknown error"
+                  if (msg.contains("Instagram sent an empty media response") || msg.contains("login to view")) {
+                      msg = "This post requires an Instagram login to view. Open it in the Instagram app and tap the Assay floating bubble instead."
+                  } else if (msg.contains("Video service error:")) {
+                      msg = "Cloud extraction failed. Try using the floating bubble instead."
+                  } else {
+                      msg = "${e.javaClass.name}: ${msg}"
+                  }
+                  promise.reject("FACT_CHECK_ERROR", msg, e)
             }
         }
     }
 }
+
