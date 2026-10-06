@@ -19,4 +19,4 @@ jobs:
       - name: Ping /health
         run: |
           curl -fsS --max-time 90 --retry 2 --retry-delay 10 \
-            https://instagram-tech-fact-checker.onrender.com/health
+            https://instagram-tech-fact-checker-1.onrender.com/health

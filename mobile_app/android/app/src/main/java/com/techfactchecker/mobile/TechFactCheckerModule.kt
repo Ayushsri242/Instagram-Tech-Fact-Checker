@@ -26,7 +26,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
 
     companion object {
         private const val TAG = "TFC_DEBUG"
-        private const val VIDEO_SERVICE_URL = "https://instagram-tech-fact-checker.onrender.com/extract"
+        private const val VIDEO_SERVICE_URL = "https://instagram-tech-fact-checker-1.onrender.com/extract"
 
         /** Frames sampled per video, matching the web pipeline's 10. */
         private const val FRAME_SAMPLES = 10
