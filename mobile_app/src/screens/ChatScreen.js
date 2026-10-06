@@ -36,10 +36,10 @@ const dedupeById = (list) => {
 };
 
 export default function ChatScreen({ route, navigation }) {
-  const { reel, initialUrl } = route.params || {};
+  const { reel, initialUrl, initialQuery } = route.params || {};
   const [currentReel, setCurrentReel] = useState(reel || null);
   const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(initialQuery || '');
   const [loading, setLoading] = useState(false);
   const [isInitialAnalysis, setIsInitialAnalysis] = useState(false);
   const [progressMsg, setProgressMsg] = useState('Extracting information...');
@@ -336,3 +336,4 @@ const styles = StyleSheet.create({
   disabledSend: { opacity: 0.5 },
   sendText: { color: '#000', fontWeight: 'bold', fontSize: 13 },
 });
+
