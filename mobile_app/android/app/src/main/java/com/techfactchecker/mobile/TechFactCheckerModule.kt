@@ -620,7 +620,8 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 // carousels whose slides are VIDEOS: their poster images carry the
                 // content ("22 NLP techniques", Oct 6 - 13 video slides, only slide
                 // 1 was read). One slide failing to download must not fail a run.
-                fun ocrSlides(label: String) {
+                // suspend: ocrEngine.processImage is a suspend function.
+                suspend fun ocrSlides(label: String) {
                     Log.i(TAG, "STEP 4: Downloading ${imageUrlList.size} slide images for OCR ($label, SOURCE=$mediaSource)")
                     for (i in imageUrlList.indices) {
                         try {
