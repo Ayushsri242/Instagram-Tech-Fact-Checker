@@ -118,6 +118,13 @@ export default function HomeScreen({ navigation }) {
   );
 
   // Opening any one closes the whole banner; the others stay in History.
+  // The X on the banner: dismiss without opening any verdict (they stay in
+  // History). Before, the banner only went away by opening one of them.
+  const dismissUnseen = async () => {
+    await clearUnseenResults();
+    setUnseen([]);
+  };
+
   const openUnseen = async (reelId) => {
     await clearUnseenResults();
     setUnseen([]);
@@ -225,12 +232,18 @@ export default function HomeScreen({ navigation }) {
             the app landed here with no sign anything had happened. */}
         {unseen.length === 1 && (
           <TouchableOpacity style={styles.readyBanner} onPress={() => openUnseen(unseen[0].reelId)}>
+            <TouchableOpacity style={styles.readyClose} onPress={dismissUnseen} hitSlop={12}>
+              <Text style={styles.readyCloseText}>✕</Text>
+            </TouchableOpacity>
             <Text style={styles.readyTitle}>Verdict ready: {unseen[0].verdict.replace('_', ' ')}</Text>
             <Text style={styles.readySub} numberOfLines={1}>{unseen[0].techName} - tap to open</Text>
           </TouchableOpacity>
         )}
         {unseen.length > 1 && (
           <View style={styles.readyBanner}>
+            <TouchableOpacity style={styles.readyClose} onPress={dismissUnseen} hitSlop={12}>
+              <Text style={styles.readyCloseText}>✕</Text>
+            </TouchableOpacity>
             <Text style={styles.readyTitle}>{unseen.length} reels checked while you were away</Text>
             <Text style={styles.readySub}>Check them below, or later in History</Text>
             {unseen.map((r) => (
@@ -402,7 +415,9 @@ const styles = StyleSheet.create({
   jobNote: { color: colors.warning || '#eab308', fontSize: 12.5, marginTop: 4 },
   jobTrack: { height: 4, borderRadius: 2, backgroundColor: colors.cardBorder, marginTop: 10, overflow: 'hidden' },
   jobFill: { height: 4, backgroundColor: colors.accentCyan },
-  readyTitle: { color: colors.accentCyan, fontSize: 15, fontWeight: 'bold' },
+  readyTitle: { color: colors.accentCyan, fontSize: 15, fontWeight: 'bold', paddingRight: 28 },
+  readyClose: { position: 'absolute', top: 8, right: 10, zIndex: 2, padding: 4 },
+  readyCloseText: { color: colors.textMuted, fontSize: 16, fontWeight: 'bold' },
   readySub: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
   readyRow: {
     flexDirection: 'row',

@@ -262,6 +262,9 @@ class FloatingBubbleService : Service() {
                 FlowLog.init(this)
                 FlowLog.i("bubble: tapped, link " + (Regex("(?:reel|p)/([A-Za-z0-9_-]+)").find(text)?.groupValues?.get(1) ?: text.take(60)) + " handed to JS")
                 postReceivedNotification()
+                // Saved first, so the link survives JS not listening yet.
+                PendingReels.add(this, text)
+                checkPickedUp(text)
                 val intent = Intent("com.techfactchecker.REEL_COPIED")
                 intent.setPackage(packageName)
                 intent.putExtra("url", text)
@@ -287,6 +290,41 @@ class FloatingBubbleService : Service() {
      * registered at all. This notification does not depend on JS. When JS does
      * run, AnalysisService posts into the same slot and replaces it.
      */
+    /**
+     * If JS has not taken the link a few seconds after the tap, the app is not
+     * running (first tap after an update, or Android closed it). Say so and
+     * offer to open it, instead of an orange bubble that never changes. The
+     * link stays saved; the app queues it as soon as it starts.
+     */
+    private fun checkPickedUp(url: String) {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (!PendingReels.contains(this, url)) return@postDelayed
+            FlowLog.i("bubble: link not picked up after 6s - app not running, asking to open it")
+            try {
+                val manager = getSystemService(NotificationManager::class.java) ?: return@postDelayed
+                val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                val notification = NotificationCompat.Builder(this, PROGRESS_CHANNEL_ID)
+                    .setContentTitle("Reel saved - tap to start")
+                    .setContentText("Assay is not running. Open it and the reel is checked automatically.")
+                    .setSmallIcon(android.R.drawable.ic_menu_search)
+                    .setAutoCancel(true)
+                if (launch != null) {
+                    notification.setContentIntent(
+                        android.app.PendingIntent.getActivity(
+                            this, 7, launch,
+                            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                        )
+                    )
+                }
+                manager.notify(AnalysisService.NOTIFICATION_ID, notification.build())
+            } catch (e: Exception) {
+                FlowLog.w("bubble: could not post open-app notification: " + e.message)
+            }
+        }, 6000)
+    }
+
     private fun postReceivedNotification() {
         try {
             val manager = getSystemService(NotificationManager::class.java) ?: return
