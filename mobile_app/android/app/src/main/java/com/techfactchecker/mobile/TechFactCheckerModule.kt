@@ -168,6 +168,22 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /** Same folder as runlog.csv, for the rotated older log (runlog_old.csv). */
+    @ReactMethod
+    fun saveRunLogCopyAs(csv: String, fileName: String, promise: Promise) {
+        scope.launch {
+            try {
+                val dir = reactContext.getExternalFilesDir(null) ?: throw IllegalStateException("external storage unavailable")
+                val safe = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                val file = File(dir, safe)
+                file.writeText(csv)
+                promise.resolve(file.absolutePath)
+            } catch (e: Exception) {
+                promise.reject("SAVE_ERROR", e.message)
+            }
+        }
+    }
+
     @ReactMethod
     fun sleep(ms: Double, promise: Promise) {
         scope.launch {

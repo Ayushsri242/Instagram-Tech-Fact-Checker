@@ -28,11 +28,24 @@ const call = (name, ...args) => {
 // noise, and a Home banner would announce something they already read.
 const userIsWatching = () => AppState.currentState === 'active';
 
-export const beginAnalysis = (ref = '') => {
+const analysingText = (waiting) =>
+  'Analysing reel' + (waiting > 0 ? ' · ' + waiting + ' more waiting' : '') + ' - you can leave the app';
+
+export const beginAnalysis = (ref = '', waiting = 0) => {
   trace('analysis begin ' + ref + ' appState=' + AppState.currentState);
   jobStarted(ref);
-  return call('startAnalysisService', 'Analysing reel - you can leave the app');
+  return call('startAnalysisService', analysingText(waiting));
 };
+
+// The ongoing notification follows the bubble queue. Restarting the service
+// with a new message only updates its notification, so these are cheap. The
+// notification used to say only "Analysing reel", and disappeared between
+// reels while more were still queued.
+export const noteQueueGrew = (waiting) => call('startAnalysisService', analysingText(waiting));
+export const noteQueueWaiting = (waiting, startsAt) =>
+  call('startAnalysisService',
+    waiting + ' reel' + (waiting > 1 ? 's' : '') + ' waiting - next starts at ' +
+    new Date(startsAt).toTimeString().slice(0, 5));
 
 export const finishAnalysis = async (result, { alwaysNotify = false } = {}) => {
   jobEnded();

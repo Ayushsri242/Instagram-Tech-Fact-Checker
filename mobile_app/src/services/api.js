@@ -151,6 +151,24 @@ export const describeLimits = (limits, now = Date.now()) => {
   return lines.length ? lines.join('\n') : null;
 };
 
+// How long the bubble queue should pause before the next reel, from the
+// budgets Groq reported, instead of a fixed 60 s. A run needs roughly this many
+// tokens from each model within a minute (measured Oct 7: extraction 1-7k on
+// qwen, verdict ~5-6k on gpt-oss-120b). If a model has that much left, or its
+// minute has already reset, no wait for it. Capped at 60 s; with no numbers yet
+// it does not wait - callGroq still waits out any rate limit it meets.
+const RUN_NEEDS = { 'qwen3.8-27b': 4000, 'gpt-oss-120b': 6000 };
+export const nextRunWaitMs = (now = Date.now()) => {
+  let wait = 0;
+  for (const [model, need] of Object.entries(RUN_NEEDS)) {
+    const rec = limitsByModel && limitsByModel[model];
+    const st = limitState(rec, now);
+    if (!st || st.tokLeft === null || st.tokLeft >= need) continue;
+    if (rec.tokensResetAt && rec.tokensResetAt > now) wait = Math.max(wait, rec.tokensResetAt - now + 1000);
+  }
+  return Math.min(wait, 60000);
+};
+
 // The latest numbers per model, loaded once from storage and kept in memory.
 let limitsByModel = null;
 const recordLimits = async (headers, model) => {

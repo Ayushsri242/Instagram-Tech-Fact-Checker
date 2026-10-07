@@ -6,11 +6,11 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { DeviceEventEmitter, NativeModules } from 'react-native';
 const { TechFactChecker } = NativeModules;
-import { analyzeReelApi, sleep } from './src/services/api';
+import { analyzeReelApi, sleep, nextRunWaitMs } from './src/services/api';
 import { saveReelResult, setOfflineMode } from './src/services/storage';
-import { beginAnalysis, finishAnalysis, failAnalysis } from './src/services/jobNotify';
+import { beginAnalysis, finishAnalysis, failAnalysis, noteQueueGrew, noteQueueWaiting } from './src/services/jobNotify';
 import { trace, shortRef } from './src/services/trace';
-import { setJobsWaiting } from './src/services/jobState';
+import { setJobsWaiting, setNextStart } from './src/services/jobState';
 import { checkForUpdates } from './src/services/updater';
 import HomeScreen from './src/screens/HomeScreen';
 import ResultScreen from './src/screens/ResultScreen';
@@ -52,16 +52,18 @@ export default function App() {
 // 1-minute Cooldown Queue implementation
     const queue = [];
     let isProcessing = false;
+    let pausedUntil = 0; // set while waiting between reels
 
     const processQueue = async () => {
       if (isProcessing || queue.length === 0) {
-        if (queue.length) trace('doomscroll: ' + queue.length + ' waiting - previous reel still in cooldown');
+        if (queue.length) trace('doomscroll: ' + queue.length + ' waiting - ' + (pausedUntil ? 'paused between reels' : 'a reel is running'));
         return;
       }
       isProcessing = true;
 
       const url = queue.shift();
-      setJobsWaiting(queue.length);
+      setJobsWaiting(queue.length, queue.map(shortRef));
+      setNextStart(null);
       console.log('Doomscroll Mode: Processing URL ->', url);
       const startedAt = Date.now();
       trace('doomscroll: start ' + shortRef(url) + ', ' + queue.length + ' still waiting' +
@@ -73,7 +75,7 @@ export default function App() {
         TechFactChecker.setBubbleColor("#00E5FF");
         // Same keep-alive and notifications as the paste flow, so the two
         // entry points cannot drift apart again.
-        beginAnalysis(shortRef(url));
+        beginAnalysis(shortRef(url), queue.length);
 
         const result = await analyzeReelApi(url);
         await saveReelResult(result);
@@ -95,11 +97,22 @@ export default function App() {
 
       // Enforce 1-minute (60000ms) cooldown before next item ONLY on success.
       // If analysis failed, reset immediately so user isn't stuck waiting.
-      if (!hadError) {
-        if (queue.length) {
-          trace('doomscroll: cooldown 60s, next ' + shortRef(queue[0]) + ' starts at ' + new Date(Date.now() + 60000).toTimeString().slice(0, 8));
+      // Pause before the next reel only as long as Groq's budgets need: the
+      // fixed 60 s left the queue looking dead for a minute even when both
+      // models had plenty left. Home counts the pause down and the
+      // notification says what is waiting.
+      if (!hadError && queue.length) {
+        const waitMs = nextRunWaitMs();
+        const startsAt = Date.now() + waitMs;
+        trace('doomscroll: pause ' + Math.round(waitMs / 1000) + 's, next ' + shortRef(queue[0]) +
+          ' starts at ' + new Date(startsAt).toTimeString().slice(0, 8) + ', ' + queue.length + ' waiting');
+        if (waitMs > 0) {
+          pausedUntil = startsAt;
+          setNextStart(startsAt);
+          noteQueueWaiting(queue.length, startsAt);
+          await sleep(waitMs);
+          pausedUntil = 0;
         }
-        await sleep(60000);
       }
       isProcessing = false;
       processQueue();
@@ -111,7 +124,12 @@ export default function App() {
       // If the bubble logged a copy and this line is missing, JS was frozen.
       trace('doomscroll: JS received reel ' + shortRef(url) + ', queue now ' + (queue.length + 1));
       queue.push(url);
-      setJobsWaiting(queue.length);
+      setJobsWaiting(queue.length, queue.map(shortRef));
+      // A reel already running: the notification gains "N more waiting".
+      if (isProcessing) {
+        if (pausedUntil) noteQueueWaiting(queue.length, pausedUntil);
+        else noteQueueGrew(queue.length);
+      }
       processQueue();
     });
     return () => sub.remove();

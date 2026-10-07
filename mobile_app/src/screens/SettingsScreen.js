@@ -3,7 +3,7 @@ import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, Nati
 import { colors } from '../theme/colors';
 import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey } from '../services/secrets';
 import { isGroqKey } from '../services/api';
-import { readRunLog, clearRunLog, RUN_LOG_PATH } from '../services/runlog';
+import { readRunLog, readOldRunLog, clearRunLog, RUN_LOG_PATH } from '../services/runlog';
 import { checkForUpdates, currentVersion } from '../services/updater';
 
 export default function SettingsScreen({ navigation }) {
@@ -49,7 +49,12 @@ export default function SettingsScreen({ navigation }) {
     }
     try {
       const path = await NativeModules.TechFactChecker.saveRunLogCopy(csv);
-      Alert.alert('Saved', runLogRows + ' run(s) saved to\n' + path + '\n\nThe previous copy was replaced.');
+      // The log from before the last app update, if there is one.
+      const old = await readOldRunLog();
+      if (old) await NativeModules.TechFactChecker.saveRunLogCopyAs(old, 'runlog_old.csv');
+      Alert.alert('Saved', runLogRows + ' run(s) saved to\n' + path +
+        (old ? '\n\nThe log from before the last update was saved as runlog_old.csv.' : '') +
+        '\n\nThe previous copy was replaced.');
     } catch (e) {
       Alert.alert('Could not save', e.message);
     }

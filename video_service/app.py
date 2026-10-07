@@ -4,9 +4,43 @@ import os
 import re
 import tempfile
 import shutil
+import http.cookiejar
 import instaloader
 
 app = Flask(__name__)
+
+
+def instaloader_with_cookies():
+    """An Instaloader that uses the same Instagram session as yt-dlp.
+
+    Only the yt-dlp (video) path used INSTAGRAM_COOKIES. Image posts went to
+    Instaloader anonymously, and from a cloud server Instagram refuses that:
+    every image/carousel fallback failed with "Fetching Post metadata failed"
+    (Oct 7) while reels on the same service worked. Loading the cookie file
+    into Instaloader's session is the difference.
+    """
+    L = instaloader.Instaloader(
+        download_videos=False,
+        save_metadata=False,
+        download_comments=False,
+        download_geotags=False,
+        quiet=True
+    )
+    cookies_content = os.environ.get("INSTAGRAM_COOKIES", "")
+    if cookies_content:
+        cookie_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+        try:
+            cookie_file.write(cookies_content)
+            cookie_file.close()
+            jar = http.cookiejar.MozillaCookieJar(cookie_file.name)
+            jar.load(ignore_discard=True, ignore_expires=True)
+            for cookie in jar:
+                L.context._session.cookies.set_cookie(cookie)
+        except Exception as e:
+            print("Could not load INSTAGRAM_COOKIES into Instaloader:", e)
+        finally:
+            os.unlink(cookie_file.name)
+    return L
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -88,14 +122,7 @@ def extract_image_post(url):
         return jsonify({"error": "Could not extract shortcode from URL"}), 400
     
     try:
-        L = instaloader.Instaloader(
-            download_videos=False,
-            save_metadata=False,
-            download_comments=False,
-            download_geotags=False,
-            quiet=True
-        )
-        
+        L = instaloader_with_cookies()
         post = instaloader.Post.from_shortcode(L.context, shortcode)
         
         image_urls = []
