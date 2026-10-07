@@ -137,6 +137,29 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
 
 
 
+    /** JS confirms it queued a bubble link, so it is not picked up twice. */
+    @ReactMethod
+    fun ackReel(url: String) {
+        com.techfactchecker.app.domain.PendingReels.ack(reactContext, url)
+    }
+
+    /**
+     * Bubble links JS never confirmed - caught while JS was not listening
+     * (first tap after an update). JS calls this once its listener is ready.
+     */
+    @ReactMethod
+    fun takePendingReels(promise: Promise) {
+        try {
+            val urls = com.techfactchecker.app.domain.PendingReels.takeAll(reactContext)
+            val out = com.facebook.react.bridge.Arguments.createArray()
+            urls.forEach { out.pushString(it) }
+            if (urls.isNotEmpty()) FlowLog.i("module: " + urls.size + " saved bubble link(s) handed to JS on start")
+            promise.resolve(out)
+        } catch (e: Exception) {
+            promise.resolve(com.facebook.react.bridge.Arguments.createArray())
+        }
+    }
+
     /** JS side of the TFC_FLOW log, so one `adb logcat -s TFC_FLOW` tells the whole story on a release build. */
     @ReactMethod
     fun trace(message: String) {

@@ -123,6 +123,10 @@ export default function App() {
       TechFactChecker.setBubbleColor("#00E5FF"); // Immediately reset to blue so user can queue next reel
       // If the bubble logged a copy and this line is missing, JS was frozen.
       trace('doomscroll: JS received reel ' + shortRef(url) + ', queue now ' + (queue.length + 1));
+      // Tell native it arrived; unconfirmed links are re-delivered at start-up.
+      if (TechFactChecker.ackReel) TechFactChecker.ackReel(url);
+      // A saved link and a live tap of the same reel can both arrive at start-up.
+      if (queue.includes(url)) return;
       queue.push(url);
       setJobsWaiting(queue.length, queue.map(shortRef));
       // A reel already running: the notification gains "N more waiting".
@@ -132,6 +136,17 @@ export default function App() {
       }
       processQueue();
     });
+    // Links the bubble caught while JS was not listening yet (Oct 7: the first
+    // tap after an update was dropped and the bubble stayed orange). Re-deliver
+    // them through the same path as a live tap.
+    if (TechFactChecker.takePendingReels) {
+      TechFactChecker.takePendingReels().then((urls) => {
+        (urls || []).forEach((url) => {
+          trace('doomscroll: picked up saved link ' + shortRef(url) + ' on start');
+          DeviceEventEmitter.emit('ON_REEL_COPIED', url);
+        });
+      }).catch(() => {});
+    }
     return () => sub.remove();
   }, []);
 

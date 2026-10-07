@@ -471,10 +471,10 @@ export const runVerifiers = async (claimsData, transcript = '', ocrText = '', ev
   // Packages named by the model, plus any install command spelled out anywhere.
   for (const tool of tools) {
     const cmd = String(tool.pip_command || '');
-    const pip = cmd.match(/pip\s+install\s+([a-z0-9][a-z0-9._-]*)/i);
+    const pip = cmd.match(/pip\s+install\s+(?:-{1,2}[\w-]+\s+)*([a-z0-9][a-z0-9._-]*)/i);
     if (pip) once(`pypi:${pip[1]}`, () => checkPypi(pip[1]));
   }
-  for (const m of haystack.matchAll(/pip\s+install\s+([a-z0-9][a-z0-9._-]*)/gi)) {
+  for (const m of haystack.matchAll(/pip\s+install\s+(?:-{1,2}[\w-]+\s+)*([a-z0-9][a-z0-9._-]*)/gi)) {
     once(`pypi:${m[1]}`, () => checkPypi(m[1]));
   }
   for (const m of haystack.matchAll(/npm\s+i(?:nstall)?\s+(@?[a-z0-9][a-z0-9@/._-]*)/gi)) {

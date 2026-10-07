@@ -139,7 +139,8 @@ const CHECKS = [
       ).toLowerCase();
       const bad = [];
       for (const t of report.tools || []) {
-        const m = String(t.install || '').match(/(?:pip install|npm i(?:nstall)?|npx)\s+(@?[\w./-]+)/i);
+        // Skip flags such as -U / --upgrade to reach the package name.
+        const m = String(t.install || '').match(/(?:pip3? install|npm i(?:nstall)?|npx)\s+(?:-{1,2}[\w-]+\s+)*(@?[\w./-]+)/i);
         if (m && !hay.includes(m[1].toLowerCase())) bad.push(m[1]);
       }
       return bad.length ? 'install command for an unseen package: ' + bad.join(', ') : null;

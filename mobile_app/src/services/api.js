@@ -625,7 +625,7 @@ const OS_PATH_PARTS = new Set([
 
 // Earning language only. Currency alone is not enough: "$20/month" is a price,
 // and an AI-tool pricing post must stay a tech post.
-const MONEY_HINT = /\b(?:earn|earns|earning|income|get paid|getting paid|paid per|pays? (?:you|up to|around)|side ?hustles?|make money|making money|prints? money|passive income|payouts?|work from home|cash ?out|withdraw(?:al)?)\b/i;
+const MONEY_HINT = /\b(?:earn|earns|earning|(?:passive|extra|side|monthly|daily|online|second|additional) income|get paid|getting paid|paid per|pays? (?:you|up to|around)|side ?hustles?|make money|making money|prints? money|passive income|payouts?|work from home|cash ?out|withdraw(?:al)?)\b/i;
 // A pay RATE: a currency amount per unit of work ("$5 to $20 per review").
 // "Cost per task" on an AI pricing slide has no amount next to it and stays a
 // tech post; so does an app that "earned $1M" (past tense, a startup story).
@@ -1141,7 +1141,8 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
 
   for (const tool of report.tools || []) {
     if (!tool.install) continue;
-    const m = String(tool.install).match(/(?:pip3?)\s+install\s+([a-z0-9][a-z0-9._-]*)/i);
+    // Flags first ("pip install -U transformers"): skip them to the package name.
+    const m = String(tool.install).match(/(?:pip3?)\s+install\s+(?:-{1,2}[\w-]+\s+)*([a-z0-9][a-z0-9._-]*)/i);
     if (!m) continue;
     const pkg = m[1];
     const lower = pkg.toLowerCase();
@@ -1783,7 +1784,10 @@ export const analyzeReelApi = async (url) => {
   // (item 18 of 22). A repo the post PRINTS as a link is the exception - then
   // it is the subject. A single-subject post the picker abstained on stays
   // "Unidentified": those rejections are window titles and creator handles.
-  const displayTitle = (!money && isListPost(modelTechName, claimsData.tools) && !/slug printed/.test(subject.why || '')
+  // "Prints a repo link" only marks THE subject when the post prints one link:
+  // a "10 GitHub repos" post prints all ten and was titled "searxng" (Oct 7).
+  const onePrintedRepo = /slug printed/.test(subject.why || '') && printedGithubSlugs(ocrText).length <= 1;
+  const displayTitle = (!money && isListPost(modelTechName, claimsData.tools) && !onePrintedRepo
     ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
     subject.name || fallbackName ||
     (isListPost(modelTechName, claimsData.tools) ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
