@@ -179,6 +179,15 @@ export default function HomeScreen({ navigation }) {
               {JOB_STAGES[job.running.step]}
               {job.waiting > 0 ? ' · ' + job.waiting + ' more waiting' : ''}
             </Text>
+            {/* Long posts are read in parts and may wait for Groq's free
+                per-minute budget; say so, or the bar looks frozen. */}
+            {!!job.running.note && (
+              <Text style={styles.jobNote}>
+                {job.running.note}
+                {job.running.noteUntil && job.running.noteUntil > tick
+                  ? ' ' + elapsed(job.running.noteUntil - tick) : ''}
+              </Text>
+            )}
             <View style={styles.jobTrack}>
               <View style={[styles.jobFill, { width: ((job.running.step + 1) / JOB_STAGES.length) * 100 + '%' }]} />
             </View>
@@ -390,6 +399,7 @@ const styles = StyleSheet.create({
   jobTitle: { flex: 1, color: colors.textPrimary, fontSize: 15, fontWeight: 'bold' },
   jobTime: { color: colors.textMuted, fontSize: 13 },
   jobStage: { color: colors.textMuted, fontSize: 13, marginTop: 6 },
+  jobNote: { color: colors.warning || '#eab308', fontSize: 12.5, marginTop: 4 },
   jobTrack: { height: 4, borderRadius: 2, backgroundColor: colors.cardBorder, marginTop: 10, overflow: 'hidden' },
   jobFill: { height: 4, backgroundColor: colors.accentCyan },
   readyTitle: { color: colors.accentCyan, fontSize: 15, fontWeight: 'bold' },
