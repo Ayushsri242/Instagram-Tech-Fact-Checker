@@ -85,11 +85,45 @@ export default function ResultScreen({ route, navigation }) {
   // tracking query (?stkn=..., ?igsh=...) is dropped; the post path is enough.
   const postLink = String(reel.sourceUrl || '').split('?')[0];
 
+  // The whole report as plain text - it used to share the title, verdict,
+  // confidence and one summary line, which said nothing about WHY.
+  const shareText = () => {
+    const r = reel.report || {};
+    const lines = [];
+    const add = (s) => lines.push(s);
+    add('Fact check: ' + (reel.techName || reel.title || 'Instagram post'));
+    add('Verdict: ' + String(reel.verdict || 'UNKNOWN').replace(/_/g, ' ') +
+      (reel.confidenceScore ? ' (' + reel.confidenceScore + '% confidence)' : ''));
+    if (postLink) add('Post: ' + postLink);
+    const summary = r.factualReality || reel.factualReality || reel.summaryMarkdown;
+    if (summary) { add(''); add(summary); }
+    if ((r.claims || []).length) {
+      add(''); add('What the post claims:');
+      r.claims.forEach((c) => add('- ' + c));
+    }
+    if ((r.tools || []).length) {
+      add(''); add('Tools checked:');
+      r.tools.forEach((t) => {
+        add('- ' + t.name + ' [' + (t.status || 'unverified') + ']' + (t.repo ? ' github.com/' + t.repo : ''));
+        if (t.whatItDoes) add('  ' + t.whatItDoes);
+        if (t.install) add('  Install: ' + t.install);
+        if (t.caveat) add('  Note: ' + t.caveat);
+      });
+    }
+    if ((r.otherTools || []).length) {
+      add(''); add('Also mentioned: ' + r.otherTools.map((t) => t.name).join(', '));
+    }
+    if ((r.gotchas || []).length) {
+      add(''); add('Gotchas:');
+      r.gotchas.forEach((g) => add('- ' + g));
+    }
+    add(''); add('Checked with Assay');
+    return lines.join('\n');
+  };
+
   const handleShare = async () => {
     try {
-      await Share.share({
-        message: `Fact Check: ${reel.techName || reel.title}\nVerdict: ${reel.verdict || 'UNKNOWN'}\n\nConfidence: ${reel.confidenceScore || 'N/A'}%\n\nSummary: ${reel.summaryMarkdown || reel.factualReality}`,
-      });
+      await Share.share({ message: shareText() });
     } catch (error) {
       console.error('Error sharing', error);
     }

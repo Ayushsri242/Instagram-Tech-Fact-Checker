@@ -11,6 +11,7 @@ import com.techfactchecker.app.domain.LocalLlamaEngine
 import com.techfactchecker.app.domain.OcrEngine
 import com.techfactchecker.app.domain.OcrResult
 import com.techfactchecker.app.domain.GroqTranscriber
+import com.techfactchecker.app.domain.FlowLog
 import com.techfactchecker.app.domain.WebValidator
 import kotlinx.coroutines.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -90,7 +91,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 val url = intent.getStringExtra("url") ?: return
                 // If this line is missing after a "bubble: reel link copied" line,
                 // the process was frozen between the two.
-                Log.i(FLOW, "module: reel link received from bubble, emitting to JS")
+                FlowLog.i("module: reel link received from bubble, emitting to JS")
                 reactContext.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                     .emit("ON_REEL_COPIED", url)
             }
@@ -98,6 +99,8 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     }
 
     init {
+        // The flow log file needs a Context to find its folder.
+        FlowLog.init(reactContext)
         val filter = android.content.IntentFilter("com.techfactchecker.REEL_COPIED")
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             reactContext.registerReceiver(bubbleReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
@@ -137,7 +140,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     /** JS side of the TFC_FLOW log, so one `adb logcat -s TFC_FLOW` tells the whole story on a release build. */
     @ReactMethod
     fun trace(message: String) {
-        Log.i(FLOW, "js: " + message)
+        FlowLog.i("js: " + message)
     }
 
     /**
@@ -282,7 +285,7 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
         for (intent in intents) {
             try {
                 reactContext.startActivity(intent)
-                Log.i(FLOW, "permissions: opened " + label + " via " + (intent.component?.className ?: intent.action))
+                FlowLog.i("permissions: opened " + label + " via " + (intent.component?.className ?: intent.action))
                 return
             } catch (e: Exception) {
                 last = e

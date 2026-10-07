@@ -259,17 +259,20 @@ class FloatingBubbleService : Service() {
                     val shape = it.background as android.graphics.drawable.GradientDrawable
                     shape.setColor(Color.parseColor("#FF9800"))
                 }
-                Log.i(FLOW_TAG, "bubble: reel link copied, handing to JS: " + text.take(80))
+                FlowLog.init(this)
+                FlowLog.i("bubble: tapped, link " + (Regex("(?:reel|p)/([A-Za-z0-9_-]+)").find(text)?.groupValues?.get(1) ?: text.take(60)) + " handed to JS")
                 postReceivedNotification()
                 val intent = Intent("com.techfactchecker.REEL_COPIED")
                 intent.setPackage(packageName)
                 intent.putExtra("url", text)
                 sendBroadcast(intent)
             } else {
-                Log.i(FLOW_TAG, "bubble: tapped, but clipboard has no instagram link")
+                FlowLog.init(this)
+                FlowLog.i("bubble: tapped, but clipboard has no instagram link")
             }
         } else {
-            Log.i(FLOW_TAG, "bubble: tapped, clipboard empty or unreadable")
+            FlowLog.init(this)
+            FlowLog.i("bubble: tapped, clipboard empty or unreadable")
         }
     }
 
@@ -300,7 +303,7 @@ class FloatingBubbleService : Service() {
                 .build()
             manager.notify(AnalysisService.NOTIFICATION_ID, notification)
         } catch (e: Exception) {
-            Log.w(FLOW_TAG, "bubble: could not post received notification: " + e.message)
+            FlowLog.w("bubble: could not post received notification: " + e.message)
         }
     }
 

@@ -323,7 +323,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   limitText: {
-    fontSize: 12,
+    fontSize: 11,
+    lineHeight: 15,
+    textAlign: 'center',
+    marginHorizontal: 6,
     color: colors.textMuted,
     backgroundColor: colors.surface,
     paddingHorizontal: 8,

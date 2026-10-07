@@ -82,14 +82,15 @@ class AnalysisService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-        Log.i(FLOW_TAG, "service: foreground started (" + message + ")")
+        FlowLog.init(this)
+        FlowLog.i("service: foreground started (" + message + ")")
         // If the system kills us anyway, do not restart: the JS that owned the
         // job is gone with the process, so a revived service would spin forever.
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        Log.i(FLOW_TAG, "service: stopped")
+        FlowLog.i("service: stopped")
         super.onDestroy()
     }
 }
