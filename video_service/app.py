@@ -59,7 +59,17 @@ def extract_video_url():
     
     if not url:
         return jsonify({"error": "No URL provided"}), 400
-    
+
+    # /p/ posts (carousels, image posts, feed videos): Instaloader first. It
+    # returns every slide, the caption and the author. yt-dlp only knows single
+    # videos and answered a 13-video-slide carousel with "Could not extract
+    # video URL" (Oct 7). If Instaloader fails, yt-dlp still gets its turn below.
+    if "/p/" in url:
+        resp = extract_image_post(url)
+        status = resp[1] if isinstance(resp, tuple) else 200
+        if status == 200:
+            return resp
+
     try:
         cmd = ["yt-dlp", "--dump-json", "-f", "best[ext=mp4]/best", "--no-warnings", "--no-check-certificates"]
         
@@ -125,6 +135,17 @@ def extract_image_post(url):
         L = instaloader_with_cookies()
         post = instaloader.Post.from_shortcode(L.context, shortcode)
         
+        # A single video posted to the feed (/p/ link): return the video, so the
+        # app transcribes it, rather than its cover picture.
+        if post.typename == "GraphVideo" and post.video_url:
+            return jsonify({
+                "type": "video",
+                "video_url": post.video_url,
+                "caption": post.caption or "",
+                "author": post.owner_username or "Unknown",
+                "shortcode": shortcode
+            })
+
         image_urls = []
         if post.typename == "GraphSidecar":
             # Carousel post - multiple images
