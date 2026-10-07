@@ -5,7 +5,7 @@ import { getOfflineMode, saveApiLimits, getApiLimits } from './storage';
 import { runVerifiers, fillMissingPageText, readPage } from './verifiers';
 import { logRun } from './runlog';
 import { trace, shortRef } from './trace';
-import { jobStage } from './jobState';
+import { jobStage, setJobNote, getJobState } from './jobState';
 
 const { TechFactChecker } = NativeModules;
 
@@ -64,14 +64,57 @@ export const parseJsonLoose = (raw) => {
 const rateLimitWaitMs = (error) => {
   const data = error?.response?.data;
   const code = data?.error?.code;
-  if (error?.response?.status !== 429 && code !== 'rate_limit_exceeded') return 0;
-  // Only worth waiting for a per-minute token limit; "request too large" will
-  // fail again no matter how long we wait.
   const msg = data?.error?.message || '';
-  if (/reduce your message size/i.test(msg)) return 0;
+  // Output tokens per minute (OTPM). The free tier also caps how many tokens a
+  // model may WRITE per minute; when several long answers land in one minute
+  // Groq refuses the next with a 413 "expected output tokens exceed the
+  // enforced limit" - yet the same request succeeds in a fresh minute (measured
+  // Oct 7: 3,000 output tokens fine on its own). So wait it out like a 429.
+  // Only when the minute is USED UP ("Used 1000, Requested 331") - a reply that
+  // alone is expected to exceed the cap ("Limit 1000, Requested 1501", no
+  // "Used") is refused again after waiting; go straight to the next model.
+  const outputLimit = /output tokens per minute|OTPM/i.test(msg) && /\bUsed\s+\d+/i.test(msg);
+  if (error?.response?.status !== 429 && code !== 'rate_limit_exceeded' && !outputLimit) return 0;
+  // An INPUT too large for the per-minute limit fails again however long we
+  // wait; the caller must split instead.
+  if (!outputLimit && /reduce your message size/i.test(msg)) return 0;
   const m = msg.match(/try again in ([\d.]+)\s*s/i);
-  const seconds = m ? parseFloat(m[1]) : 5;
-  return Math.min(Math.ceil(seconds * 1000) + 500, 30000);
+  const seconds = m ? parseFloat(m[1]) : (outputLimit ? 60 : 5);
+  return Math.min(Math.ceil(seconds * 1000) + 500, 61000);
+};
+
+// Rescue a JSON reply that was cut off or broken near the end: keep everything
+// up to the last complete object and close the brackets. On Oct 7 a long-list
+// extraction came back with a broken last array item and the whole run failed
+// over one item.
+export const salvageJson = (raw) => {
+  const text = String(raw || '');
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+  for (let cut = text.lastIndexOf('}'); cut > start; cut = text.lastIndexOf('}', cut - 1)) {
+    const body = text.slice(start, cut + 1);
+    const stack = [];
+    let inString = false, escaped = false;
+    for (const ch of body) {
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === '{' || ch === '[') stack.push(ch);
+      else if (ch === '}' || ch === ']') stack.pop();
+    }
+    if (inString) continue;
+    const closers = stack.reverse().map((c) => (c === '{' ? '}' : ']')).join('');
+    try {
+      return JSON.parse(body.replace(/,\s*$/, '') + closers);
+    } catch (e) {
+      // try an earlier cut
+    }
+  }
+  return null;
 };
 
 // Native wait: React Native pauses JS timers while the app is in the
@@ -158,6 +201,16 @@ export const describeLimits = (limits, now = Date.now()) => {
 // minute has already reset, no wait for it. Capped at 60 s; with no numbers yet
 // it does not wait - callGroq still waits out any rate limit it meets.
 const RUN_NEEDS = { 'qwen3.8-27b': 4000, 'gpt-oss-120b': 6000 };
+// The same reading for one model: how long until it has `need` tokens left in
+// its current minute (0 if it already has, or nothing is known yet).
+const modelWaitMs = (model, need, now = Date.now()) => {
+  const key = shortModel(model);
+  const rec = limitsByModel && limitsByModel[key];
+  const st = limitState(rec, now);
+  if (!st || st.tokLeft === null || st.tokLeft >= need) return 0;
+  return rec.tokensResetAt && rec.tokensResetAt > now ? Math.min(rec.tokensResetAt - now + 1000, 61000) : 0;
+};
+
 export const nextRunWaitMs = (now = Date.now()) => {
   let wait = 0;
   for (const [model, need] of Object.entries(RUN_NEEDS)) {
@@ -233,7 +286,16 @@ const callGroq = async (apiKey, messages, { job, json, accept, temperature }) =>
         if (!content.trim()) {
           throw new Error(`Empty reply from ${model} (finish_reason=${choice.finish_reason || 'unknown'})`);
         }
-        const value = json ? parseJsonLoose(content) : content;
+        let value = content;
+        if (json) {
+          try {
+            value = parseJsonLoose(content);
+          } catch (parseError) {
+            value = salvageJson(content);
+            if (!value) throw parseError;
+            console.warn(`${job}: repaired a broken JSON reply from ${model}`);
+          }
+        }
         if (json && accept && !accept(value)) {
           throw new Error(`Reply from ${model} is missing required fields`);
         }
@@ -254,7 +316,11 @@ const callGroq = async (apiKey, messages, { job, json, accept, temperature }) =>
         const waitMs = attempt === 0 ? rateLimitWaitMs(error) : 0;
         if (waitMs > 0) {
           console.warn(`Rate limited on ${model}; waiting ${waitMs}ms then retrying.`);
+          // Show the wait on Home's progress strip, then put back what it said.
+          const before = (getJobState().running || {}).note || null;
+          setJobNote("Waiting for Groq's free per-minute limit", Date.now() + waitMs);
           await sleep(waitMs);
+          setJobNote(before);
           continue;
         }
         break; // not a rate limit, or still limited after waiting: next model
@@ -267,16 +333,116 @@ const callGroq = async (apiKey, messages, { job, json, accept, temperature }) =>
 // Mirrors verify.extract_claims_and_queries in the Python pipeline. The short
 // version of this prompt missed listicle carousels and never asked for repo
 // slugs, which is where most of the checkable evidence actually lives.
+// ---- Long posts: stay under Groq's per-request limit without cutting text ----
+
+// Rough token count. Measured on recorded prompts: ~3.6 characters per token.
+const approxTokens = (s) => Math.ceil(String(s || '').length / 3.6);
+// A whole step-1 request (instructions + post text). Under the free tier's
+// 8,000 tokens per minute with room for the answer (~1-2.5k tokens).
+const EXTRACT_PROMPT_BUDGET = 5500;
+
+// The same piece of text on every slide - creator handle, series header, page
+// footer - is kept once. Short fragments (numbers, "1/20") are always kept:
+// they carry list positions.
+export const dropRepeatedText = (ocr) => {
+  const seen = new Set();
+  return String(ocr || '').split('\n').map((line) =>
+    line.split(/\s*\|\s*/).filter((seg) => {
+      const k = seg.trim().toLowerCase();
+      if (!k) return false;
+      if (k.length < 4) return true;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }).join(' | ')
+  ).filter((l) => l.trim()).join('\n');
+};
+
+// Split on-screen text into parts whose full prompt fits the budget. Slides
+// (lines) are packed in order until the next would not fit; a single slide too
+// big on its own is split at its " | " fragments, then by length.
+export const splitForBudget = (ocr, promptTokensFor) => {
+  if (promptTokensFor(ocr) <= EXTRACT_PROMPT_BUDGET) return [ocr];
+  const roomChars = Math.max(2000, (EXTRACT_PROMPT_BUDGET - promptTokensFor('')) * 3.6);
+  const units = [];
+  for (const line of String(ocr || '').split('\n')) {
+    if (line.length <= roomChars) { units.push(line); continue; }
+    let buf = '';
+    for (const seg of line.split(/\s*\|\s*/)) {
+      for (let i = 0; i < seg.length; i += roomChars) {
+        const piece = seg.slice(i, i + roomChars);
+        if (buf && buf.length + piece.length + 3 > roomChars) { units.push(buf); buf = ''; }
+        buf = buf ? buf + ' | ' + piece : piece;
+      }
+    }
+    if (buf) units.push(buf);
+  }
+  const parts = [];
+  let cur = '';
+  for (const u of units) {
+    if (cur && cur.length + u.length + 1 > roomChars) { parts.push(cur); cur = ''; }
+    cur = cur ? cur + '\n' + u : u;
+  }
+  if (cur) parts.push(cur);
+  return parts;
+};
+
+// One extraction from several parts: items in post order without repeats,
+// every claim, and searches taken in turn from each part so no part is starved.
+export const mergeExtractions = (results) => {
+  const strip = (n) => String(n || '').replace(/^\s*\d{1,3}\s*[.):-]\s*/, '').trim();
+  const tools = [];
+  const toolKeys = new Set();
+  const claims = [];
+  const claimKeys = new Set();
+  for (const r of results) {
+    for (const t of (r && r.tools) || []) {
+      const k = String(strip(t && t.name)).toLowerCase().replace(/[\s_.-]+/g, '');
+      if (!k || toolKeys.has(k)) continue;
+      toolKeys.add(k);
+      tools.push(t);
+    }
+    for (const c of (r && r.claimed_features) || []) {
+      const k = String(c).toLowerCase().trim();
+      if (!k || claimKeys.has(k)) continue;
+      claimKeys.add(k);
+      claims.push(c);
+    }
+  }
+  const queries = [];
+  const lists = results.map((r) => ((r && r.search_queries) || []).slice());
+  for (let round = 0; queries.length < 10 && lists.some((l) => l.length > round); round++) {
+    for (const l of lists) {
+      if (queries.length >= 10) break;
+      if (l[round] && !queries.includes(l[round])) queries.push(l[round]);
+    }
+  }
+  const first = results.find((r) => r && r.tech_name) || {};
+  return {
+    tech_name: first.tech_name || null,
+    is_multi_tool: true,
+    tools,
+    claimed_features: claims,
+    search_queries: queries,
+  };
+};
+
 const extractClaims = async (apiKey, transcript, ocrText) => {
-  const prompt = [
+  // Text repeated on every slide (handle, header, footer) is kept once - free
+  // shrinking before any splitting is considered.
+  const cleanOcr = dropRepeatedText(ocrText);
+  const buildPrompt = (ocrPart, part) => [
     'Analyze this content from a tech video/Instagram reel/carousel post.',
     'You are given both the Audio Transcript (or post caption) and all On-Screen Text detected from the video frames/slides.',
+    ...(part.count > 1 ? ['',
+      'NOTE: the post is long, so its on-screen text is sent in ' + part.count + ' parts. This is part ' + (part.index + 1) +
+      ' of ' + part.count + '. Extract what appears in THIS part; the parts are merged afterwards.'] : []),
     '',
     'Audio Transcript / Caption:',
-    transcript,
+    part.index === 0 ? transcript : '(given with part 1)',
     '',
     'On-Screen Text / Visuals Detected from Frames/Slides:',
-    ocrText,
+    ocrPart,
     '',
     'Task:',
     '1. Determine if this post is about a SINGLE tool/technique or MULTIPLE items (e.g. "5 LLM Libraries", "4 Side Hustle Websites").',
@@ -284,17 +450,41 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
     '3. Generate precise DuckDuckGo search queries. For developer tools, query "owner/repo github". For money-making, freelancing, or software sites, you MUST include terms like "reviews", "scam", or "reddit" (e.g. "Alignerr.com reviews scam reddit") to find truth.',
     '4. Audio transcription often misspells names (e.g. hearing "Zev" when the screen says "Zed"). ALWAYS trust the exact spelling shown in the On-Screen Text over the audio.',
     '5. Every number the post states is its OWN claim in claimed_features, kept with its exact figure and what it applies to - pay rates ("$5 to $20 per music review on Music Xray"), prices, speeds, sizes, counts, percentages. Never merge several figures into one line: each one is checked separately.',
-    '7. If the post is a numbered list ("22 NLP techniques", "Top 10 repos"), return EVERY numbered item in tools - techniques and concepts included, not only installable tools - in the post\'s order, with its number in the name ("1. Text Normalisation"). Do not stop early.',
     '6. Only list tools the post is ABOUT or tells the viewer to use. Ignore apps that merely appear in the background (dock, menu bar, editor sidebars, recent-folder lists) and garbled OCR fragments that are not real names.',
+    '7. If the post is a numbered list ("22 NLP techniques", "Top 10 repos"), return EVERY numbered item in tools - techniques and concepts included, not only installable tools - in the post\'s order, with its number in the name ("1. Text Normalisation"). Do not stop early.',
+    '8. Keep the answer compact: leave out any field you would set to null, and keep each tool\'s "claim" to one short sentence (under 15 words). Long lists must still be complete.',
     '',
     'Respond ONLY with valid JSON in this exact structure:',
     '{"tech_name":"Primary title or main tool/website name","is_multi_tool":true,"tools":[{"name":"Tool or Website Name","github_repo":"owner/repo or null","domain_url":"domain.com or null","pip_command":"pip install ... or null","claim":"Core feature or claim stated"}],"claimed_features":["claim 1","claim 2"],"search_queries":["query 1","query 2"]}',
   ].join('\n');
 
-  const data = await callGroq(apiKey, [
-    { role: 'system', content: 'You are an expert technical entity and claim extraction system. Output strictly valid JSON.' },
-    { role: 'user', content: prompt },
-  ], { job: 'extract', json: true, temperature: 0, accept: (d) => d && (Array.isArray(d.tools) || typeof d.tech_name === 'string') });
+  // Groq's free tier refuses any SINGLE request over 8,000 tokens per minute
+  // (Oct 7: a 20-slide carousel asked for 10,773 and both models refused it).
+  // Split by MEASURED size - a text-heavy post may split after slide 4, a light
+  // one not at all - and merge the parts. Nothing is cut.
+  const parts = splitForBudget(cleanOcr, (ocr) => approxTokens(buildPrompt(ocr, { index: 0, count: 2 })));
+  if (parts.length > 1) console.warn('Step 1: post sent in ' + parts.length + ' parts to stay under the per-request limit.');
+  const results = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (parts.length > 1) {
+      setJobNote('Long post: reading part ' + (i + 1) + ' of ' + parts.length);
+      // Pace the parts: if the reader model's minute is spent, wait for it
+      // rather than fire the next part into a refusal (Oct 7: four parts back
+      // to back hit the per-minute output limit and the run failed).
+      const waitMs = i > 0 ? modelWaitMs(MODEL_CHAINS.extract[0], approxTokens(buildPrompt(parts[i], { index: i, count: parts.length })) + 1500) : 0;
+      if (waitMs > 0) {
+        setJobNote('Long post: waiting for Groq\'s free limit before part ' + (i + 1) + ' of ' + parts.length, Date.now() + waitMs);
+        await sleep(waitMs);
+        setJobNote('Long post: reading part ' + (i + 1) + ' of ' + parts.length);
+      }
+    }
+    results.push(await callGroq(apiKey, [
+      { role: 'system', content: 'You are an expert technical entity and claim extraction system. Output strictly valid JSON.' },
+      { role: 'user', content: buildPrompt(parts[i], { index: i, count: parts.length }) },
+    ], { job: 'extract', json: true, temperature: 0, accept: (d) => d && (Array.isArray(d.tools) || typeof d.tech_name === 'string') }));
+  }
+  if (parts.length > 1) setJobNote(null);
+  const data = results.length === 1 ? results[0] : mergeExtractions(results);
 
   // Rule 7 asks for list items as "12. Word2Vec" so none is skipped; drop the
   // number again (order is kept) or the name never matches an evidence page.
@@ -1588,6 +1778,17 @@ export const analyzeReelApi = async (url) => {
   log('STAGE 3 NORMALIZED (what the card renders)', normalized);
 
   const tools = normalized.tools || [];
+  // The title the app shows. A list post keeps its list title even when the
+  // picker found a repo for one item: "22 NLP Techniques" was titled "spaCy"
+  // (item 18 of 22). A repo the post PRINTS as a link is the exception - then
+  // it is the subject. A single-subject post the picker abstained on stays
+  // "Unidentified": those rejections are window titles and creator handles.
+  const displayTitle = (!money && isListPost(modelTechName, claimsData.tools) && !/slug printed/.test(subject.why || '')
+    ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
+    subject.name || fallbackName ||
+    (isListPost(modelTechName, claimsData.tools) ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
+    'Unidentified';
+
   await logRun({
     timestamp: new Date().toISOString(),
     shortcode: (String(url).match(/(?:reel|p)\/([A-Za-z0-9_-]+)/) || [])[1] || url,
@@ -1653,6 +1854,7 @@ export const analyzeReelApi = async (url) => {
     author: media.author || '',
     postMode: money ? 'money' : 'tech',
     models: describeModelsUsed(),
+    title: displayTitle,
     fetchedRepos: fetchedRepoSlugs(evidence).join(' '),
   });
   trace('pipeline done ' + shortRef(url) + ' verdict=' + normalized.verdict +
@@ -1671,11 +1873,7 @@ export const analyzeReelApi = async (url) => {
     // A list post keeps its list title even when the picker found a repo for
     // one item: "22 NLP Techniques" was titled "spaCy" (item 18 of 22). A repo
     // the post PRINTS as a link is the exception - then it is the subject.
-    techName: (!money && isListPost(modelTechName, claimsData.tools) && !/slug printed/.test(subject.why || '')
-      ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
-      subject.name || fallbackName ||
-      (isListPost(modelTechName, claimsData.tools) ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
-      'Unidentified',
+    techName: displayTitle,
     subjectWhy: subject.why,
     // The verdict AFTER the evidence rules. This used to return the model's raw
     // verdict, so a run the rules downgraded TRUE -> PARTIALLY_TRUE still showed

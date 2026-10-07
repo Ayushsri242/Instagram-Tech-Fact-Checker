@@ -40,6 +40,15 @@ export const jobEnded = () => {
   emit();
 };
 
+// A short line under the stage while a long post is read in parts or the run
+// waits for Groq's free per-minute budget - otherwise the bar just stops moving
+// for a minute and the run looks stuck. `until` (ms timestamp) gives a countdown.
+export const setJobNote = (text, until = null) => {
+  if (!state.running) return;
+  state = { ...state, running: { ...state.running, note: text || null, noteUntil: until } };
+  emit();
+};
+
 // Reels the bubble queued behind the one running (doomscroll cooldown), and
 // their shortcodes so Home can name them.
 export const setJobsWaiting = (n, refs = []) => {

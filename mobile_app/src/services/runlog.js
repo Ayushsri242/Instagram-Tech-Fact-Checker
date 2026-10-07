@@ -60,6 +60,7 @@ const COLUMNS = [
   'fetchedRepos',     // every GitHub repo actually fetched, not just the 12 kept rows
   'postMode',         // 'money' (side hustle / earnings, checked against user reviews) or 'tech'
   'models',           // which model answered each job, e.g. "extract=qwen3.8-27b verdict=gpt-oss-120b"
+  'title',            // the title the app shows (techName above is the model's raw name)
 ];
 
 const cell = (v) => {
