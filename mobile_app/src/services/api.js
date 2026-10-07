@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { NativeModules } from 'react-native';
 import { getGroqApiKey } from './secrets';
-import { getOfflineMode, saveApiLimits } from './storage';
+import { getOfflineMode, saveApiLimits, getApiLimits } from './storage';
 import { runVerifiers, fillMissingPageText, readPage } from './verifiers';
 import { logRun } from './runlog';
 import { trace, shortRef } from './trace';
@@ -13,15 +13,37 @@ const { TechFactChecker } = NativeModules;
 // Whisper transcription the native side does, so a second provider would mean
 // a second key for half the pipeline. Six other providers lived here, untested.
 //
-// `models` is a fallback chain: callGroqJson/Text walk it in order and keep the
-// first that answers, so a retired model name costs a round trip instead of
-// the whole run.
-const GROQ = {
-  url: 'https://api.groq.com/openai/v1/chat/completions',
-  // Both confirmed live against this account. Do not add a third from memory:
-  // 'llama-3.3-70b-versatile' was added that way and returned model_not_found.
-  models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'],
+// One key, one model per job. Groq's free tier allows 8,000 tokens PER MINUTE
+// PER MODEL (measured Oct 7: each model reports its own x-ratelimit-limit-tokens
+// and its own remaining count). A big carousel's claim extraction alone used
+// 7,213 tokens on gpt-oss-120b, most of it hidden reasoning, so the verdict
+// call that followed in the same minute was rate limited and the run died.
+// Splitting the two calls across two models gives each its own minute. The
+// user still pastes a single key.
+//
+// Measured on 8 recorded posts with the same prompt:
+// - qwen3.8-27b extracts claims better (5 wins, 3 ties, 0 losses: no dock or
+//   folder junk, no dependency noise), with no hidden reasoning, half the
+//   tokens, 2-4x faster.
+// - gpt-oss-120b stays the judge for the verdict.
+// - gpt-oss-20b is out: on a 5,000-token prompt it spent its whole output on
+//   hidden reasoning (finish_reason=length) and returned an EMPTY answer - the
+//   "No JSON object in model reply" failures.
+// Do not add a model from memory: 'llama-3.3-70b-versatile' was added that way
+// and returned model_not_found. Check GET /openai/v1/models first.
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const MODEL_CHAINS = {
+  extract: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
+  verdict: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'],
+  chat: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
 };
+const shortModel = (m) => String(m).split('/').pop();
+
+// Which model answered each job in the current analysis, for the run log.
+let modelsUsed = {};
+export const resetModelsUsed = () => { modelsUsed = {}; };
+const describeModelsUsed = () =>
+  Object.keys(modelsUsed).map((k) => k + '=' + modelsUsed[k]).join(' ');
 
 // Groq keys start with gsk_. Anything else is a key for some other service.
 export const isGroqKey = (apiKey) => String(apiKey || '').trim().startsWith('gsk_');
@@ -36,9 +58,9 @@ export const parseJsonLoose = (raw) => {
   return JSON.parse(text.slice(start, end + 1));
 };
 
-// Rate limits are per-organisation, not per-model, so falling straight through
-// to the next model in the chain hits the same wall. Groq states the wait in the
-// error ("Please try again in 10.5075s"); honour it and retry the same model.
+// Groq states the wait in the error ("Please try again in 10.5075s"). Limits
+// are per model (measured Oct 7), so callGroq waits and retries the same model
+// once, then moves to the next model, which has its own budget.
 const rateLimitWaitMs = (error) => {
   const data = error?.response?.data;
   const code = data?.error?.code;
@@ -84,24 +106,54 @@ export const parseResetMs = (value) => {
 // One line for the Home header. A window whose reset time has passed is shown
 // as full rather than at its last recorded value: nothing was spent since, and
 // the old display left a stale count on screen for as long as the app was idle.
-export const describeLimits = (limits, now = Date.now()) => {
-  if (!limits || !limits.timestamp) return null;
-  if (now - limits.timestamp > 36 * 3600000) return null; // older than a day and a half: meaningless
+//
+// Two models now, each with its OWN per-minute and per-day budget (qwen reads
+// the post, gpt-oss-120b judges it). Showing whichever answered last could
+// read "8k/8k" while the other was nearly spent, so each is shown by its job:
+//   Reader 6.2k · Judge 3.1k of 8k/min
+//   982 runs left today
+// "Runs left" is the lower of the two daily counts - a run needs both.
+const LIMIT_LABELS = { 'qwen3.8-27b': 'Reader', 'gpt-oss-120b': 'Judge' };
+const limitState = (rec, now) => {
+  if (!rec || !rec.timestamp || now - rec.timestamp > 36 * 3600000) return null; // stale: meaningless
   const n = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
-  const short = (v) => (v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'k' : String(v));
-  const tokLimit = n(limits.limitTokens);
-  let tokLeft = n(limits.remainingTokens);
-  if (tokLimit !== null && limits.tokensResetAt && now >= limits.tokensResetAt) tokLeft = tokLimit;
-  const reqLimit = n(limits.limitRequests);
-  let reqLeft = n(limits.remainingRequests);
-  if (reqLimit !== null && limits.requestsResetAt && now >= limits.requestsResetAt) reqLeft = reqLimit;
-  const parts = [];
-  if (tokLeft !== null && tokLimit !== null) parts.push('min ' + short(tokLeft) + '/' + short(tokLimit) + ' tok');
-  if (reqLeft !== null) parts.push('day ' + reqLeft + (reqLimit !== null ? '/' + reqLimit : '') + ' req');
-  return parts.length ? 'API: ' + parts.join(' · ') : null;
+  const tokLimit = n(rec.limitTokens);
+  let tokLeft = n(rec.remainingTokens);
+  if (tokLimit !== null && rec.tokensResetAt && now >= rec.tokensResetAt) tokLeft = tokLimit;
+  const reqLimit = n(rec.limitRequests);
+  let reqLeft = n(rec.remainingRequests);
+  if (reqLimit !== null && rec.requestsResetAt && now >= rec.requestsResetAt) reqLeft = reqLimit;
+  return { tokLimit, tokLeft, reqLimit, reqLeft };
+};
+const shortCount = (v) => (v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'k' : String(v));
+
+export const describeLimits = (limits, now = Date.now()) => {
+  if (!limits) return null;
+  // Records saved before the split: one model, the old one-line format.
+  // (Those came from gpt-oss-120b, the only model then - the judge.)
+  const byModel = limits.byModel || (limits.timestamp ? { 'gpt-oss-120b': limits } : {});
+  const tokParts = [];
+  let tokLimitShown = null;
+  let runsLeft = null;
+  for (const [model, rec] of Object.entries(byModel)) {
+    const st = limitState(rec, now);
+    if (!st) continue;
+    if (st.tokLeft !== null && st.tokLimit !== null) {
+      tokParts.push((LIMIT_LABELS[model] || model) + ' ' + shortCount(st.tokLeft));
+      tokLimitShown = st.tokLimit;
+    }
+    if (st.reqLeft !== null) runsLeft = runsLeft === null ? st.reqLeft : Math.min(runsLeft, st.reqLeft);
+  }
+  // Two short lines: the header slot between History and Settings is narrow.
+  const lines = [];
+  if (tokParts.length) lines.push(tokParts.join(' · ') + ' of ' + shortCount(tokLimitShown) + '/min');
+  if (runsLeft !== null) lines.push(runsLeft + ' runs left today');
+  return lines.length ? lines.join('\n') : null;
 };
 
-const recordLimits = (headers) => {
+// The latest numbers per model, loaded once from storage and kept in memory.
+let limitsByModel = null;
+const recordLimits = async (headers, model) => {
   const h = headers || {};
   const get = (k) => h[k] !== undefined ? h[k] : (typeof h.get === 'function' ? h.get(k) : undefined);
   const limitRequests = get('x-ratelimit-limit-requests');
@@ -110,7 +162,7 @@ const recordLimits = (headers) => {
   const now = Date.now();
   const requestsResetMs = parseResetMs(get('x-ratelimit-reset-requests') || get('x-ratelimit-reset'));
   const tokensResetMs = parseResetMs(get('x-ratelimit-reset-tokens'));
-  saveApiLimits({
+  const rec = {
     remainingRequests,
     limitRequests: limitRequests || null,
     remainingTokens: get('x-ratelimit-remaining-tokens') || null,
@@ -118,80 +170,77 @@ const recordLimits = (headers) => {
     requestsResetAt: requestsResetMs !== null ? now + requestsResetMs : null,
     tokensResetAt: tokensResetMs !== null ? now + tokensResetMs : null,
     timestamp: now,
-  });
-};
-
-const callGroqJson = async (apiKey, messages) => {
-  let lastError;
-  const config = GROQ;
-  for (const model of config.models) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const response = await axios.post(
-        config.url,
-        { model, messages, temperature: 0 },
-        { timeout: 90000, headers: { Authorization: 'Bearer ' + apiKey } }
-      );
-      
-      recordLimits(response.headers);
-      
-      return parseJsonLoose(response.data.choices[0].message.content);
-    } catch (error) {
-      // A 429 carries the same headers, and it is the one response where the
-      // numbers matter most.
-      if (error.response) recordLimits(error.response.headers);
-      if (error.response && error.response.data) {
-        console.error("API JSON Error Data:", JSON.stringify(error.response.data));
-        lastError = new Error(`${error.message} - ${JSON.stringify(error.response.data)}`);
-      } else {
-        lastError = error;
-      }
-      const waitMs = attempt === 0 ? rateLimitWaitMs(error) : 0;
-      if (waitMs > 0) {
-        console.warn(`Rate limited on ${model}; waiting ${waitMs}ms then retrying.`);
-        await sleep(waitMs);
-        continue;
-      }
-      break;
+  };
+  try {
+    if (!limitsByModel) {
+      const saved = await getApiLimits();
+      limitsByModel = (saved && saved.byModel) || {};
     }
-    }
+    limitsByModel[shortModel(model)] = rec;
+    await saveApiLimits({ byModel: limitsByModel });
+  } catch (e) {
+    // The header line is a convenience; never let it break a call.
   }
-  throw lastError || new Error('All models failed.');
 };
 
-const callGroqText = async (apiKey, messages) => {
+// One guarded call for every job. A reply only counts if it is usable: for
+// JSON jobs it must parse (and pass `accept`, when given); for text it must be
+// non-empty. Anything else - empty answer, cut-off answer, unparseable - moves
+// on to the next model instead of failing the run.
+//
+// Rate limits: wait the time Groq states and retry the SAME model once (its
+// minute has reset by then); if it is still limited, the next model has its own
+// separate budget. "Request too large" is not waited on - it cannot succeed.
+const callGroq = async (apiKey, messages, { job, json, accept, temperature }) => {
   let lastError;
-  const config = GROQ;
-  for (const model of config.models) {
+  for (const model of MODEL_CHAINS[job]) {
     for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const response = await axios.post(
-        config.url,
-        { model, messages, temperature: 0.3 },
-        { timeout: 60000, headers: { Authorization: 'Bearer ' + apiKey } }
-      );
-      
-      recordLimits(response.headers);
-      
-      return response.data.choices[0].message.content;
-    } catch (error) {
-      // A 429 carries the same headers, and it is the one response where the
-      // numbers matter most.
-      if (error.response) recordLimits(error.response.headers);
-      if (error.response && error.response.data) {
-        console.error("API Text Error Data:", JSON.stringify(error.response.data));
-        lastError = new Error(`${error.message} - ${JSON.stringify(error.response.data)}`);
-      } else {
-        lastError = error;
+      try {
+        const response = await axios.post(
+          GROQ_URL,
+          {
+            model,
+            messages,
+            temperature,
+            // gpt-oss reasons before it answers, and the reasoning shares the
+            // output allowance. With the default allowance gpt-oss-20b spent
+            // all of it reasoning and answered nothing; give room to finish.
+            max_completion_tokens: 4096,
+          },
+          { timeout: 90000, headers: { Authorization: 'Bearer ' + apiKey } }
+        );
+        recordLimits(response.headers, model);
+        const choice = (response.data.choices || [])[0] || {};
+        const content = (choice.message && choice.message.content) || '';
+        if (!content.trim()) {
+          throw new Error(`Empty reply from ${model} (finish_reason=${choice.finish_reason || 'unknown'})`);
+        }
+        const value = json ? parseJsonLoose(content) : content;
+        if (json && accept && !accept(value)) {
+          throw new Error(`Reply from ${model} is missing required fields`);
+        }
+        modelsUsed[job] = shortModel(model);
+        if (model !== MODEL_CHAINS[job][0]) console.warn(`${job}: answered by fallback ${model}`);
+        return value;
+      } catch (error) {
+        // A 429 carries the same headers, and it is the one response where the
+        // numbers matter most.
+        if (error.response) recordLimits(error.response.headers, model);
+        if (error.response && error.response.data) {
+          console.error(`API ${job} error from ${model}:`, JSON.stringify(error.response.data));
+          lastError = new Error(`${error.message} - ${JSON.stringify(error.response.data)}`);
+        } else {
+          console.warn(`${job}: ${model} unusable - ${error.message}`);
+          lastError = error;
+        }
+        const waitMs = attempt === 0 ? rateLimitWaitMs(error) : 0;
+        if (waitMs > 0) {
+          console.warn(`Rate limited on ${model}; waiting ${waitMs}ms then retrying.`);
+          await sleep(waitMs);
+          continue;
+        }
+        break; // not a rate limit, or still limited after waiting: next model
       }
-      const waitMs = attempt === 0 ? rateLimitWaitMs(error) : 0;
-      if (waitMs > 0) {
-        console.warn(`Rate limited on ${model}; waiting ${waitMs}ms then retrying.`);
-        await sleep(waitMs);
-        continue;
-      }
-      break;
-    }
     }
   }
   throw lastError || new Error('All models failed.');
@@ -216,15 +265,24 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
     '2. Extract all distinct tools/libraries/websites/platforms mentioned or shown on screen. Look specifically for GitHub repo names, domain URLs, and platform names.',
     '3. Generate precise DuckDuckGo search queries. For developer tools, query "owner/repo github". For money-making, freelancing, or software sites, you MUST include terms like "reviews", "scam", or "reddit" (e.g. "Alignerr.com reviews scam reddit") to find truth.',
     '4. Audio transcription often misspells names (e.g. hearing "Zev" when the screen says "Zed"). ALWAYS trust the exact spelling shown in the On-Screen Text over the audio.',
+    '5. Every number the post states is its OWN claim in claimed_features, kept with its exact figure and what it applies to - pay rates ("$5 to $20 per music review on Music Xray"), prices, speeds, sizes, counts, percentages. Never merge several figures into one line: each one is checked separately.',
+    '7. If the post is a numbered list ("22 NLP techniques", "Top 10 repos"), return EVERY numbered item in tools - techniques and concepts included, not only installable tools - in the post\'s order, with its number in the name ("1. Text Normalisation"). Do not stop early.',
+    '6. Only list tools the post is ABOUT or tells the viewer to use. Ignore apps that merely appear in the background (dock, menu bar, editor sidebars, recent-folder lists) and garbled OCR fragments that are not real names.',
     '',
     'Respond ONLY with valid JSON in this exact structure:',
     '{"tech_name":"Primary title or main tool/website name","is_multi_tool":true,"tools":[{"name":"Tool or Website Name","github_repo":"owner/repo or null","domain_url":"domain.com or null","pip_command":"pip install ... or null","claim":"Core feature or claim stated"}],"claimed_features":["claim 1","claim 2"],"search_queries":["query 1","query 2"]}',
   ].join('\n');
 
-  const data = await callGroqJson(apiKey, [
+  const data = await callGroq(apiKey, [
     { role: 'system', content: 'You are an expert technical entity and claim extraction system. Output strictly valid JSON.' },
     { role: 'user', content: prompt },
-  ]);
+  ], { job: 'extract', json: true, temperature: 0, accept: (d) => d && (Array.isArray(d.tools) || typeof d.tech_name === 'string') });
+
+  // Rule 7 asks for list items as "12. Word2Vec" so none is skipped; drop the
+  // number again (order is kept) or the name never matches an evidence page.
+  data.tools = (Array.isArray(data.tools) ? data.tools : []).map((t) =>
+    t && typeof t.name === 'string' ? { ...t, name: t.name.replace(/^\s*\d{1,3}\s*[.):-]\s*/, '').trim() } : t
+  );
 
   // Folder names on the creator's own computer are not tools. The PixelFriend
   // demo (Oct 6) had VS Code's Welcome page behind it, whose "Recent" list
@@ -424,7 +482,16 @@ const moneyQueries = (platforms, claimsData, text) => {
 // gets up to 3 seats before any platform gets a fourth.
 const CODE_REGISTRY = /github\.com|hn\.algolia\.com|news\.ycombinator\.com|pypi\.org|npmjs\.com|huggingface\.co/i;
 const rankMoneyEvidence = (evidence, platforms) => {
-  const rows = (evidence || []).filter((r) => !CODE_REGISTRY.test(String(r.url || '')));
+  // A platform's Trustpilot page arrives twice: once as the row the Trustpilot
+  // check READ, once as the bare search result with no text. Keep the read one
+  // - the duplicates took 4 of the 12 seats on the first money-mode run.
+  const pageKey = (u) => String(u || '').toLowerCase().split(/[?#]/)[0].replace(/\/+$/, '');
+  const readPages = new Set((evidence || [])
+    .filter((r) => /^Trustpilot - /.test(String(r.title || '')))
+    .map((r) => pageKey(r.url)));
+  const rows = (evidence || []).filter((r) =>
+    !CODE_REGISTRY.test(String(r.url || '')) &&
+    (/^Trustpilot - /.test(String(r.title || '')) || !readPages.has(pageKey(r.url))));
   const score = (r) =>
     (/^(Trustpilot - |What people say about)/.test(String(r.title || '')) ? 30 : 0) +
     ((r.pagePreview || '').length > 0 ? 10 : 0) +
@@ -752,10 +819,10 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     'Return ONLY JSON:',
     '{"tech_name":"string","verdict":"TRUE","pricing_model":"Open Source or Commercial","github_url":"https://github.com/... or null","factual_reality":"2-4 sentence explanation","claims":["one plain sentence per claim"],"tools":[{"name":"Tool or Website Name","repo":"owner/repo or null","website":"domain.com or null","install":"pip install x or null","what_it_does":"one plain sentence","caveat":"one plain sentence or null","status":"verified"}],"gotchas":["one plain sentence per caveat"]}',
   ].join('\n');
-  return callGroqJson(apiKey, [
+  return callGroq(apiKey, [
     { role: 'system', content: 'You are a precise, objective AI technical fact checker. Output strictly valid JSON.' },
     { role: 'user', content: prompt },
-  ]);
+  ], { job: 'verdict', json: true, temperature: 0, accept: (d) => d && typeof d.verdict === 'string' && d.verdict.trim().length > 0 });
 };
 
 // The model is allowed to be sloppy; the object we hand to the UI is not.
@@ -1311,7 +1378,7 @@ const normalizeReport = (report, evidence, opts = {}) => {
 // and the normaliser without a device. Testing on hardware costs a build, an
 // Instagram fetch and an API call per case, which is why earlier sessions kept
 // tuning against a single reel and calling it a pass.
-export const __test = { pickSubject, normalizeReport, looksLikeSubject, applyEvidenceRules, rankEvidence, printedGithubSlugs, moneyPlatforms, moneyQueries, rankMoneyEvidence, moneyTitle, isListPost, listTitle };
+export const __test = { synthesizeFactCheck, extractClaims, pickSubject, normalizeReport, looksLikeSubject, applyEvidenceRules, rankEvidence, printedGithubSlugs, moneyPlatforms, moneyQueries, rankMoneyEvidence, moneyTitle, isListPost, listTitle };
 
 const normalizeTools = (tools) => (tools || []).map((tool) => ({
   name: tool.name || 'Tool',
@@ -1321,6 +1388,10 @@ const normalizeTools = (tools) => (tools || []).map((tool) => ({
 }));
 
 export const analyzeReelApi = async (url) => {
+  // Set before the try so the failure log below can use them: a failed run
+  // used to log durationMs as Date.now() - Date.now(), always 0.
+  const runStartedAt = Date.now();
+  resetModelsUsed();
   try {
   if (!TechFactChecker) throw new Error('Native mobile module is unavailable. Rebuild the Android dev app.');
   const offline = await getOfflineMode();
@@ -1457,11 +1528,19 @@ export const analyzeReelApi = async (url) => {
 
   // Tools mentioned in the video/slides but not promoted to the top verified list
   const allClaimedTools = claimsData?.tools || [];
-  const verifiedNames = new Set((normalized.tools || []).map((t) => (t.name || '').toLowerCase().trim()));
+  // Already covered = same name ignoring spacing/punctuation, or the name part
+  // of a reported tool's repo. "Needle" was listed again under "Also mentioned"
+  // below the verified "cactus-needle" (repo cactus-compute/needle). Plain
+  // substring matching is NOT used: it would hide "Claude" behind "Claude Code".
+  const covered = new Set();
+  for (const t of normalized.tools || []) {
+    if (t.name) covered.add(flatKey(t.name));
+    if (t.repo) covered.add(flatKey(String(t.repo).split('/').pop()));
+  }
   normalized.otherTools = allClaimedTools
     .filter((t) => {
-      const n = (t.name || '').toLowerCase().trim();
-      return n && !verifiedNames.has(n);
+      const k = flatKey(t.name);
+      return k && !covered.has(k);
     })
     .map((t) => ({
       name: t.name,
@@ -1555,6 +1634,7 @@ export const analyzeReelApi = async (url) => {
     caption: media.caption || '',
     author: media.author || '',
     postMode: money ? 'money' : 'tech',
+    models: describeModelsUsed(),
     fetchedRepos: fetchedRepoSlugs(evidence).join(' '),
   });
   trace('pipeline done ' + shortRef(url) + ' verdict=' + normalized.verdict +
@@ -1570,7 +1650,12 @@ export const analyzeReelApi = async (url) => {
     // List posts get a title from the model's name or their items. A single-
     // subject post the picker abstained on stays "Unidentified": those
     // rejections are window titles and creator handles, which it must not print.
-    techName: subject.name || fallbackName ||
+    // A list post keeps its list title even when the picker found a repo for
+    // one item: "22 NLP Techniques" was titled "spaCy" (item 18 of 22). A repo
+    // the post PRINTS as a link is the exception - then it is the subject.
+    techName: (!money && isListPost(modelTechName, claimsData.tools) && !/slug printed/.test(subject.why || '')
+      ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
+      subject.name || fallbackName ||
       (isListPost(modelTechName, claimsData.tools) ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
       'Unidentified',
     subjectWhy: subject.why,
@@ -1597,7 +1682,8 @@ export const analyzeReelApi = async (url) => {
       shortcode: (String(url).match(/(?:reel|p)\/([A-Za-z0-9_-]+)/) || [])[1] || url,
       url: String(url),
       error: e.message || String(e),
-      durationMs: Date.now() - (Date.now()) // Just a filler
+      durationMs: Date.now() - runStartedAt,
+      models: describeModelsUsed(),
     }).catch(() => {});
     throw e;
   }
@@ -1614,6 +1700,40 @@ const performQuickSearch = async (query) => {
   } catch (e) {
     return 'Search failed.';
   }
+};
+
+// The chat's view of the post. Short posts go in whole; long ones as the item
+// and claim lists from the analysis plus the lines matching the question.
+const STOPWORDS = new Set(('the and for are was were this that with what which who whom whose why how ' +
+  'does did can could would should will about from into than then them they their there here have has ' +
+  'had not but all any each list post tell show give mentioned mention said says say also other more ' +
+  'tools tool items item used using use your you its it’s was it is').split(' '));
+const CHAT_FULL_TEXT = 2500;
+const CHAT_EXCERPT = 1800;
+export const postExcerpt = (reel, question) => {
+  const ocr = String(reel.ocrText || '');
+  const names = [
+    ...(reel.tools || []).map((t) => t && t.name),
+    ...(((reel.report && reel.report.tools) || []).map((t) => t && t.name)),
+    ...(((reel.report && reel.report.otherTools) || []).map((t) => t && t.name)),
+  ].filter(Boolean);
+  const items = [...new Set(names.map((n) => String(n).trim()))].join(', ');
+  const claims = (reel.claims || []).map((c) => (typeof c === 'string' ? c : (c && c.claim) || '')).filter(Boolean).slice(0, 25).join(' | ');
+  if (ocr.length <= CHAT_FULL_TEXT) return { full: true, text: ocr, items, claims, totalChars: ocr.length };
+  const words = [...new Set((String(question || '').toLowerCase().match(/[a-z0-9][a-z0-9.+#-]{2,}/g) || [])
+    .filter((w) => !STOPWORDS.has(w)))];
+  const lines = ocr.split(/\s*\|\s*|\n/).map((l) => l.trim()).filter(Boolean);
+  const picked = [];
+  let size = 0;
+  lines.forEach((line, i) => {
+    if (size >= CHAT_EXCERPT || !words.some((w) => line.toLowerCase().includes(w))) return;
+    // The matching line plus its neighbours: a heading's explanation is the next line.
+    for (const j of [i - 1, i, i + 1]) {
+      if (lines[j] && !picked.includes(j) && size < CHAT_EXCERPT) { picked.push(j); size += lines[j].length + 3; }
+    }
+  });
+  const text = picked.sort((a, b) => a - b).map((j) => lines[j]).join(' | ');
+  return { full: false, text, items, claims, totalChars: ocr.length };
 };
 
 // The question the report's "ASK AI" chip sends. Built by askToolQuestion so
@@ -1647,18 +1767,28 @@ export const chatWithAiApi = async (reel, userMessage, conversation = [], onSear
     reel.verdict ? 'Verdict: ' + reel.verdict : '',
     (reel.report && reel.report.factualReality) || reel.factualReality || '',
   ].filter(Boolean).join(' - ');
+  // What the post contains, without sending all of it. A 13-slide carousel's
+  // on-screen text was 19,700 characters; the chat used to get the first 1,200
+  // and then, told to answer only from that, denied that NLTK was in the post -
+  // it was on a later slide. Now it gets everything the analysis extracted from
+  // the WHOLE post, plus the lines of the full text that match the question.
+  const post = postExcerpt(reel, userMessage);
   const context = [
     'You are an expert AI and mobile engineer answering questions about one verified Instagram post.',
     'Tech: ' + (reel.techName || 'Unknown Technology'),
     'Transcript: ' + String(reel.rawTranscript || '').slice(0, 800),
-    'On-screen text the app read from the post: ' + (String(reel.ocrText || '').slice(0, 1200) || '(none)'),
+    'Items the analysis found in the WHOLE post (every slide/frame): ' + (post.items || '(none)'),
+    'Claims the post makes: ' + (post.claims || '(none)'),
+    post.full
+      ? 'Full on-screen text of the post: ' + (post.text || '(none)')
+      : 'Parts of the on-screen text relevant to this question (the full text is ' + post.totalChars + ' characters, not all shown): ' + (post.text || '(no matching lines)'),
     'Verified fact-check: ' + verdictLine,
     'Sources consulted (titles and links only):' + (sourceList ? '\n' + sourceList : ' none'),
     'CRITICAL RULES:',
     // Oct 6: asked "what NLP techniques were present?" about a post whose 22
     // techniques sat on slides the app never read, the chat answered in 1.5 s
     // with an invented generic list of 24. It only had the cover text.
-    '0. What the POST says or lists comes ONLY from the transcript and on-screen text above. If the user asks what the post contains and it is not there, say the app could not read that part of the post (for example later slides) - never fill it in from general knowledge.',
+    '0. What the POST says or lists comes ONLY from the items, claims, transcript and on-screen text above - never from general knowledge. If something is not there and you were not given the full on-screen text, say you cannot find it in the parts of the post you have; never claim the post does not mention it.',
     '1. Answer in 1-2 short sentences maximum. Be concise. Only provide long detailed answers if the user explicitly uses words like "explain", "detail", or "elaborate".',
     '2. If the user asks a question about something you have 0 knowledge about and it is not covered above, you MUST output EXACTLY the phrase: SEARCH: [your search query here] and nothing else. The system will perform the search and give you the answer to summarize. You are given source titles and links, not their contents, so use this whenever the answer would need the text of one of those pages.',
   ].join('\n\n');
@@ -1711,10 +1841,10 @@ export const chatWithAiApi = async (reel, userMessage, conversation = [], onSear
         '\n\nUsing ONLY this evidence: does "' + name + '" exist, what does it actually do, and does that match what the post claims? ' +
         'If the evidence does not show it, say it could not be found - do not answer from memory. Keep it to 2-4 short sentences.',
     });
-    return callGroqText(apiKey, messages);
+    return callGroq(apiKey, messages, { job: 'chat', temperature: 0.3 });
   }
 
-  let res = await callGroqText(apiKey, messages);
+  let res = await callGroq(apiKey, messages, { job: 'chat', temperature: 0.3 });
   if (res.includes('SEARCH:')) {
     const match = res.match(/SEARCH:\s*(.+)/);
     if (match) {
@@ -1723,7 +1853,7 @@ export const chatWithAiApi = async (reel, userMessage, conversation = [], onSear
       const searchResult = await performQuickSearch(query);
       messages.push({ role: 'assistant', content: res });
       messages.push({ role: 'user', content: 'Search Results:\n' + searchResult + '\n\nNow answer the question concisely.' });
-      return callGroqText(apiKey, messages);
+      return callGroq(apiKey, messages, { job: 'chat', temperature: 0.3 });
     }
   }
   return res;

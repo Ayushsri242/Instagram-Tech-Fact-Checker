@@ -63,6 +63,9 @@ export default function App() {
       const url = queue.shift();
       setJobsWaiting(queue.length);
       console.log('Doomscroll Mode: Processing URL ->', url);
+      const startedAt = Date.now();
+      trace('doomscroll: start ' + shortRef(url) + ', ' + queue.length + ' still waiting' +
+        (queue.length ? ' (' + queue.map(shortRef).join(', ') + ')' : ''));
 
       let hadError = false;
       try {
@@ -80,9 +83,11 @@ export default function App() {
         // Doomscroll runs while the user is inside another app by definition,
         // so always notify - even if this app happens to be in front.
         await finishAnalysis(result, { alwaysNotify: true });
+        trace('doomscroll: done ' + shortRef(url) + ' verdict=' + result.verdict + ' in ' + Math.round((Date.now() - startedAt) / 1000) + 's');
       } catch (e) {
         hadError = true;
         console.log('Doomscroll Mode: Failed ->', e.message);
+        trace('doomscroll: FAILED ' + shortRef(url) + ' after ' + Math.round((Date.now() - startedAt) / 1000) + 's - ' + String(e && e.message).slice(0, 120));
         await failAnalysis(e && e.message);
       } finally {
         TechFactChecker.setBubbleColor("#00E5FF");
@@ -91,6 +96,9 @@ export default function App() {
       // Enforce 1-minute (60000ms) cooldown before next item ONLY on success.
       // If analysis failed, reset immediately so user isn't stuck waiting.
       if (!hadError) {
+        if (queue.length) {
+          trace('doomscroll: cooldown 60s, next ' + shortRef(queue[0]) + ' starts at ' + new Date(Date.now() + 60000).toTimeString().slice(0, 8));
+        }
         await sleep(60000);
       }
       isProcessing = false;

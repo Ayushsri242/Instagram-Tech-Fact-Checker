@@ -316,7 +316,8 @@ class InstagramExtractor(private val context: Context) {
                     val newImages = (if (fromJson.isNotEmpty()) fromJson else fromDom).filterNot { isThumbnail(it) }
                     val added = scrapedImages.addAll(newImages)
                     
-                    if ((added || attempt == 0) && attempt < 10) {
+                    // Instagram allows 20 slides; 10 swipes read 8 of a 14-slide post.
+                    if ((added || attempt == 0) && attempt < 20) {
                         handler.postDelayed({ scrapeHtml(view, attempt + 1) }, 600)
                     } else {
                         Log.i(TAG, "EXTRACT: TIER_B pagination finished after " + attempt + " swipes")
