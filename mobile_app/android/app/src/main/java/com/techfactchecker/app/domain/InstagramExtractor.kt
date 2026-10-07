@@ -37,7 +37,8 @@ class InstagramExtractor(private val context: Context) {
 
     companion object {
         private const val TAG = "TFC_DEBUG"
-        private const val HARD_TIMEOUT_MS = 25_000L
+        /** Paging a 20-slide carousel at 0.6 s a swipe plus load and settle needs ~20 s; leave room. */
+        private const val HARD_TIMEOUT_MS = 40_000L
         private const val SETTLE_AFTER_LOAD_MS = 3_000L
         private const val MOBILE_UA =
             "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -136,7 +137,14 @@ class InstagramExtractor(private val context: Context) {
         val embedUrl = "https://www.instagram.com/" + slug + "/" + shortcode + "/embed/captioned/"
         Log.i(TAG, "EXTRACT: start shortcode=" + shortcode + " isReel=" + isReel + " embed=" + embedUrl)
 
-        val result = withContext(Dispatchers.Main) { runWebView(embedUrl, isReel, activity) }
+        var result = withContext(Dispatchers.Main) { runWebView(embedUrl, isReel, activity) }
+        // An embed page that comes back completely empty is often transient: the
+        // side-hustle carousel read 5 slides one day and nothing the next (Oct 7),
+        // and the cloud fallback then failed too. One more try is cheap.
+        if (result == null || result.isEmpty) {
+            Log.w(TAG, "EXTRACT: embed came back empty, retrying once")
+            result = withContext(Dispatchers.Main) { runWebView(embedUrl, isReel, activity) }
+        }
         if (result == null || result.isEmpty) {
             Log.e(TAG, "EXTRACT: WebView produced nothing for " + shortcode)
             return null
@@ -240,6 +248,12 @@ class InstagramExtractor(private val context: Context) {
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
+        // Outside the client so the hard timeout can use what was collected so
+        // far. A 20+ slide carousel hit the timeout mid-paging and the slides
+        // already scraped were thrown away for 2 sniffed images (Oct 7).
+        val scrapedImages = mutableSetOf<String>()
+        var lastHtml = ""
+
         webView.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(
                 view: WebView?,
@@ -274,8 +288,6 @@ class InstagramExtractor(private val context: Context) {
                 handler.postDelayed(runnable, SETTLE_AFTER_LOAD_MS)
             }
 
-            private val scrapedImages = mutableSetOf<String>()
-            private var lastHtml = ""
             private fun scrapeHtml(view: WebView?, attempt: Int = 0) {
                 if (finished.get() || view == null) return
                 if (isReel) {
@@ -336,8 +348,9 @@ class InstagramExtractor(private val context: Context) {
         val timeout = Runnable {
             if (finished.get()) return@Runnable
             val sniff = buildFromSniff()
-            Log.e(TAG, "EXTRACT: hard timeout, sniffFallback=" + (sniff != null))
-            finish(sniff)
+            val partial = if (scrapedImages.isNotEmpty()) parseHtml(lastHtml, isReel, scrapedImages.toList()) else null
+            Log.e(TAG, "EXTRACT: hard timeout, keptScraped=" + scrapedImages.size + " sniffFallback=" + (sniff != null))
+            finish(if (partial != null && !partial.isEmpty) partial else sniff)
         }
         timeoutRunnable = timeout
         handler.postDelayed(timeout, HARD_TIMEOUT_MS)

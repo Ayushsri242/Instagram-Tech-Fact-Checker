@@ -184,11 +184,30 @@ export default function HomeScreen({ navigation }) {
             </View>
           </View>
         )}
+        {/* Between reels: a countdown, not a silent minute. The queue looked
+            lost during the old fixed 60 s pause (Oct 7). */}
         {!job.running && job.waiting > 0 && (
           <View style={styles.jobStrip}>
-            <Text style={styles.jobTitle}>
-              {job.waiting} reel{job.waiting > 1 ? 's' : ''} waiting - next one starts within a minute
+            <View style={styles.jobRow}>
+              <ActivityIndicator size="small" color={colors.accentCyan} />
+              <Text style={styles.jobTitle} numberOfLines={1}>
+                {job.waiting} reel{job.waiting > 1 ? 's' : ''} waiting
+              </Text>
+              {!!job.nextStartAt && (
+                <Text style={styles.jobTime}>{elapsed(Math.max(0, job.nextStartAt - tick))}</Text>
+              )}
+            </View>
+            <Text style={styles.jobStage} numberOfLines={1}>
+              {job.nextStartAt ? 'Next starts in ' + elapsed(Math.max(0, job.nextStartAt - tick)) : 'Starting next reel…'}
+              {(job.queued || []).length ? ' · ' + job.queued.join(', ') : ''}
             </Text>
+            {!!job.nextStartAt && (
+              <View style={styles.jobTrack}>
+                <View style={[styles.jobFill, {
+                  width: Math.min(100, Math.max(0, 100 - ((job.nextStartAt - tick) / 600))) + '%',
+                }]} />
+              </View>
+            )}
           </View>
         )}
 

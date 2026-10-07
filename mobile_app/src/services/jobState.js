@@ -40,8 +40,17 @@ export const jobEnded = () => {
   emit();
 };
 
-// Reels the bubble queued behind the one running (doomscroll cooldown).
-export const setJobsWaiting = (n) => {
-  state = { ...state, waiting: n };
+// Reels the bubble queued behind the one running (doomscroll cooldown), and
+// their shortcodes so Home can name them.
+export const setJobsWaiting = (n, refs = []) => {
+  state = { ...state, waiting: n, queued: refs };
+  emit();
+};
+
+// When the next queued reel will start (ms timestamp), or null. Set during the
+// pause between reels, so Home can count down instead of showing nothing - the
+// queue looked lost for that minute (Oct 7).
+export const setNextStart = (at) => {
+  state = { ...state, nextStartAt: at };
   emit();
 };

@@ -95,6 +95,19 @@ export const logRun = async (fields) => {
   }
 };
 
+// The log as it was before the last column change. When COLUMNS grows the
+// current file is moved here, and Save CSV used to ignore it - the runs from
+// before an update vanished from what got pulled (Oct 7).
+export const readOldRunLog = async () => {
+  try {
+    const info = await FileSystem.getInfoAsync(OLD_FILE);
+    if (!info.exists) return '';
+    return await FileSystem.readAsStringAsync(OLD_FILE);
+  } catch (e) {
+    return '';
+  }
+};
+
 export const readRunLog = async () => {
   try {
     const info = await FileSystem.getInfoAsync(FILE);
