@@ -4,13 +4,8 @@ import * as FileSystem from 'expo-file-system';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { DeviceEventEmitter, NativeModules } from 'react-native';
-const { TechFactChecker } = NativeModules;
-import { analyzeReelApi, sleep, nextRunWaitMs } from './src/services/api';
-import { saveReelResult, setOfflineMode } from './src/services/storage';
-import { beginAnalysis, finishAnalysis, failAnalysis, noteQueueGrew, noteQueueWaiting } from './src/services/jobNotify';
-import { trace, shortRef } from './src/services/trace';
-import { setJobsWaiting, setNextStart } from './src/services/jobState';
+import { setOfflineMode } from './src/services/storage';
+import { startBubbleQueue, takePendingReels } from './src/services/bubbleQueue';
 import { checkForUpdates } from './src/services/updater';
 import { ensureKeyBackup } from './src/services/secrets';
 import HomeScreen from './src/screens/HomeScreen';
@@ -22,6 +17,10 @@ import WelcomeScreen, { PERMISSIONS_DONE_KEY } from './src/screens/WelcomeScreen
 import { colors } from './src/theme/colors';
 
 const Stack = createNativeStackNavigator();
+
+// Started when the JS engine loads, not when a screen mounts: the bubble must
+// keep working after the user leaves the app (Oct 8, stuck-orange bubble).
+startBubbleQueue();
 
 export default function App() {
   // First launch shows the permissions screen; after that, straight to Home.
@@ -51,106 +50,10 @@ export default function App() {
     setOfflineMode(false).catch(() => {});
   }, []);
 
+  // The bubble's queue runs outside this component (see bubbleQueue.js); on
+  // each open, also collect any link the bubble saved while nothing listened.
   useEffect(() => {
-// 1-minute Cooldown Queue implementation
-    const queue = [];
-    let isProcessing = false;
-    let pausedUntil = 0; // set while waiting between reels
-
-    const processQueue = async () => {
-      if (isProcessing || queue.length === 0) {
-        if (queue.length) trace('doomscroll: ' + queue.length + ' waiting - ' + (pausedUntil ? 'paused between reels' : 'a reel is running'));
-        return;
-      }
-      isProcessing = true;
-
-      const url = queue.shift();
-      setJobsWaiting(queue.length, queue.map(shortRef));
-      setNextStart(null);
-      console.log('Doomscroll Mode: Processing URL ->', url);
-      const startedAt = Date.now();
-      trace('doomscroll: start ' + shortRef(url) + ', ' + queue.length + ' still waiting' +
-        (queue.length ? ' (' + queue.map(shortRef).join(', ') + ')' : ''));
-
-      let hadError = false;
-      try {
-        // Bubble turns cyan/blue while processing.
-        TechFactChecker.setBubbleColor("#00E5FF");
-        // Same keep-alive and notifications as the paste flow, so the two
-        // entry points cannot drift apart again.
-        beginAnalysis(shortRef(url), queue.length);
-
-        const result = await analyzeReelApi(url);
-        await saveReelResult(result);
-
-        console.log('Doomscroll Mode: Finished ->', result.verdict);
-
-        // Doomscroll runs while the user is inside another app by definition,
-        // so always notify - even if this app happens to be in front.
-        await finishAnalysis(result, { alwaysNotify: true });
-        trace('doomscroll: done ' + shortRef(url) + ' verdict=' + result.verdict + ' in ' + Math.round((Date.now() - startedAt) / 1000) + 's');
-      } catch (e) {
-        hadError = true;
-        console.log('Doomscroll Mode: Failed ->', e.message);
-        trace('doomscroll: FAILED ' + shortRef(url) + ' after ' + Math.round((Date.now() - startedAt) / 1000) + 's - ' + String(e && e.message).slice(0, 120));
-        await failAnalysis(e && e.message);
-      } finally {
-        TechFactChecker.setBubbleColor("#00E5FF");
-      }
-
-      // Enforce 1-minute (60000ms) cooldown before next item ONLY on success.
-      // If analysis failed, reset immediately so user isn't stuck waiting.
-      // Pause before the next reel only as long as Groq's budgets need: the
-      // fixed 60 s left the queue looking dead for a minute even when both
-      // models had plenty left. Home counts the pause down and the
-      // notification says what is waiting.
-      if (!hadError && queue.length) {
-        const waitMs = nextRunWaitMs();
-        const startsAt = Date.now() + waitMs;
-        trace('doomscroll: pause ' + Math.round(waitMs / 1000) + 's, next ' + shortRef(queue[0]) +
-          ' starts at ' + new Date(startsAt).toTimeString().slice(0, 8) + ', ' + queue.length + ' waiting');
-        if (waitMs > 0) {
-          pausedUntil = startsAt;
-          setNextStart(startsAt);
-          noteQueueWaiting(queue.length, startsAt);
-          await sleep(waitMs);
-          pausedUntil = 0;
-        }
-      }
-      isProcessing = false;
-      processQueue();
-    };
-
-    const sub = DeviceEventEmitter.addListener('ON_REEL_COPIED', (url) => {
-      console.log('Doomscroll Mode: Caught URL ->', url);
-      TechFactChecker.setBubbleColor("#00E5FF"); // Immediately reset to blue so user can queue next reel
-      // If the bubble logged a copy and this line is missing, JS was frozen.
-      trace('doomscroll: JS received reel ' + shortRef(url) + ', queue now ' + (queue.length + 1));
-      // Tell native it arrived; unconfirmed links are re-delivered at start-up.
-      if (TechFactChecker.ackReel) TechFactChecker.ackReel(url);
-      // A saved link and a live tap of the same reel can both arrive at start-up.
-      if (queue.includes(url)) return;
-      queue.push(url);
-      setJobsWaiting(queue.length, queue.map(shortRef));
-      // A reel already running: the notification gains "N more waiting".
-      if (isProcessing) {
-        if (pausedUntil) noteQueueWaiting(queue.length, pausedUntil);
-        else noteQueueGrew(queue.length);
-      }
-      processQueue();
-    });
-    // Links the bubble caught while JS was not listening yet (Oct 7: the first
-    // tap after an update was dropped and the bubble stayed orange). Re-deliver
-    // them through the same path as a live tap.
-    if (TechFactChecker.takePendingReels) {
-      TechFactChecker.takePendingReels().then((urls) => {
-        (urls || []).forEach((url) => {
-          trace('doomscroll: picked up saved link ' + shortRef(url) + ' on start');
-          DeviceEventEmitter.emit('ON_REEL_COPIED', url);
-        });
-      }).catch(() => {});
-    }
-    return () => sub.remove();
+    takePendingReels();
   }, []);
 
   const linking = {
