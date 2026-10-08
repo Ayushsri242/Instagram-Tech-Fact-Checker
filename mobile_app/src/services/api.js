@@ -1511,9 +1511,20 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
   // differently) and Claude (no speech recorded) - and no recorded run has yet
   // been mis-titled by a bait caption. Revisit only with such a case in hand.
   const baseScore = (needle) => occurrences(needle) + CAPTION_WEIGHT * countOf(caption, needle);
+  // "Hybrid Latent Attention (HLA)": the post writes the long name once and the
+  // short form after that, and neither spelling contains the other, so the
+  // whole string scored 1 and the report said "Unidentified" (Oct 8). Count
+  // the name without its bracket plus the bracketed short form (3+ chars).
+  const nameScore = (needle) => {
+    const n = String(needle || '');
+    const m = n.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+    if (!m) return baseScore(n);
+    const short = m[2].trim();
+    return Math.max(baseScore(n), baseScore(m[1].trim()) + (short.length >= 3 ? baseScore(short) : 0));
+  };
   const score = (needle) => {
     const source = aliases[needle];
-    return baseScore(needle) + (source ? baseScore(source) : 0);
+    return nameScore(needle) + (source ? nameScore(source) : 0);
   };
   // Repo slugs the post shows on screen, e.g. "github.com/safishamsi/graphify".
   // OCR of a screenshot puts spaces where a URL has none: the graphify slide
