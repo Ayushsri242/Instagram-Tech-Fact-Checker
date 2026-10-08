@@ -133,9 +133,19 @@ export default function HomeScreen({ navigation }) {
 
   const limitLine = isOffline ? 'OFFLINE MODE' : describeLimits(limits, now);
 
+  // Only Instagram post links start an analysis. The box used to take anything
+  // - a YouTube link went into the pipeline and failed a minute later - while
+  // the bubble already ignored non-Instagram clipboards. The link is also pulled
+  // out of surrounding text ("Check this https://www.instagram.com/reel/X/...").
   const handleSend = () => {
     if (!url.trim()) return;
-    navigation.navigate('Chat', { initialUrl: url.trim() });
+    const m = url.match(/https?:\/\/(?:www\.|m\.)?instagram\.com\/(?:[A-Za-z0-9_.]+\/)?(reels?|p)\/([A-Za-z0-9_-]+)/i);
+    if (!m) {
+      alert('Only Instagram reel or post links are supported.\n\nExample: https://www.instagram.com/reel/...');
+      return;
+    }
+    const kind = m[1].toLowerCase() === 'p' ? 'p' : 'reel';
+    navigation.navigate('Chat', { initialUrl: 'https://www.instagram.com/' + kind + '/' + m[2] + '/' });
     setUrl('');
   };
 
