@@ -29,7 +29,13 @@ def cookie_file() -> str:
     while other posts fetch fine from the same IP in the same minute, so the
     cause is the post being login-gated, not rate limiting. A logged-in session
     is the only keyless way past that. The file is gitignored and never staged.
+
+    Off unless ASSAY_USE_COOKIES=1: on Oct 7 the owner's personal account was
+    logged out for "suspicious automation" after its session was used by tools
+    like this one. Only ever opt in with a throwaway account's cookies.
     """
+    if os.environ.get("ASSAY_USE_COOKIES") != "1":
+        return ""
     return COOKIE_FILE if os.path.exists(COOKIE_FILE) else ""
 
 
