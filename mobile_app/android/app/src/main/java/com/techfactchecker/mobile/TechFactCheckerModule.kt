@@ -592,6 +592,15 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // How the last evidence search went (engines used, hits, blocks), for the run log.
+    @Volatile
+    private var lastSearchHealth = ""
+
+    @ReactMethod
+    fun getLastSearchHealth(promise: Promise) {
+        promise.resolve(lastSearchHealth)
+    }
+
     @ReactMethod
     fun gatherEvidence(queries: ReadableArray, promise: Promise) {
         scope.launch {
@@ -599,6 +608,10 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                 val seenUrls = mutableSetOf<String>()
                 val collected = mutableListOf<com.techfactchecker.app.data.model.EvidenceSource>()
                 val repoPattern = Regex("\\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\\b")
+
+                val engineCounts = linkedMapOf<String, Int>()
+                val failedQueries = mutableListOf<String>()
+                var searchHits = 0
 
                 fun collect(source: com.techfactchecker.app.data.model.EvidenceSource) {
                     if (source.url.isBlank() || !seenUrls.add(source.url)) return
@@ -622,10 +635,38 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                             collect(if (readme.isBlank()) verified else verified.copy(pagePreview = readme))
                         }
                     }
-                    for (result in webValidator.searchDuckDuckGo(query, maxResults = 4)) {
+                    // A short gap between searches: back-to-back requests are
+                    // what trips the engines' bot checks.
+                    if (index > 0) delay(500)
+                    val outcome = webValidator.searchWeb(query, maxResults = 4)
+                    engineCounts[outcome.engine] = (engineCounts[outcome.engine] ?: 0) + 1
+                    if (outcome.blocked) failedQueries.add(query)
+                    for (result in outcome.results) {
+                        searchHits++
                         collect(result)
                     }
                 }
+
+                // Every engine blocked and almost nothing found: wait once and
+                // retry the first few, rather than judge the post on nothing.
+                var retried = 0
+                if (failedQueries.isNotEmpty() && searchHits < 3) {
+                    delay(10_000)
+                    for (query in failedQueries.take(4)) {
+                        val outcome = webValidator.searchWeb(query, maxResults = 4)
+                        retried++
+                        engineCounts["retry-" + outcome.engine] = (engineCounts["retry-" + outcome.engine] ?: 0) + 1
+                        for (result in outcome.results) {
+                            searchHits++
+                            collect(result)
+                        }
+                        delay(500)
+                    }
+                }
+                // e.g. "ddg=3 bing=7 none=0 retry-bing=0 hits=38 blocked=0" - goes to the CSV.
+                lastSearchHealth = engineCounts.entries.joinToString(" ") { it.key + "=" + it.value } +
+                    " hits=" + searchHits + " blocked=" + failedQueries.size + (if (retried > 0) " retried=$retried" else "")
+                FlowLog.i("search: " + lastSearchHealth)
 
                 // Scrape page text once, for the best few results overall. Doing
                 // it per query would multiply into a long stall on a 10-query run.
