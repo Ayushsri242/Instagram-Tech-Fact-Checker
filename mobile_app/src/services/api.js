@@ -74,6 +74,10 @@ const rateLimitWaitMs = (error) => {
   // alone is expected to exceed the cap ("Limit 1000, Requested 1501", no
   // "Used") is refused again after waiting; go straight to the next model.
   const outputLimit = /output tokens per minute|OTPM/i.test(msg) && /\bUsed\s+\d+/i.test(msg);
+  // A DAILY limit ("tokens per day (TPD) ... try again in 7m21.072s"): never
+  // wait in the run. The old pattern read "21.072s" out of "7m21.072s", waited
+  // 21 s and was refused again. Go straight to the next model.
+  if (/per day|\bTPD\b|\bRPD\b/i.test(msg)) return 0;
   if (error?.response?.status !== 429 && code !== 'rate_limit_exceeded' && !outputLimit) return 0;
   // An INPUT too large for the per-minute limit fails again however long we
   // wait; the caller must split instead.
@@ -188,9 +192,21 @@ export const describeLimits = (limits, now = Date.now()) => {
     if (st.reqLeft !== null) runsLeft = runsLeft === null ? st.reqLeft : Math.min(runsLeft, st.reqLeft);
   }
   // Two short lines: the header slot between History and Settings is narrow.
+  // The second line used to be "982 runs left today" - Groq's REQUEST count,
+  // which never runs out first. The daily TOKEN count does (Oct 7), and Groq
+  // never reports it, so it is our own tally of the last 24 hours.
   const lines = [];
   if (tokParts.length) lines.push(tokParts.join(' · ') + ' of ' + shortCount(tokLimitShown) + '/min');
-  if (runsLeft !== null) lines.push(runsLeft + ' runs left today');
+  const usage = limits.usage || {};
+  const dayParts = [];
+  let dayLimit = DAILY_TOKEN_LIMIT;
+  for (const model of Object.keys(LIMIT_LABELS)) {
+    if (!usage[model]) continue;
+    dayParts.push(LIMIT_LABELS[model] + ' ' + shortCount(usedToday(usage[model], now)));
+    dayLimit = usage[model].limit || dayLimit;
+  }
+  if (dayParts.length) lines.push('Today: ' + dayParts.join(' · ') + ' of ' + shortCount(dayLimit));
+  else if (runsLeft !== null) lines.push(runsLeft + ' runs left today');
   return lines.length ? lines.join('\n') : null;
 };
 
@@ -243,15 +259,95 @@ const recordLimits = async (headers, model) => {
     timestamp: now,
   };
   try {
-    if (!limitsByModel) {
-      const saved = await getApiLimits();
-      limitsByModel = (saved && saved.byModel) || {};
-    }
+    // Loads both halves of the saved record; saving only byModel here would
+    // wipe the daily usage log kept alongside it.
+    await loadUsage();
     limitsByModel[shortModel(model)] = rec;
-    await saveApiLimits({ byModel: limitsByModel });
+    await saveUsage();
   } catch (e) {
     // The header line is a convenience; never let it break a call.
   }
+};
+
+// ---- Daily token tracker ----
+//
+// The free tier allows 200,000 tokens a day per model (measured Oct 7 from a
+// refusal: "tokens per day (TPD): Limit 200000, Used 198300"), and Groq does
+// NOT report the daily count in its headers - the limit was invisible until it
+// failed three reels. So count it ourselves: every reply carries `usage`, and
+// tokens served from Groq's prompt cache do not count. Kept per model over a
+// rolling 24 hours (a refusal at 19:11 said "try again in 7m21s", so the
+// window rolls rather than resetting at midnight), and re-anchored to Groq's
+// own "Used" figure whenever a daily refusal states it.
+const DAY_MS = 24 * 3600000;
+export const DAILY_TOKEN_LIMIT = 200000;
+let usageByModel = null;
+let runTokens = {};
+
+const loadUsage = async () => {
+  if (usageByModel) return;
+  try {
+    const saved = await getApiLimits();
+    usageByModel = (saved && saved.usage) || {};
+    if (!limitsByModel) limitsByModel = (saved && saved.byModel) || {};
+  } catch (e) {
+    usageByModel = {};
+    if (!limitsByModel) limitsByModel = {};
+  }
+};
+
+const saveUsage = async () => {
+  try {
+    await saveApiLimits({ byModel: limitsByModel || {}, usage: usageByModel });
+  } catch (e) {
+    // a display aid; never break a call over it
+  }
+};
+
+const recordUsage = async (model, usage, job) => {
+  if (!usage) return;
+  const cached = Number((usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens) || 0);
+  const input = Number(usage.prompt_tokens || 0);
+  const output = Number(usage.completion_tokens || 0);
+  const counted = Math.max(0, input + output - cached);
+  const key = shortModel(model);
+  // This run's own tally, for the CSV.
+  const r = runTokens[job] || (runTokens[job] = { model: key, input: 0, output: 0, cached: 0 });
+  r.model = key;
+  r.input += input;
+  r.output += output;
+  r.cached += cached;
+  await loadUsage();
+  const now = Date.now();
+  const rec = usageByModel[key] || (usageByModel[key] = { log: [], limit: DAILY_TOKEN_LIMIT });
+  rec.log = rec.log.filter(([t]) => now - t < DAY_MS);
+  rec.log.push([now, counted]);
+  await saveUsage();
+};
+
+// "tokens per day (TPD): Limit 200000, Used 198300" - Groq's own count.
+const calibrateDaily = async (model, data) => {
+  const msg = (data && data.error && data.error.message) || '';
+  const m = msg.match(/tokens per day[^:]*:\s*Limit\s+(\d+),\s*Used\s+(\d+)/i);
+  if (!m) return;
+  await loadUsage();
+  const key = shortModel(model);
+  usageByModel[key] = { log: [[Date.now(), Number(m[2])]], limit: Number(m[1]) };
+  await saveUsage();
+};
+
+// Tokens counted for one model in the last 24 hours (from a saved record).
+const usedToday = (rec, now = Date.now()) =>
+  rec && rec.log ? rec.log.filter(([t]) => now - t < DAY_MS).reduce((sum, [, n]) => sum + n, 0) : 0;
+
+export const resetRunTokens = () => { runTokens = {}; };
+// "extract=qwen3.8-27b in=5210 out=840 cached=0; verdict=gpt-oss-120b ...; total=13350"
+const describeRunTokens = () => {
+  const parts = Object.entries(runTokens).map(([job, r]) =>
+    job + '=' + r.model + ' in=' + r.input + ' out=' + r.output + ' cached=' + r.cached);
+  if (!parts.length) return '';
+  const total = Object.values(runTokens).reduce((s, r) => s + r.input + r.output - r.cached, 0);
+  return parts.join('; ') + '; total=' + total;
 };
 
 // One guarded call for every job. A reply only counts if it is usable: for
@@ -281,6 +377,8 @@ const callGroq = async (apiKey, messages, { job, json, accept, temperature }) =>
           { timeout: 90000, headers: { Authorization: 'Bearer ' + apiKey } }
         );
         recordLimits(response.headers, model);
+        // Before any check below: a reply we then reject still cost tokens.
+        recordUsage(model, response.data.usage, job);
         const choice = (response.data.choices || [])[0] || {};
         const content = (choice.message && choice.message.content) || '';
         if (!content.trim()) {
@@ -306,6 +404,7 @@ const callGroq = async (apiKey, messages, { job, json, accept, temperature }) =>
         // A 429 carries the same headers, and it is the one response where the
         // numbers matter most.
         if (error.response) recordLimits(error.response.headers, model);
+        if (error.response && error.response.data) calibrateDaily(model, error.response.data);
         if (error.response && error.response.data) {
           console.error(`API ${job} error from ${model}:`, JSON.stringify(error.response.data));
           lastError = new Error(`${error.message} - ${JSON.stringify(error.response.data)}`);
@@ -625,22 +724,37 @@ const OS_PATH_PARTS = new Set([
 
 // Earning language only. Currency alone is not enough: "$20/month" is a price,
 // and an AI-tool pricing post must stay a tech post.
-const MONEY_HINT = /\b(?:earn|earns|earning|(?:passive|extra|side|monthly|daily|online|second|additional) income|get paid|getting paid|paid per|pays? (?:you|up to|around)|side ?hustles?|make money|making money|prints? money|passive income|payouts?|work from home|cash ?out|withdraw(?:al)?)\b/i;
+const MONEY_HINT = /\b(?:earn|earns|earning|(?:passive|extra|side|monthly|daily|online|second|additional) income|get paid|getting paid|paid per|pays? (?:you|up to|around)|(?:will|that|which) pay(?: you)?|side ?hustles?|make money|making money|prints? money|passive income|payouts?|work from home|cash ?out|withdraw(?:al)?)\b/i;
 // A pay RATE: a currency amount per unit of work ("$5 to $20 per review").
 // "Cost per task" on an AI pricing slide has no amount next to it and stays a
 // tech post; so does an app that "earned $1M" (past tense, a startup story).
-const PAY_RATE = /(?:\$|₹|rs\.?\s?|inr\s?)\d[\d,.]*k?\s*(?:(?:to|-)\s*(?:\$|₹|rs\.?\s?)?\d[\d,.]*k?\s*)?(?:per|\/|an?|each)\s*(?:review|survey|task|hour|hr|day|minute|min|video|episode|article|song|word|month)\b/i;
+// No "per month": that is how prices are written ("Rs 59 per month", "$0 /
+// month"), and both made tech posts look like side hustles (Oct 7).
+const PAY_RATE = /(?:\$|₹|rs\.?\s?|inr\s?)\d[\d,.]*k?\s*(?:(?:to|-)\s*(?:\$|₹|rs\.?\s?)?\d[\d,.]*k?\s*)?(?:per|\/|an?|each)\s*(?:review|survey|task|hour|hr|day|minute|min|video|episode|article|song|word)\b/i;
 
 // A money post: earning language, and nothing anchored to code (no repo, no
 // install command) - "earn with this Python bot" is still a tech post.
-export const moneyPost = (claimsData, text) => {
+//
+// The earning language must come from the POST ITSELF - its caption, its
+// title, what the creator says - or appear more than once on the slides. On
+// Oct 7 three tech posts were checked as side hustles over one line of slide
+// text: an Airtel price hike ("Rs 59 per month"), an AI tool's pricing card
+// ("$0 / month") and one tool's own "Start Earning" button in a list of seven.
+export const moneyPost = (claimsData, text, headline = text) => {
   const tools = (claimsData && claimsData.tools) || [];
   const codeAnchored = tools.some((t) => (t.github_repo && t.github_repo !== 'null') || t.pip_command) ||
     printedGithubSlugs(text).length > 0 ||
     /\b(?:pip3?|npm|brew|cargo)\s+install\b|\bnpm i\b/i.test(text);
   if (codeAnchored) return false;
-  const said = [text, ...((claimsData && claimsData.claimed_features) || []), ...tools.map((t) => t.claim || '')].join(' ');
-  return MONEY_HINT.test(said) || PAY_RATE.test(said);
+  const said = [headline, (claimsData && claimsData.tech_name) || ''].join(' ');
+  if (MONEY_HINT.test(said) || PAY_RATE.test(said)) return true;
+  // The post's own text only: the model's claims restate the same slide, so
+  // one "Start Earning" button counted twice (Oct 7, Glambase).
+  const body = String(text || '');
+  const flags = MONEY_HINT.flags.includes('g') ? MONEY_HINT.flags : MONEY_HINT.flags + 'g';
+  const hits = (body.match(new RegExp(MONEY_HINT.source, flags)) || []).length +
+    (body.match(new RegExp(PAY_RATE.source, flags)) || []).length;
+  return hits >= 2;
 };
 
 // The platforms the post names, in the order it names them.
@@ -1601,6 +1715,7 @@ export const analyzeReelApi = async (url) => {
   // used to log durationMs as Date.now() - Date.now(), always 0.
   const runStartedAt = Date.now();
   resetModelsUsed();
+  resetRunTokens();
   try {
   if (!TechFactChecker) throw new Error('Native mobile module is unavailable. Rebuild the Android dev app.');
   const offline = await getOfflineMode();
@@ -1653,7 +1768,7 @@ export const analyzeReelApi = async (url) => {
   const modelTechName = claimsData.tech_name;
   log('STAGE 1 CLAIMS', claimsData);
   // Money / side-hustle posts are checked differently - see moneyPost().
-  const money = moneyPost(claimsData, [media.caption, ocrText, transcript].join(' '));
+  const money = moneyPost(claimsData, [media.caption, ocrText, transcript].join(' '), [media.caption, transcript].join(' '));
   const platforms = money ? moneyPlatforms(claimsData) : [];
   const queries = money
     ? moneyQueries(platforms, claimsData, [media.caption, ocrText, transcript].join(' '))
@@ -1718,6 +1833,16 @@ export const analyzeReelApi = async (url) => {
     ? rankMoneyEvidence(evidence, platforms)
     : rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned);
   if (pinned.length) log('PINNED EVIDENCE', pinned);
+  // Wait for the main judge's minute rather than hand the verdict to the
+  // backup: on Oct 7, 5 of 13 back-to-back reels were judged by the backup
+  // model only because the main one's per-minute budget was spent. A verdict
+  // prompt is ~5-6.5k tokens.
+  const judgeWait = modelWaitMs(MODEL_CHAINS.verdict[0], 6500);
+  if (judgeWait > 0) {
+    setJobNote("Waiting for Groq's free per-minute limit", Date.now() + judgeWait);
+    await sleep(judgeWait);
+    setJobNote(null);
+  }
   const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage, kept, { author: media.author, money, platforms });
   lap('synthesis');
   log('STAGE 3 RAW REPORT', report);
@@ -1858,6 +1983,7 @@ export const analyzeReelApi = async (url) => {
     author: media.author || '',
     postMode: money ? 'money' : 'tech',
     models: describeModelsUsed(),
+    tokens: describeRunTokens(),
     title: displayTitle,
     fetchedRepos: fetchedRepoSlugs(evidence).join(' '),
   });
@@ -1904,6 +2030,7 @@ export const analyzeReelApi = async (url) => {
       error: e.message || String(e),
       durationMs: Date.now() - runStartedAt,
       models: describeModelsUsed(),
+      tokens: describeRunTokens(),
     }).catch(() => {});
     throw e;
   }

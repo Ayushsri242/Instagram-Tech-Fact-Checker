@@ -61,6 +61,7 @@ const COLUMNS = [
   'postMode',         // 'money' (side hustle / earnings, checked against user reviews) or 'tech'
   'models',           // which model answered each job, e.g. "extract=qwen3.8-27b verdict=gpt-oss-120b"
   'title',            // the title the app shows (techName above is the model's raw name)
+  'tokens',           // per job: model, input/output/cached tokens as Groq reported; total counts toward the daily limit
 ];
 
 const cell = (v) => {
