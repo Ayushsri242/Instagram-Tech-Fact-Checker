@@ -28,6 +28,16 @@ class WebValidator {
         @Volatile
         var gitHubRateLimited: Boolean = false
 
+        // Search engines that answered with a bot check, and until when we
+        // leave them alone. Oct 8: DuckDuckGo answers the first quick search
+        // and then serves an "anomaly / challenge" page (HTTP 202) to the
+        // rest; the old code read that as "no results", and one side-hustle
+        // reel was judged on 1 source with 85% confidence.
+        @Volatile
+        var ddgBlockedUntil: Long = 0L
+        @Volatile
+        var bingBlockedUntil: Long = 0L
+
         // Optional personal access token. Lifts 60/h to 5000/h.
         @Volatile
         var gitHubToken: String? = null
@@ -177,35 +187,108 @@ class WebValidator {
         else source.copy(pagePreview = fetchPageText(source.url))
     }
 
-    suspend fun searchDuckDuckGo(query: String, maxResults: Int = 3): List<EvidenceSource> = withContext(Dispatchers.IO) {
-        val results = mutableListOf<EvidenceSource>()
+    /** One search: DuckDuckGo, or Bing when DuckDuckGo is blocking us. */
+    data class SearchOutcome(val results: List<EvidenceSource>, val engine: String, val blocked: Boolean)
+
+    suspend fun searchWeb(query: String, maxResults: Int = 4): SearchOutcome {
+        val now = System.currentTimeMillis()
+        if (now >= ddgBlockedUntil) {
+            val ddg = searchDuckDuckGoChecked(query, maxResults)
+            if (ddg != null) return SearchOutcome(ddg, "ddg", false)
+            // Leave it alone for a while: asking again only extends the block.
+            ddgBlockedUntil = now + 10 * 60_000L
+            Log.w("WebValidator", "DuckDuckGo bot check - switching to Bing for 10 min")
+        }
+        if (now >= bingBlockedUntil) {
+            val bing = searchBing(query, maxResults)
+            if (bing != null) return SearchOutcome(bing, "bing", false)
+            bingBlockedUntil = now + 2 * 60_000L
+            Log.w("WebValidator", "Bing bot check too")
+        }
+        return SearchOutcome(emptyList(), "none", true)
+    }
+
+    /** Results, or null when DuckDuckGo answered with its bot check. */
+    private suspend fun searchDuckDuckGoChecked(query: String, maxResults: Int): List<EvidenceSource>? = withContext(Dispatchers.IO) {
         try {
-            val doc = Jsoup.connect("https://html.duckduckgo.com/html/")
+            val response = Jsoup.connect("https://html.duckduckgo.com/html/")
                 .data("q", query)
                 .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                 .timeout(4000)
+                .ignoreHttpErrors(true)
+                .execute()
+            val doc = response.parse()
+            val blocked = response.statusCode() == 202 || response.statusCode() == 429 ||
+                (doc.select(".result__body").isEmpty() && doc.html().contains("anomaly", ignoreCase = true))
+            if (blocked) null else parseDuckDuckGo(doc, maxResults)
+        } catch (e: Exception) {
+            emptyList() // offline or timeout: not a block
+        }
+    }
+
+    /**
+     * Bing's normal results page, no key. Each result is an li.b_algo: the
+     * title in its h2, the real address on the a.tilk link (the h2 link can be
+     * a bing.com/ck/a redirect with the address base64-encoded after "u=a1"),
+     * the snippet in .b_caption p. Null when Bing answers with a captcha.
+     */
+    private suspend fun searchBing(query: String, maxResults: Int): List<EvidenceSource>? = withContext(Dispatchers.IO) {
+        try {
+            val doc = Jsoup.connect("https://www.bing.com/search")
+                .data("q", query)
+                .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .timeout(6000)
+                .ignoreHttpErrors(true)
                 .get()
-
-            val links = doc.select(".result__body")
-            for (elem in links.take(maxResults)) {
-                val titleElem = elem.select(".result__title a").first()
-                val snippetElem = elem.select(".result__snippet").first()
-                val title = titleElem?.text() ?: ""
-                val rawUrl = titleElem?.attr("href") ?: ""
-                val snippet = snippetElem?.text() ?: ""
-
-                // Extract actual target url from DuckDuckGo redirect
-                val url = if (rawUrl.contains("uddg=")) {
-                    java.net.URLDecoder.decode(rawUrl.substringAfter("uddg=").substringBefore("&"), "UTF-8")
-                } else rawUrl
-
-                if (url.isNotBlank() && title.isNotBlank()) {
+            val items = doc.select("li.b_algo")
+            if (items.isEmpty()) {
+                val html = doc.html()
+                return@withContext if (html.contains("captcha", true) || html.contains("unusual traffic", true)) null else emptyList()
+            }
+            val results = mutableListOf<EvidenceSource>()
+            for (item in items) {
+                if (results.size >= maxResults) break
+                val title = item.selectFirst("h2")?.text()?.trim().orEmpty()
+                var url = item.selectFirst("a.tilk")?.attr("href").orEmpty()
+                if (url.isBlank()) url = item.selectFirst("h2 a")?.attr("href").orEmpty()
+                if (url.contains("bing.com/ck/a")) {
+                    val encoded = Regex("[?&]u=a1([^&]+)").find(url)?.groupValues?.get(1)
+                    url = try {
+                        if (encoded == null) "" else String(
+                            android.util.Base64.decode(encoded.replace('-', '+').replace('_', '/'), android.util.Base64.DEFAULT)
+                        )
+                    } catch (e: Exception) { "" }
+                }
+                val snippet = (item.selectFirst(".b_caption p") ?: item.selectFirst("p"))?.text()?.trim().orEmpty()
+                if (title.isNotBlank() && url.startsWith("http")) {
                     results.add(EvidenceSource(title = title, url = url, snippet = snippet))
                 }
             }
+            results
         } catch (e: Exception) {
-            // Offline fallback
+            emptyList()
         }
-        return@withContext results
     }
+
+    private fun parseDuckDuckGo(doc: org.jsoup.nodes.Document, maxResults: Int): List<EvidenceSource> {
+        val results = mutableListOf<EvidenceSource>()
+        for (elem in doc.select(".result__body").take(maxResults)) {
+            val titleElem = elem.select(".result__title a").first()
+            val title = titleElem?.text() ?: ""
+            val rawUrl = titleElem?.attr("href") ?: ""
+            val snippet = elem.select(".result__snippet").first()?.text() ?: ""
+            val url = if (rawUrl.contains("uddg=")) {
+                java.net.URLDecoder.decode(rawUrl.substringAfter("uddg=").substringBefore("&"), "UTF-8")
+            } else rawUrl
+            if (url.isNotBlank() && title.isNotBlank()) {
+                results.add(EvidenceSource(title = title, url = url, snippet = snippet))
+            }
+        }
+        return results
+    }
+
+    // Kept for older callers; goes through the same block-aware path.
+    suspend fun searchDuckDuckGo(query: String, maxResults: Int = 3): List<EvidenceSource> =
+        searchWeb(query, maxResults).results
 }

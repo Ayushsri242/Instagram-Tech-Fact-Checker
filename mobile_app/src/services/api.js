@@ -41,6 +41,10 @@ const shortModel = (m) => String(m).split('/').pop();
 
 // Which model answered each job in the current analysis, for the run log.
 let modelsUsed = {};
+// Set when the last run's web searches hit a bot check; the bubble queue then
+// waits longer before the next reel (rapid runs are what trip the checks).
+let lastSearchBlocked = false;
+export const searchCooldownMs = () => (lastSearchBlocked ? 30000 : 0);
 export const resetModelsUsed = () => { modelsUsed = {}; };
 const describeModelsUsed = () =>
   Object.keys(modelsUsed).map((k) => k + '=' + modelsUsed[k]).join(' ');
@@ -1639,9 +1643,12 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
 // handle as the product; a 7-slide carousel read 2 slides and then denied a
 // real repo existed; evidence rows that scraped to nothing produced a report
 // reasoning from search-result marketing.
-export const deriveConfidence = ({ subjectNamed, coverage, toolsReal, rowsWithText, hasText }) => {
+export const deriveConfidence = ({ subjectNamed, coverage, toolsReal, rowsWithText, hasText, searchFailed }) => {
   let score = 95;
   const why = [];
+  // The web search itself failed (every engine blocked): the verdict rests on
+  // the post and the structured checks alone.
+  if (searchFailed) { score -= 30; why.push('web search unavailable'); }
   if (!subjectNamed) { score -= 25; why.push('subject not confirmed'); }
   if (coverage) {
     score -= 25;
@@ -1783,6 +1790,14 @@ export const analyzeReelApi = async (url) => {
     ? await TechFactChecker.gatherEvidence(queries)
     : (media.sources || []);
   lap('search');
+  // Which engines answered and how many searches were blocked (Oct 8: a run
+  // whose every search hit a bot check was judged on one source).
+  const searchHealth = queries.length && TechFactChecker.getLastSearchHealth
+    ? await TechFactChecker.getLastSearchHealth().catch(() => '') : '';
+  const webHits = Number((String(searchHealth).match(/hits=(\d+)/) || [])[1] || 0);
+  const searchFailed = queries.length > 0 && Boolean(searchHealth) && webHits < 3;
+  lastSearchBlocked = /blocked=[1-9]/.test(searchHealth);
+  if (searchHealth) log('SEARCH HEALTH', searchHealth);
   jobStage(3);
   // The pricing check needs the search results, so the router runs after them.
   // Its own lookups are already parallel inside runVerifiers.
@@ -1857,6 +1872,7 @@ export const analyzeReelApi = async (url) => {
     toolsReal: normalized.toolsReal,
     rowsWithText: kept.filter((e) => (e.pagePreview || '').length > 0).length,
     hasText: (ocrText.length + transcript.length) > 200,
+    searchFailed,
   });
   log('CONFIDENCE', normalized.confidence);
 
@@ -1984,6 +2000,7 @@ export const analyzeReelApi = async (url) => {
     postMode: money ? 'money' : 'tech',
     models: describeModelsUsed(),
     tokens: describeRunTokens(),
+    search: searchHealth,
     title: displayTitle,
     fetchedRepos: fetchedRepoSlugs(evidence).join(' '),
   });

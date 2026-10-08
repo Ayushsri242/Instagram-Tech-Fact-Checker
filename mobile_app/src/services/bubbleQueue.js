@@ -1,5 +1,5 @@
 import { DeviceEventEmitter, NativeModules } from 'react-native';
-import { analyzeReelApi, sleep, nextRunWaitMs } from './api';
+import { analyzeReelApi, sleep, nextRunWaitMs, searchCooldownMs } from './api';
 import { saveReelResult } from './storage';
 import { beginAnalysis, finishAnalysis, failAnalysis, noteQueueGrew, noteQueueWaiting } from './jobNotify';
 import { trace, shortRef } from './trace';
@@ -59,7 +59,8 @@ const processQueue = async () => {
   // Pause before the next reel only as long as Groq's budgets need (not after a
   // failure). Home counts the pause down and the notification says what waits.
   if (!hadError && queue.length) {
-    const waitMs = nextRunWaitMs();
+    // Also back off when the last run's web searches hit a bot check.
+    const waitMs = Math.max(nextRunWaitMs(), searchCooldownMs());
     const startsAt = Date.now() + waitMs;
     trace('doomscroll: pause ' + Math.round(waitMs / 1000) + 's, next ' + shortRef(queue[0]) +
       ' starts at ' + new Date(startsAt).toTimeString().slice(0, 8) + ', ' + queue.length + ' waiting');
