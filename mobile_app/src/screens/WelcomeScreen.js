@@ -16,7 +16,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import { colors } from '../theme/colors';
-import { saveGroqApiKey, getGroqApiKey } from '../services/secrets';
+import { saveGroqApiKey, getGroqApiKey, restoreGroqKeyFromBackup } from '../services/secrets';
 import { isGroqKey } from '../services/api';
 
 const { TechFactChecker } = NativeModules;
@@ -111,6 +111,17 @@ export default function WelcomeScreen({ navigation, route }) {
 
   const openGroqSettings = async () => {
     Linking.openURL('https://console.groq.com/keys');
+  };
+
+  // Reinstalled: read the key back from Downloads/Assay instead of making a new one.
+  const restoreKey = async () => {
+    try {
+      const key = await restoreGroqKeyFromBackup();
+      if (key) setHasGroqKey(true);
+      else alert('No key found. Pick the file "assay_groq_key.txt" in Downloads > Assay.');
+    } catch (e) {
+      alert('Could not read the backup: ' + e.message);
+    }
   };
 
   const askNotifications = async () => {
@@ -237,6 +248,11 @@ export default function WelcomeScreen({ navigation, route }) {
               >
                 <Text style={styles.btnText}>{hasGroqKey ? 'Connected ✓' : 'Get Free AI Key'}</Text>
               </TouchableOpacity>
+              {!hasGroqKey && (
+                <TouchableOpacity onPress={restoreKey} style={styles.restoreBtn}>
+                  <Text style={styles.restoreText}>Reinstalled? Restore key from backup</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             <View style={styles.card}>
@@ -333,6 +349,8 @@ const styles = StyleSheet.create({
   optionalBadge: { color: colors.textMuted, fontSize: 12, fontWeight: 'normal' },
   cardDesc: { color: colors.textSecondary, fontSize: 13, marginBottom: 12 },
   actionBtn: { backgroundColor: colors.accentCyan, padding: 12, borderRadius: 8, alignItems: 'center' },
+  restoreBtn: { marginTop: 10, padding: 6, alignItems: 'center' },
+  restoreText: { color: colors.accentCyan, fontSize: 13, textDecorationLine: 'underline' },
   actionBtnDone: { backgroundColor: colors.success || '#22c55e' },
   startBtn: { backgroundColor: colors.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 10 },
   startBtnDisabled: { backgroundColor: colors.surfaceLight || '#333', opacity: 0.5 },

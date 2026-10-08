@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, NativeModules, ScrollView, Share, Alert } from 'react-native';
 import { colors } from '../theme/colors';
-import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey } from '../services/secrets';
+import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey, restoreGroqKeyFromBackup } from '../services/secrets';
 import { isGroqKey } from '../services/api';
 import { readRunLog, readOldRunLog, clearRunLog, RUN_LOG_PATH } from '../services/runlog';
 import { checkForUpdates, currentVersion } from '../services/updater';
@@ -104,6 +104,21 @@ export default function SettingsScreen({ navigation }) {
     }
   };
 
+  // After a reinstall: read the key back from Downloads/Assay/assay_groq_key.txt.
+  const restoreKey = async () => {
+    try {
+      const key = await restoreGroqKeyFromBackup();
+      if (!key) {
+        alert('No key found. Pick the file "assay_groq_key.txt" in Downloads > Assay.');
+        return;
+      }
+      setHasGroqApiKey(true);
+      alert('Groq API key restored from the backup.');
+    } catch (e) {
+      alert('Could not read the backup: ' + e.message);
+    }
+  };
+
   const removeGroqKey = async () => {
     try {
       await deleteGroqApiKey();
@@ -136,7 +151,7 @@ export default function SettingsScreen({ navigation }) {
             secureTextEntry
           />
           <Text style={styles.keyStatus}>
-            Status: {hasGroqApiKey ? 'Saved on device' : 'Not saved'}
+            Status: {hasGroqApiKey ? 'Saved on device · backup in Downloads/Assay' : 'Not saved'}
             {groqApiKey && !isGroqKey(groqApiKey) ? ' | Not a Groq key' : ''}
           </Text>
 
@@ -150,6 +165,11 @@ export default function SettingsScreen({ navigation }) {
               </TouchableOpacity>
             )}
           </View>
+          {!hasGroqApiKey && (
+            <TouchableOpacity style={styles.restoreBtn} onPress={restoreKey}>
+              <Text style={styles.restoreText}>Reinstalled? Restore key from backup</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
       <View style={styles.card}>
@@ -266,6 +286,8 @@ const styles = StyleSheet.create({
   keyStatus: { color: colors.textSecondary, fontSize: 13, marginBottom: 12 },
   buttonRow: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
   downloadBtn: { backgroundColor: colors.primary, padding: 14, borderRadius: 8, flex: 1, alignItems: 'center' },
+  restoreBtn: { marginTop: 10, padding: 10, alignItems: 'center' },
+  restoreText: { color: colors.accentCyan, fontSize: 14, textDecorationLine: 'underline' },
   deleteBtn: { backgroundColor: colors.error, padding: 14, borderRadius: 8, flex: 1, alignItems: 'center' },
   btnText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
 });

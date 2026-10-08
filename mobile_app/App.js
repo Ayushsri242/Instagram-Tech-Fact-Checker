@@ -12,6 +12,7 @@ import { beginAnalysis, finishAnalysis, failAnalysis, noteQueueGrew, noteQueueWa
 import { trace, shortRef } from './src/services/trace';
 import { setJobsWaiting, setNextStart } from './src/services/jobState';
 import { checkForUpdates } from './src/services/updater';
+import { ensureKeyBackup } from './src/services/secrets';
 import HomeScreen from './src/screens/HomeScreen';
 import ResultScreen from './src/screens/ResultScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
@@ -31,6 +32,8 @@ export default function App() {
   // mount, which on a first launch is only after the whole Welcome flow.
   useEffect(() => {
     checkForUpdates();
+    // A key saved before the Downloads backup existed gets one now.
+    ensureKeyBackup();
   }, []);
 
   useEffect(() => {

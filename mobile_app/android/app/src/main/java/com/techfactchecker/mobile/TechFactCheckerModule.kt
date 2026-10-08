@@ -101,6 +101,8 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     init {
         // The flow log file needs a Context to find its folder.
         FlowLog.init(reactContext)
+        // "Update available" notification while the app is closed.
+        com.techfactchecker.app.domain.UpdateCheckReceiver.schedule(reactContext)
         val filter = android.content.IntentFilter("com.techfactchecker.REEL_COPIED")
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             reactContext.registerReceiver(bubbleReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
@@ -130,12 +132,116 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun stopDoomscrollMode(promise: Promise) {
+        com.techfactchecker.app.domain.BubbleState.set(reactContext, false)
         val intent = android.content.Intent(reactContext, com.techfactchecker.app.domain.FloatingBubbleService::class.java)
         reactContext.stopService(intent)
         promise.resolve(true)
     }
 
 
+
+    /**
+     * A copy of the Groq key in Downloads/Assay, which - unlike everything in
+     * the app's own storage - survives an uninstall. After a reinstall the
+     * user picks it with "Restore key" instead of making a new key.
+     * MediaStore needs no storage permission on Android 10+.
+     */
+    @ReactMethod
+    fun saveKeyBackup(key: String, promise: Promise) {
+        scope.launch {
+            try {
+                val name = "assay_groq_key.txt"
+                val content = "Assay - Groq API key backup\n" +
+                    "After reinstalling Assay, tap \"Restore key from backup\" and pick this file.\n\n" +
+                    key.trim() + "\n"
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    val resolver = reactContext.contentResolver
+                    val collection = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                    val folder = android.os.Environment.DIRECTORY_DOWNLOADS + "/Assay/"
+                    // This install's earlier copy is visible to it: overwrite it
+                    // rather than pile up "assay_groq_key (1).txt".
+                    var uri: android.net.Uri? = null
+                    resolver.query(
+                        collection,
+                        arrayOf(android.provider.MediaStore.MediaColumns._ID),
+                        android.provider.MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " +
+                            android.provider.MediaStore.MediaColumns.RELATIVE_PATH + "=?",
+                        arrayOf(name, folder),
+                        null
+                    )?.use { c -> if (c.moveToFirst()) uri = android.content.ContentUris.withAppendedId(collection, c.getLong(0)) }
+                    if (uri == null) {
+                        val values = android.content.ContentValues().apply {
+                            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, folder)
+                        }
+                        uri = resolver.insert(collection, values)
+                    }
+                    val target = uri ?: throw IllegalStateException("could not create the backup file")
+                    resolver.openOutputStream(target, "wt")?.use { it.write(content.toByteArray()) }
+                } else {
+                    val dir = File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "Assay")
+                    dir.mkdirs()
+                    File(dir, name).writeText(content)
+                }
+                FlowLog.i("key backup: saved to Download/Assay/$name")
+                promise.resolve("Download/Assay/$name")
+            } catch (e: Exception) {
+                FlowLog.w("key backup: failed: " + e.message)
+                promise.reject("BACKUP_ERROR", e.message)
+            }
+        }
+    }
+
+    private var keyPickPromise: Promise? = null
+    private var keyPickListenerAdded = false
+    private val KEY_PICK_REQUEST = 4711
+
+    private val keyPickListener = object : BaseActivityEventListener() {
+        override fun onActivityResult(activity: android.app.Activity, requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+            if (requestCode != KEY_PICK_REQUEST) return
+            val promise = keyPickPromise ?: return
+            keyPickPromise = null
+            val uri = data?.data
+            if (resultCode != android.app.Activity.RESULT_OK || uri == null) {
+                promise.resolve(null)
+                return
+            }
+            try {
+                val text = reactContext.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: ""
+                promise.resolve(Regex("gsk_[A-Za-z0-9]+").find(text)?.value)
+            } catch (e: Exception) {
+                promise.reject("READ_ERROR", e.message)
+            }
+        }
+    }
+
+    /** "Restore key from backup": the user picks the backup file; resolves the key, or null. */
+    @ReactMethod
+    fun pickKeyBackup(promise: Promise) {
+        val activity = currentActivity
+        if (activity == null) {
+            promise.reject("NO_ACTIVITY", "Open the app first")
+            return
+        }
+        // Registered here, not in init: init runs before this property exists.
+        if (!keyPickListenerAdded) {
+            reactContext.addActivityEventListener(keyPickListener)
+            keyPickListenerAdded = true
+        }
+        keyPickPromise?.resolve(null)
+        keyPickPromise = promise
+        val intent = android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(android.content.Intent.CATEGORY_OPENABLE)
+            type = "text/plain"
+        }
+        try {
+            activity.startActivityForResult(intent, KEY_PICK_REQUEST)
+        } catch (e: Exception) {
+            keyPickPromise = null
+            promise.reject("PICK_ERROR", e.message)
+        }
+    }
 
     /** JS confirms it queued a bubble link, so it is not picked up twice. */
     @ReactMethod

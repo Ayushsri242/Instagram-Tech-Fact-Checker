@@ -59,6 +59,8 @@ class FloatingBubbleService : Service() {
             registerReceiver(commandReceiver, filter)
         }
         
+        // Remembered so the bubble comes back after an update or a reboot.
+        BubbleState.set(this, true)
         startForegroundService()
         createCloseView()
         createFloatingBubble()
@@ -210,6 +212,8 @@ class FloatingBubbleService : Service() {
                     val isNearClose = event.rawY > screenHeight - 400 && event.rawX > screenWidth / 2 - 200 && event.rawX < screenWidth / 2 + 200
                     
                     if (isNearClose && !isClick) {
+                        // Closed by the user: do not bring it back after a reboot.
+                        BubbleState.set(this, false)
                         stopSelf()
                         return@setOnTouchListener true
                     }
