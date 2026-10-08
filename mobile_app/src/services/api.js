@@ -377,6 +377,10 @@ const callGroq = async (apiKey, messages, { job, json, accept, temperature }) =>
             // output allowance. With the default allowance gpt-oss-20b spent
             // all of it reasoning and answered nothing; give room to finish.
             max_completion_tokens: 4096,
+            // Same evidence, same verdict as far as the model allows: a fixed
+            // seed makes sampling repeatable (Groq: best effort). Oct 8: the
+            // unchanged judge gave FAKE then MISLEADING on identical evidence.
+            seed: 7,
           },
           { timeout: 90000, headers: { Authorization: 'Bearer ' + apiKey } }
         );
@@ -1109,12 +1113,13 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     ...(post.money ? ['',
       'THIS IS A MONEY / SIDE-HUSTLE POST about: ' + ((post.platforms || []).join(', ') || 'an earning method') + '.',
       'The question is NOT whether the websites exist - it is whether the EARNING CLAIMS hold. For each platform, use the user reviews, Trustpilot scores and real-experience reports in the evidence: what people actually earn, whether it pays out, fees, payout minimums, tests to pass, country restrictions.',
-      'For this post these verdict rules replace the tool rules below:',
-      '- TRUE: legit platforms and the claimed pay matches what users report.',
-      '- PARTIALLY_TRUE: legit platforms, the pay is possible but lower, rarer or harder than claimed.',
-      '- HYPE: legit platforms, but the post sells easy or large money ("prints money", "passive income") that users do not report.',
-      '- MISLEADING: the pay claim is wrong, the platform does not pay for that work, or major catches (fees, payout thresholds, not open in the stated country) are hidden.',
-      '- FAKE: the platform has shut down, does not exist, or is widely reported as not paying / a scam.',
+      'For this post these verdict rules replace the tool rules below. Go down the list; the FIRST rule that matches is the verdict:',
+      '1. FAKE: the evidence shows a named platform has shut down, or is widely reported as not paying / a scam.',
+      '2. MISLEADING: the pay users typically report is BELOW the lowest figure the post claims (claim "$5-$20 per review", users report cents), OR the platform does not pay for that work at all, OR a major catch is hidden (fees to join, payout threshold most never reach, not open in the country the post targets).',
+      '3. HYPE: the per-task pay users report is within the claimed range, but the post sells it as easy, passive or life-changing money ("prints money", "quit your job").',
+      '4. PARTIALLY_TRUE: users report pay INSIDE the claimed range but at its low end, or work is scarce, tests are required, or only some of the listed platforms hold up.',
+      '5. TRUE: the platforms are operating and users report pay matching the claim.',
+      'Judge by the TYPICAL user report, not the best or worst single review. If the evidence has no pay figures at all for a platform, do not guess: say so, and decide from the platforms that do have them.',
       'List each platform in tools (status "verified" only if the evidence shows it operating today). Gotchas must be about money: real pay rates, fees, payout minimums, country limits, tests. Never cite a GitHub repository for a money post.'] : []),
     '',
     'Web Evidence Gathered:', evidenceText,
@@ -1126,11 +1131,17 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     '- Same-name projects: a repository or package with the same name but owned by an account other than the post author (' + (post.author ? '@' + post.author : 'unknown') + ') is SOMEONE ELSE\'S project unless the post prints its URL or names that account. Never present it as the post\'s repo or use it to call the post TRUE. A name collision makes the post MISLEADING or FAKE only when the post claims you can download, install or buy the tool and the only thing with that name is unrelated.',
     '- Personal project demo: if the post shows the creator\'s OWN project working on screen and makes no checkable claim (no link, install command, price, benchmark number or availability promise), the verdict is TRUE. Say it is a personal project with no public repo or download found, and add the gotcha "Personal project - no public download found". Do not mark it MISLEADING or PARTIALLY_TRUE only because no repo exists.',
     '- Background apps are not tools: apps that only appear in the dock, menu bar, browser tabs or the editor window behind the demo are not part of the claim. Do not list them as tools or write gotchas about them.',
-    '- TRUE: the exact tools/repos/platforms claimed exist, are accessible, and work as demonstrated.',
-    '- PARTIALLY_TRUE: the exact tools/repos/platforms claimed exist, but with minor technical caveats (early alpha, semantic shortcut, hidden fees, low gig pay).',
-    '- HYPE: the underlying concept exists, but marketing claims ("100% replaces everything", "zero effort", "instant cash") are exaggerated.',
-    '- MISLEADING: omits critical limitations, severe pricing catches, impossible earnings, or misrepresents functionality.',
-    '- FAKE: completely fabricated tools, non-existent repos, scams, or relying on name collisions of unrelated projects.',
+    // Ordered, first match wins. The old five overlapping descriptions let the
+    // same evidence land on neighbouring verdicts from run to run (Oct 8: Fake
+    // vs Misleading, True vs Misleading, Misleading vs Partly true on three
+    // reels). Each border below is the one that flipped.
+    'Verdict: go down this list; the FIRST rule that matches is the verdict.',
+    '1. FAKE: there is POSITIVE evidence against the post: the tool/offer is reported as a scam, has shut down, the link or repo the post itself prints is dead, or the only thing with that name is an unrelated project the post claims you can download. "Found nothing" is NOT fake - see rule 2.',
+    '2. MISLEADING: any of: the main tool/offer could not be found anywhere in the evidence (say "could not be verified") - EXCEPT a personal project demo, which follows the Personal project rule above; the offer exists but only for a restricted group (eligible startups, students, one country, new accounts, a waitlist) while the post presents it as open to anyone; a severe catch the post hides (it is paid when the post says free, a hard usage cap, a required paid plan); the post misdescribes what the tool does.',
+    '3. HYPE: the tools exist and do roughly what is shown, but the post wildly overstates the result ("replaces your whole team", "100x faster", "zero effort", "never pay again").',
+    '4. PARTIALLY_TRUE: the tools exist and work as shown, with minor caveats the post leaves out (early alpha, needs an API key, setup required, some listed items not found, small usage limits).',
+    '5. TRUE: the tools exist, are accessible as described, and do what the post shows.',
+    'For a list post, judge the list as a whole: one unfindable item out of many is a PARTIALLY_TRUE caveat, not MISLEADING for the whole post.',
     '',
     'Return FIELDS ONLY. Do not write markdown, headings, bullet characters, tables or emoji inside any value.',
     'BE BRIEF. This is a card the reader scans in five seconds, not an article; they ask follow-up questions in chat afterwards.',
