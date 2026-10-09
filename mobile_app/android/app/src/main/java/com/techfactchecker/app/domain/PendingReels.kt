@@ -44,3 +44,29 @@ object PendingReels {
         return urls
     }
 }
+
+/**
+ * Shortcodes the bubble has already sent in the last 24 hours, so an
+ * accidental tap on the same copied link asks for confirmation first.
+ */
+object SentLinks {
+    private const val PREFS = "tfc_sent_links"
+    private const val DAY_MS = 24 * 3600 * 1000L
+
+    @Synchronized
+    fun recentlySent(context: Context, code: String, now: Long): Boolean {
+        val at = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(code, 0L)
+        return at > 0 && now - at < DAY_MS
+    }
+
+    @Synchronized
+    fun mark(context: Context, code: String, now: Long) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        // Forget entries older than a day so the file stays small.
+        for ((key, value) in prefs.all) {
+            if (value is Long && now - value >= DAY_MS) editor.remove(key)
+        }
+        editor.putLong(code, now).apply()
+    }
+}

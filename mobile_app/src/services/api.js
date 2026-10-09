@@ -293,6 +293,24 @@ const withModelHints = (messages, job, model) => {
   return messages.map((m, i) => (i === messages.length - 1 && m.role === 'user' ? { ...m, content: m.content + '\n\n' + hint } : m));
 };
 
+// Searches for a post. A list post gets one search per item FIRST, then the
+// model's own queries: with a flat cap of 10, items 7-10 of a 10-item list
+// often got no search of their own, never reached the evidence, and showed as
+// unverified (Oct 9). Searching is free (no AI tokens), so allow up to 16.
+const listQueries = (claimsData, isList) => {
+  const own = (claimsData.search_queries || []).filter(Boolean);
+  if (!isList) return own.slice(0, 10);
+  const perItem = (claimsData.tools || []).filter((t) => t && t.name).map((t) =>
+    t.github_repo && t.github_repo !== 'null' ? t.github_repo + ' github' : t.name + (t.domain_url && t.domain_url !== 'null' ? ' ' + t.domain_url : ' official'));
+  const seen = new Set();
+  const out = [];
+  for (const q of [...perItem, ...own]) {
+    const k = q.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); out.push(q); }
+  }
+  return out.slice(0, Math.min(16, Math.max(10, perItem.length + 3)));
+};
+
 // ---- Daily token tracker ----
 //
 // The free tier allows 200,000 tokens a day per model (measured Oct 7 from a
@@ -971,7 +989,7 @@ const MAX_OCR = 3000;
 // Rust and React filled the 12 seats first; the model then wrote "no public
 // repository was found" and the verdict went MISLEADING. Same post, same input,
 // TRUE / PARTIALLY_TRUE / MISLEADING depending on the order of the searches.
-const rankEvidence = (evidence, techName, tools, pinned = []) => {
+const rankEvidence = (evidence, techName, tools, pinned = [], opts = {}) => {
   const pins = pinned.map((s) => 'github.com/' + String(s).toLowerCase());
   const isPinned = (item) => {
     const url = String(item.url || '').toLowerCase();
@@ -1031,9 +1049,24 @@ const rankEvidence = (evidence, techName, tools, pinned = []) => {
     .map((item, i) => ({ item, i, s: score(item) }))
     .sort((a, b) => (b.s - a.s) || (a.i - b.i));
   const kept = [];
+  // A list post: first the best row for EACH item, so no item reaches the
+  // judge with nothing (Oct 9: 3 of 9 items unverified on friends' lists),
+  // and 16 seats instead of 12. Single-subject posts are unchanged.
+  const maxRows = opts.list ? 16 : MAX_EVIDENCE_ROWS;
+  if (opts.list) {
+    for (const t of tools || []) {
+      if (kept.length >= maxRows) break;
+      const k = flatKey(t && t.name);
+      if (k.length < 3) continue;
+      const hit = ranked.find((x) => !kept.includes(x.item) &&
+        flatKey(String(x.item.title || '') + ' ' + String(x.item.url || '') + ' ' + String(x.item.snippet || '')).includes(k));
+      if (hit) kept.push(hit.item);
+    }
+  }
   let subjectRows = 0;
   for (const x of ranked) {
-    if (kept.length >= MAX_EVIDENCE_ROWS) break;
+    if (kept.length >= maxRows) break;
+    if (kept.includes(x.item)) continue;
     const isSubject = x.s >= 40 && !isPinned(x.item);
     if (isSubject && subjectRows >= MAX_SUBJECT_ROWS) continue;
     if (isSubject) subjectRows += 1;
@@ -1041,7 +1074,7 @@ const rankEvidence = (evidence, techName, tools, pinned = []) => {
   }
   // Seats the cap left empty go back to subject rows rather than staying unused.
   for (const x of ranked) {
-    if (kept.length >= MAX_EVIDENCE_ROWS) break;
+    if (kept.length >= maxRows) break;
     if (!kept.includes(x.item)) kept.push(x.item);
   }
   return kept;
@@ -1725,7 +1758,9 @@ const normalizeReport = (report, evidence, opts = {}) => {
     // no website, no install command and nothing verified is not a tool - it is a sentence
     // wearing a badge, and it makes the card longer while saying less.
     .filter((t) => t.repo || t.website || t.install || t.status === 'verified')
-    .slice(0, 6);
+    // A list post shows every checked item (Oct 9: friends saw "6 of 9"
+    // verified on 9-item lists - the other three were cut here, not missing).
+    .slice(0, opts.list ? 15 : 6);
   // References come from pages we actually fetched, so they cannot be invented.
   const references = [];
   for (const item of evidence || []) {
@@ -1827,7 +1862,7 @@ export const analyzeReelApi = async (url) => {
   const platforms = money ? moneyPlatforms(claimsData) : [];
   const queries = money
     ? moneyQueries(platforms, claimsData, [media.caption, ocrText, transcript].join(' '))
-    : (claimsData.search_queries || []).slice(0, 10);
+    : listQueries(claimsData, isListPost(modelTechName, claimsData.tools));
   if (money) log('MONEY MODE', { platforms });
   log('STAGE 2 QUERIES', queries);
 
@@ -1894,7 +1929,7 @@ export const analyzeReelApi = async (url) => {
   const pinned = [...new Set([subject.slug, ...printedGithubSlugs(ocrText)].filter(Boolean))];
   const kept = money
     ? rankMoneyEvidence(evidence, platforms)
-    : rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned);
+    : rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned, { list: isListPost(modelTechName, claimsData.tools) });
   if (pinned.length) log('PINNED EVIDENCE', pinned);
   // Wait for the main judge's minute rather than hand the verdict to the
   // backup: on Oct 7, 5 of 13 back-to-back reels were judged by the backup
@@ -1910,7 +1945,7 @@ export const analyzeReelApi = async (url) => {
   lap('synthesis');
   log('STAGE 3 RAW REPORT', report);
   const verdictRaw = report.verdict;
-  const normalized = normalizeReport(report, evidence, { money });
+  const normalized = normalizeReport(report, evidence, { money, list: isListPost(modelTechName, claimsData.tools) });
   normalized.confidence = deriveConfidence({
     // A list of platforms has no single subject to confirm - not a weakness.
     // A list post ("22 NLP techniques", "top 5 recruiters") has no single

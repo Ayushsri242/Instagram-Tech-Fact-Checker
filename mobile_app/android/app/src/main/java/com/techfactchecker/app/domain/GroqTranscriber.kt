@@ -37,6 +37,13 @@ class GroqTranscriber {
          * nobody was speaking; drop the segments it says are not speech.
          */
         private const val NO_SPEECH_MAX = 0.6
+        // Whisper's defaults: a segment is non-speech only if no_speech_prob
+        // is high AND avg_logprob is below -1.0; compression over 2.4 means
+        // looping, invented text.
+        private const val LOGPROB_MIN = -1.0
+        private const val COMPRESSION_MAX = 2.4
+        // Whisper-large-v3 can translate any language to English in one call.
+        private const val TRANSLATE_ENDPOINT = "https://api.groq.com/openai/v1/audio/translations"
         /** Shorter than this is noise (music, a breath), not speech. */
         private const val MIN_SPEECH_CHARS = 20
         /** Groq's prompt limit is 224 tokens; the caption's opening is enough. */
@@ -80,52 +87,26 @@ class GroqTranscriber {
                 return ""
             }
 
-            val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-                .addFormDataPart("model", MODEL)
-                .addFormDataPart("response_format", "verbose_json")
-                .addFormDataPart("temperature", "0")
-                .addFormDataPart("prompt", spellingHint(caption))
-                .addFormDataPart("file", upload.name, upload.asRequestBody("audio/mp4".toMediaType()))
-                .build()
+            val result = callWhisper(ENDPOINT, upload, apiKey, spellingHint(caption))
+                ?: return ""
+            val language = result.optString("language").lowercase().ifBlank { "unknown" }
+            var (transcript, dropped, segmentCount) = keptSpeech(result)
 
-            var json: JSONObject? = null
-            for (attempt in 1..2) {
-                val request = Request.Builder().url(ENDPOINT)
-                    .header("Authorization", "Bearer $apiKey")
-                    .post(body)
-                    .build()
-                client.newCall(request).execute().use { res ->
-                    val text = res.body?.string() ?: ""
-                    if (res.code == 429 && attempt == 1) {
-                        // Groq says how long to wait; honour it once, briefly.
-                        val wait = res.header("retry-after")?.toDoubleOrNull() ?: 5.0
-                        Log.w(TAG, "STT: Groq rate limit, retrying in ${wait}s")
-                        Thread.sleep((wait.coerceAtMost(20.0) * 1000).toLong())
-                    } else if (!res.isSuccessful) {
-                        lastStats = "groq error ${res.code}: ${text.take(120)}"
-                        Log.w(TAG, "STT: $lastStats")
-                        return ""
-                    } else {
-                        json = JSONObject(text)
+            // Non-English speech (Oct 9: a Hindi side-hustle reel) comes back
+            // in its own script - "रेंट ह्यूमन" - which no search engine maps
+            // to the product "RentHuman". Whisper can translate to English in
+            // the same pass; use that so names come through searchable.
+            var translated = false
+            if (transcript.isNotEmpty() && language != "english" && language != "en" && language != "unknown") {
+                val english = callWhisper(TRANSLATE_ENDPOINT, upload, apiKey, null)
+                if (english != null) {
+                    val (text, _, _) = keptSpeech(english)
+                    if (text.length >= MIN_SPEECH_CHARS) {
+                        transcript = text
+                        translated = true
                     }
                 }
-                if (json != null) break
             }
-            val result = json ?: run { lastStats = "groq rate limited twice"; return "" }
-
-            val segments = result.optJSONArray("segments")
-            val kept = mutableListOf<String>()
-            var dropped = 0
-            if (segments != null) {
-                for (i in 0 until segments.length()) {
-                    val s = segments.getJSONObject(i)
-                    val text = s.optString("text").trim()
-                    if (s.optDouble("no_speech_prob", 0.0) > NO_SPEECH_MAX || isStockFiller(text)) dropped++
-                    else kept.add(text)
-                }
-            }
-            var transcript = if (segments != null) kept.joinToString(" ").trim()
-                else result.optString("text").trim().let { if (isStockFiller(it)) "" else it }
             // A music-only reel still comes back with a scrap of text - the
             // PixelFriend demo (no voice at all) returned 1-6 characters of
             // Tamil script on each of three runs. Nobody says anything checkable
@@ -135,8 +116,9 @@ class GroqTranscriber {
                 transcript = ""
             }
             lastStats = "groq $MODEL upload=${upload.length() / 1024}kB " +
-                "duration=${"%.1f".format(result.optDouble("duration", 0.0))}s " +
-                "segments=${kept.size + dropped} dropped_no_speech=$dropped chars=${transcript.length}"
+                "duration=${"%.1f".format(result.optDouble("duration", 0.0))}s lang=$language" +
+                (if (translated) " translated=en" else "") +
+                " segments=$segmentCount dropped_no_speech=$dropped chars=${transcript.length}"
             Log.i(TAG, "STT: $lastStats")
             return transcript
         } catch (e: Exception) {
@@ -146,6 +128,65 @@ class GroqTranscriber {
         } finally {
             audio.delete()
         }
+    }
+
+    /** One Whisper request (transcribe or translate), retried once on a rate limit. Null on failure (lastStats says why). */
+    private fun callWhisper(endpoint: String, upload: File, apiKey: String, prompt: String?): JSONObject? {
+        for (attempt in 1..2) {
+            val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
+                .addFormDataPart("model", MODEL)
+                .addFormDataPart("response_format", "verbose_json")
+                .addFormDataPart("temperature", "0")
+                .addFormDataPart("file", upload.name, upload.asRequestBody("audio/mp4".toMediaType()))
+            if (!prompt.isNullOrBlank()) builder.addFormDataPart("prompt", prompt)
+            val request = Request.Builder().url(endpoint)
+                .header("Authorization", "Bearer $apiKey")
+                .post(builder.build())
+                .build()
+            client.newCall(request).execute().use { res ->
+                val text = res.body?.string() ?: ""
+                if (res.code == 429 && attempt == 1) {
+                    // Groq says how long to wait; honour it once, briefly.
+                    val wait = res.header("retry-after")?.toDoubleOrNull() ?: 5.0
+                    Log.w(TAG, "STT: Groq rate limit, retrying in ${wait}s")
+                    Thread.sleep((wait.coerceAtMost(20.0) * 1000).toLong())
+                } else if (!res.isSuccessful) {
+                    lastStats = "groq error ${res.code}: ${text.take(120)}"
+                    Log.w(TAG, "STT: $lastStats")
+                    return null
+                } else {
+                    return JSONObject(text)
+                }
+            }
+        }
+        lastStats = "groq rate limited twice"
+        return null
+    }
+
+    /**
+     * The segments that are speech: (text, dropped count, segment count).
+     *
+     * Whisper's own rule, not half of it. We used to drop every segment whose
+     * no_speech_prob exceeded 0.6; background music pushes that score up while
+     * someone is clearly talking, and a 66 s Hindi reel lost ALL its speech
+     * (Oct 9: segments at no_speech 0.65-0.85 had avg_logprob -0.19, i.e. the
+     * words were near-certain). Whisper drops a segment only when it is likely
+     * silent AND the words are unsure; repetitive output (compression ratio
+     * over 2.4) is its other tell for invented text over music.
+     */
+    private fun keptSpeech(result: JSONObject): Triple<String, Int, Int> {
+        val segments = result.optJSONArray("segments")
+            ?: return Triple(result.optString("text").trim().let { if (isStockFiller(it)) "" else it }, 0, 0)
+        val kept = mutableListOf<String>()
+        var dropped = 0
+        for (i in 0 until segments.length()) {
+            val s = segments.getJSONObject(i)
+            val text = s.optString("text").trim()
+            val silent = s.optDouble("no_speech_prob", 0.0) > NO_SPEECH_MAX && s.optDouble("avg_logprob", 0.0) < LOGPROB_MIN
+            val looping = s.optDouble("compression_ratio", 0.0) > COMPRESSION_MAX
+            if (silent || looping || isStockFiller(text)) dropped++ else kept.add(text)
+        }
+        return Triple(kept.joinToString(" ").trim(), dropped, segments.length())
     }
 
     /**
