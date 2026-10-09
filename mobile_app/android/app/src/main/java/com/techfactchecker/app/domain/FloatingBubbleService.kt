@@ -248,6 +248,18 @@ class FloatingBubbleService : Service() {
         }, 150)
     }
 
+    // The link waiting for a confirming tap, and until when.
+    private var confirmCode: String? = null
+    private var confirmUntil = 0L
+
+    private fun setBubble(label: String, color: String) {
+        if (!::floatingView.isInitialized) return
+        (floatingView as FrameLayout).getChildAt(0).let {
+            (it as TextView).text = label
+            (it.background as android.graphics.drawable.GradientDrawable).setColor(Color.parseColor(color))
+        }
+    }
+
     private fun readClipboard() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val hasClip = clipboard.hasPrimaryClip()
@@ -258,6 +270,33 @@ class FloatingBubbleService : Service() {
             Log.d("FloatingBubble", "Clipboard read: $text")
             
             if (text.contains("instagram.com")) {
+                // An accidental tap while scrolling re-sent the last copied
+                // link (Oct 9, friends' testing). A link already sent in the
+                // last 24 h needs a second tap within 4 s; the first one only
+                // shows a toast over Instagram and "Again?" on the bubble.
+                val code = Regex("(?:reels?|p)/([A-Za-z0-9_-]+)").find(text)?.groupValues?.get(1)
+                val now = System.currentTimeMillis()
+                if (code != null && SentLinks.recentlySent(this, code, now) && !(confirmCode == code && now < confirmUntil)) {
+                    confirmCode = code
+                    confirmUntil = now + 4000
+                    setBubble("Again?", "#FFC107")
+                    android.widget.Toast.makeText(
+                        this,
+                        "Already checked (or in progress). Tap again within 4 s to check it again.",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                    FlowLog.init(this)
+                    FlowLog.i("bubble: tapped on already-sent link $code - waiting for a confirming tap")
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        if (confirmCode == code && System.currentTimeMillis() >= confirmUntil) {
+                            confirmCode = null
+                            setBubble("AI", "#00E5FF")
+                        }
+                    }, 4100)
+                    return
+                }
+                confirmCode = null
+                if (code != null) SentLinks.mark(this, code, now)
                 (floatingView as FrameLayout).getChildAt(0).let {
                     (it as TextView).text = "..."
                     val shape = it.background as android.graphics.drawable.GradientDrawable

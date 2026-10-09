@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, NativeModules, ScrollView, Share, Alert } from 'react-native';
+import * as FileSystem from 'expo-file-system';
 import { colors } from '../theme/colors';
 import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey, restoreGroqKeyFromBackup } from '../services/secrets';
 import { isGroqKey } from '../services/api';
@@ -31,9 +32,18 @@ export default function SettingsScreen({ navigation }) {
       return;
     }
     try {
-      // The file lives in app-private storage, so a viewer cannot open the
-      // path. Share the text itself, which any chat or mail app will take.
-      await Share.share({ message: csv, title: 'factcheck_runs.csv' });
+      // As a FILE, not a text message: WhatsApp cut the text version off
+      // (Oct 9). Older rows from before the last column change go in too.
+      const old = await readOldRunLog();
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+      const path = FileSystem.cacheDirectory + 'assay_log_' + stamp + '.csv';
+      await FileSystem.writeAsStringAsync(path, old ? csv + '\n' + old : csv);
+      if (NativeModules.TechFactChecker && NativeModules.TechFactChecker.shareFile) {
+        const uri = await FileSystem.getContentUriAsync(path);
+        await NativeModules.TechFactChecker.shareFile(uri, 'text/csv', 'Assay test log');
+      } else {
+        await Share.share({ message: csv, title: 'factcheck_runs.csv' });
+      }
     } catch (e) {
       Alert.alert('Could not share', e.message + '\n\nFile: ' + RUN_LOG_PATH);
     }

@@ -243,6 +243,32 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Shares a file (a content:// URI) through the Android share sheet. The run
+     * log used to be shared as one long text message and WhatsApp cut it off
+     * (Oct 9, friends' test logs); as an attachment nothing is truncated.
+     */
+    @ReactMethod
+    fun shareFile(contentUri: String, mimeType: String, title: String, promise: Promise) {
+        try {
+            val uri = android.net.Uri.parse(contentUri)
+            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = mimeType
+                putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                putExtra(android.content.Intent.EXTRA_SUBJECT, title)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val chooser = android.content.Intent.createChooser(send, title).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            (currentActivity ?: reactContext).startActivity(chooser)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SHARE_ERROR", e.message)
+        }
+    }
+
     /** JS confirms it queued a bubble link, so it is not picked up twice. */
     @ReactMethod
     fun ackReel(url: String) {
