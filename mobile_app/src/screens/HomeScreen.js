@@ -16,7 +16,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import { getApiLimits, getOfflineMode, getUnseenResults, clearUnseenResults } from '../services/storage';
 import { describeLimits } from '../services/api';
-import { getJobState, subscribeJob, JOB_STAGES } from '../services/jobState';
+import { getJobState, subscribeJob, JOB_STAGES, setLastFailure } from '../services/jobState';
 import { subscribeUpdateProgress } from '../services/updater';
 
 const elapsed = (ms) => {
@@ -208,6 +208,21 @@ export default function HomeScreen({ navigation }) {
             <View style={styles.jobTrack}>
               <View style={[styles.jobFill, { width: ((job.running.step + 1) / JOB_STAGES.length) * 100 + '%' }]} />
             </View>
+          </View>
+        )}
+        {/* A reel that could not be checked: say which and why, here and not
+            only in the notification. Cleared when the next reel starts. */}
+        {!job.running && !!job.lastFailure && (
+          <View style={[styles.jobStrip, { borderColor: colors.error || '#ef4444' }]}>
+            <View style={styles.jobRow}>
+              <Text style={[styles.jobTitle, { color: colors.error || '#ef4444' }]} numberOfLines={1}>
+                Couldn't check {job.lastFailure.ref ? 'reel ' + job.lastFailure.ref : 'the reel'}
+              </Text>
+              <TouchableOpacity onPress={() => setLastFailure(null)} hitSlop={12}>
+                <Text style={styles.jobTime}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.jobStage}>{job.lastFailure.reason} It is saved in History.</Text>
           </View>
         )}
         {/* Between reels: a countdown, not a silent minute. The queue looked

@@ -25,7 +25,7 @@ export const subscribeJob = (fn) => {
 };
 
 export const jobStarted = (ref) => {
-  state = { ...state, running: { ref, step: 0, startedAt: Date.now() } };
+  state = { ...state, running: { ref, step: 0, startedAt: Date.now() }, lastFailure: null };
   emit();
 };
 
@@ -53,6 +53,13 @@ export const setJobNote = (text, until = null) => {
 // their shortcodes so Home can name them.
 export const setJobsWaiting = (n, refs = []) => {
   state = { ...state, waiting: n, queued: refs };
+  emit();
+};
+
+// The last reel that could not be checked, shown on Home until the next one
+// starts or the user closes it. It used to appear only in the notification.
+export const setLastFailure = (failure) => {
+  state = { ...state, lastFailure: failure };
   emit();
 };
 

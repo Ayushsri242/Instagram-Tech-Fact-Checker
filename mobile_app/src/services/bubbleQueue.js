@@ -51,7 +51,7 @@ const processQueue = async () => {
   } catch (e) {
     hadError = true;
     trace('doomscroll: FAILED ' + shortRef(url) + ' after ' + Math.round((Date.now() - startedAt) / 1000) + 's - ' + String(e && e.message).slice(0, 120));
-    await failAnalysis(e && e.message);
+    await failAnalysis(e && e.message, url);
   } finally {
     TechFactChecker.setBubbleColor('#00E5FF');
   }

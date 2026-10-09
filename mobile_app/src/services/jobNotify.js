@@ -1,7 +1,8 @@
 import { NativeModules, AppState } from 'react-native';
-import { addUnseenResult } from './storage';
+import { addUnseenResult, saveReelResult } from './storage';
+import { friendlyError } from './errors';
 import { trace } from './trace';
-import { jobStarted, jobEnded } from './jobState';
+import { jobStarted, jobEnded, setLastFailure } from './jobState';
 
 // Notifications for an analysis, shared by the paste flow and doomscroll mode.
 //
@@ -70,11 +71,28 @@ export const finishAnalysis = async (result, { alwaysNotify = false } = {}) => {
   }
 };
 
-export const failAnalysis = async (message) => {
+// The raw message goes to the flow log; the user gets one plain sentence, on
+// Home, in History (so the reel is not lost) and in the notification.
+export const failAnalysis = async (message, url = null) => {
   trace('analysis failed: ' + String(message || '').slice(0, 120));
+  const reason = friendlyError(message);
+  const code = (String(url || '').match(/(?:reel|p)\/([A-Za-z0-9_-]+)/) || [])[1] || null;
   jobEnded();
+  setLastFailure({ ref: code, reason, at: Date.now() });
+  if (url) {
+    await saveReelResult({
+      reelId: 'failed-' + (code || 'link') + '-' + Date.now(),
+      url,
+      verdict: 'FAILED',
+      techName: "Couldn't check this reel",
+      title: code ? 'instagram.com/' + code : url,
+      factualReality: reason,
+      failed: true,
+      createdAt: new Date().toISOString(),
+    });
+  }
   await call('stopAnalysisService');
   if (!userIsWatching()) {
-    await call('showNotification', 'Fact check failed', String(message || 'Could not process the reel.').slice(0, 120));
+    await call('showNotification', "Couldn't check this reel", reason);
   }
 };
