@@ -16,6 +16,7 @@ import { chatWithAiApi, analyzeReelApi, askToolQuestion } from '../services/api'
 import { getChatHistory, saveChatMessage, saveReelResult } from '../services/storage';
 import { beginAnalysis, finishAnalysis, failAnalysis } from '../services/jobNotify';
 import { shortRef } from '../services/trace';
+import { friendlyError } from '../services/errors';
 
 // Date.now() collides when two messages are created in the same millisecond,
 // which is how a report and its follow-up ended up sharing a key.
@@ -147,7 +148,7 @@ export default function ChatScreen({ route, navigation }) {
         console.log("[DEBUG_CHAT] AI report:", result.verdict, "| tools:", (result.report && result.report.tools ? result.report.tools.length : 0));
       } catch (err) {
         const failureText = err && err.message ? err.message : String(err);
-        await failAnalysis(failureText);
+        await failAnalysis(failureText, initialUrl);
         if (!aliveRef.current) return;
         // Read err OUTSIDE the updater. Hermes fails to capture a catch
         // parameter inside a closure and throws
@@ -156,7 +157,7 @@ export default function ChatScreen({ route, navigation }) {
         const failureMsg = {
           id: newId(),
           sender: 'assistant',
-          text: `Analysis failed: ${err && err.message ? err.message : String(err)}`,
+          text: "Couldn't check this reel. " + friendlyError(failureText),
         };
         setMessages((prev) => [...prev, failureMsg]);
       } finally {
@@ -215,10 +216,24 @@ export default function ChatScreen({ route, navigation }) {
     setChatLoadingText('Thinking...');
     setLoading(true);
 
+    // A reel that could not be checked has no post text or evidence: the AI
+    // would answer from nothing. Say what happened instead of calling it.
+    if (currentReel.failed) {
+      setMessages((prev) => [...prev, {
+        id: newId(),
+        sender: 'assistant',
+        text: "This reel couldn't be checked, so there is nothing to answer from. " +
+          (currentReel.factualReality || '') +
+          ' To try again, paste the link on the Home screen or tap the bubble on the reel.',
+      }]);
+      setLoading(false);
+      return;
+    }
+
     try {
       const reelId = currentReel.reelId;
       await saveChatMessage(reelId, userMsg);
-      
+
       console.log("[DEBUG_CHAT] User:", textToSend);
       let replyText = await chatWithAiApi(currentReel, textToSend, messages, () => {
         setChatLoadingText('Web search in progress...');

@@ -273,6 +273,26 @@ const recordLimits = async (headers, model) => {
   }
 };
 
+// Extra instructions for one model on one job. When gpt-oss-120b stands in as
+// the READER it ignored rules qwen follows (Oct 9, 10 saved reels): it listed
+// background apps (TikTok, Render), the creator's handle, a watermark site
+// (gittrend.io) and every model a tool merely supports, and it copied OCR typos
+// ("ninimind", "enClaude") that qwen repaired. Same prompt, so the backup gets
+// these spelled out instead of falling back less often (waiting adds a minute).
+const MODEL_HINTS = {
+  'extract:gpt-oss-120b': [
+    'STRICT RULES FOR THIS ANSWER:',
+    '- tools = ONLY what the post is about or tells the viewer to use. Not apps visible in the background, not the creator\'s own @handle or name, not a watermark or site name printed on every slide, not every model or service a tool merely supports.',
+    '- OCR text has typos. Write each name the way the product spells it: if the slides say "ninimind" or "enClaude", the product is "MiniMind" or "OpenClaude". Use the clearest spelling the post itself shows.',
+    '- When unsure whether something is a tool, leave it out.',
+  ].join('\n'),
+};
+const withModelHints = (messages, job, model) => {
+  const hint = MODEL_HINTS[job + ':' + shortModel(model)];
+  if (!hint) return messages;
+  return messages.map((m, i) => (i === messages.length - 1 && m.role === 'user' ? { ...m, content: m.content + '\n\n' + hint } : m));
+};
+
 // ---- Daily token tracker ----
 //
 // The free tier allows 200,000 tokens a day per model (measured Oct 7 from a
@@ -371,7 +391,7 @@ const callGroq = async (apiKey, messages, { job, json, accept, temperature }) =>
           GROQ_URL,
           {
             model,
-            messages,
+            messages: withModelHints(messages, job, model),
             temperature,
             // gpt-oss reasons before it answers, and the reasoning shares the
             // output allowance. With the default allowance gpt-oss-20b spent
@@ -1790,6 +1810,12 @@ export const analyzeReelApi = async (url) => {
   log('OCR', ocrText || '(empty)');
 
   let claimsData = await extractClaims(apiKey, transcript, ocrText);
+  // The creator's own handle is never a tool under test (the backup reader
+  // listed "AmanXaicom", Oct 9). Either reader, same rule.
+  if (media.author && Array.isArray(claimsData.tools)) {
+    const handle = flatKey(media.author);
+    if (handle.length >= 3) claimsData.tools = claimsData.tools.filter((t) => flatKey(t && t.name) !== handle);
+  }
   lap('claims');
   jobStage(2);
   // Kept because the picker overwrites tech_name below, and a replay of this
