@@ -234,6 +234,14 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
         val intent = android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(android.content.Intent.CATEGORY_OPENABLE)
             type = "text/plain"
+            // Open straight in Downloads/Assay, where the backup is the only
+            // file - a non-technical user should not have to hunt for it.
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                putExtra(
+                    android.provider.DocumentsContract.EXTRA_INITIAL_URI,
+                    android.net.Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload%2FAssay")
+                )
+            }
         }
         try {
             activity.startActivityForResult(intent, KEY_PICK_REQUEST)
@@ -370,6 +378,14 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
             )
             map.putString("manufacturer", android.os.Build.MANUFACTURER.orEmpty())
             map.putBoolean("hasAutostartScreen", findAutostartIntent() != null)
+            // Android 9+: has the user restricted this app's background activity?
+            // (The maker's own auto-launch switch cannot be read; the setup
+            // screen asks about that one.)
+            val activity = reactContext.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            map.putBoolean(
+                "backgroundRestricted",
+                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P && activity.isBackgroundRestricted
+            )
             map.putInt("sdk", android.os.Build.VERSION.SDK_INT)
             promise.resolve(map)
         } catch (e: Exception) {

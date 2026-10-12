@@ -178,6 +178,7 @@ export default function SettingsScreen({ navigation }) {
           {!hasGroqApiKey && (
             <TouchableOpacity style={styles.restoreBtn} onPress={restoreKey}>
               <Text style={styles.restoreText}>Reinstalled? Restore key from backup</Text>
+              <Text style={styles.restoreHint}>Then tap the file named assay_groq_key.txt</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -296,6 +297,7 @@ const styles = StyleSheet.create({
   keyStatus: { color: colors.textSecondary, fontSize: 13, marginBottom: 12 },
   buttonRow: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
   downloadBtn: { backgroundColor: colors.primary, padding: 14, borderRadius: 8, flex: 1, alignItems: 'center' },
+  restoreHint: { color: colors.textMuted, fontSize: 12, marginTop: 2, textAlign: 'center' },
   restoreBtn: { marginTop: 10, padding: 10, alignItems: 'center' },
   restoreText: { color: colors.accentCyan, fontSize: 14, textDecorationLine: 'underline' },
   deleteBtn: { backgroundColor: colors.error, padding: 14, borderRadius: 8, flex: 1, alignItems: 'center' },

@@ -11,7 +11,8 @@ import {
   useWindowDimensions,
   Linking,
   Platform,
-  PermissionsAndroid
+  PermissionsAndroid,
+  Alert
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
@@ -20,6 +21,7 @@ import { saveGroqApiKey, getGroqApiKey, restoreGroqKeyFromBackup } from '../serv
 import { isGroqKey } from '../services/api';
 
 const { TechFactChecker } = NativeModules;
+const AUTOSTART_KEY = 'autostart_confirmed';
 export const PERMISSIONS_DONE_KEY = '@tfc_permissions_done';
 
 export default function WelcomeScreen({ navigation, route }) {
@@ -30,6 +32,13 @@ export default function WelcomeScreen({ navigation, route }) {
   const scrollRef = useRef(null);
 
   const [hasGroqKey, setHasGroqKey] = useState(false);
+  // The maker's auto-launch switch cannot be read by any app, so after the
+  // user visits that screen we ask once and remember the answer (Oct 12).
+  const [autostartConfirmed, setAutostartConfirmed] = useState(false);
+  const autostartVisited = useRef(false);
+  useEffect(() => {
+    AsyncStorage.getItem(AUTOSTART_KEY).then((v) => setAutostartConfirmed(v === 'yes')).catch(() => {});
+  }, []);
   const [permState, setPermState] = useState({
     overlay: false,
     notifications: false,
@@ -67,6 +76,23 @@ export default function WelcomeScreen({ navigation, route }) {
     const sub = AppState.addEventListener('change', async (next) => {
       if (next === 'active') {
         refreshPermissions();
+        if (autostartVisited.current) {
+          autostartVisited.current = false;
+          Alert.alert(
+            'Keep running after restart',
+            "Did you turn on 'Allow background activity' (or 'Auto-launch') for Assay?",
+            [
+              { text: 'Not yet', style: 'cancel' },
+              {
+                text: 'Yes',
+                onPress: () => {
+                  AsyncStorage.setItem(AUTOSTART_KEY, 'yes').catch(() => {});
+                  setAutostartConfirmed(true);
+                },
+              },
+            ]
+          );
+        }
         
         try {
           const hasKey = await getGroqApiKey();
@@ -140,7 +166,12 @@ export default function WelcomeScreen({ navigation, route }) {
     TechFactChecker.requestBatteryUnrestricted().catch(() => {});
   };
 
+  // Done only if the user said yes AND Android does not report the app as
+  // background-restricted (that part Android can tell us).
+  const autostartDone = autostartConfirmed && !permState.backgroundRestricted;
+
   const askAutostart = () => {
+    autostartVisited.current = true;
     TechFactChecker.openAutostartSettings().catch(() => {});
   };
 
@@ -251,6 +282,7 @@ export default function WelcomeScreen({ navigation, route }) {
               {!hasGroqKey && (
                 <TouchableOpacity onPress={restoreKey} style={styles.restoreBtn}>
                   <Text style={styles.restoreText}>Reinstalled? Restore key from backup</Text>
+                  <Text style={styles.restoreHint}>Then tap the file named assay_groq_key.txt</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -297,10 +329,10 @@ export default function WelcomeScreen({ navigation, route }) {
                 <Text style={styles.cardTitle}>5. Keep running after restart <Text style={styles.optionalBadge}>(Optional)</Text></Text>
                 <Text style={styles.cardDesc}>In battery usage, enable 'allow background activity' so the app continues to process.</Text>
                 <TouchableOpacity 
-                  style={styles.actionBtn} 
+                  style={[styles.actionBtn, autostartDone && styles.actionBtnDone]} 
                   onPress={askAutostart}
                 >
-                  <Text style={styles.btnText}>Open Settings</Text>
+                  <Text style={styles.btnText}>{autostartDone ? 'Done ✓' : 'Open Settings'}</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -349,6 +381,7 @@ const styles = StyleSheet.create({
   optionalBadge: { color: colors.textMuted, fontSize: 12, fontWeight: 'normal' },
   cardDesc: { color: colors.textSecondary, fontSize: 13, marginBottom: 12 },
   actionBtn: { backgroundColor: colors.accentCyan, padding: 12, borderRadius: 8, alignItems: 'center' },
+  restoreHint: { color: colors.textMuted, fontSize: 12, marginTop: 2, textAlign: 'center' },
   restoreBtn: { marginTop: 10, padding: 6, alignItems: 'center' },
   restoreText: { color: colors.accentCyan, fontSize: 13, textDecorationLine: 'underline' },
   actionBtnDone: { backgroundColor: colors.success || '#22c55e' },

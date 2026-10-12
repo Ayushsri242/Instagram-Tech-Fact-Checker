@@ -81,6 +81,9 @@ class UpdateCheckReceiver : BroadcastReceiver() {
     }
 
     private fun check(context: Context) {
+        // Debug builds are for development; never nag them to "update" to a
+        // release build that cannot install over them.
+        if (com.techfactchecker.mobile.BuildConfig.DEBUG) return
         FlowLog.init(context)
         val connection = (URL(RELEASE_URL).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15000
