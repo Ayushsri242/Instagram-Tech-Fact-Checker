@@ -564,6 +564,9 @@ export const mergeExtractions = (results) => {
   }
   const first = results.find((r) => r && r.tech_name) || {};
   return {
+    // "other" only if EVERY part says so; any tech or money part keeps it checked.
+    post_topic: results.every((r) => r && r.post_topic === 'other') ? 'other'
+      : (results.some((r) => r && r.post_topic === 'money') ? 'money' : 'tech'),
     tech_name: first.tech_name || null,
     is_multi_tool: true,
     tools,
@@ -598,9 +601,10 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
     '6. Only list tools the post is ABOUT or tells the viewer to use. Ignore apps that merely appear in the background (dock, menu bar, editor sidebars, recent-folder lists) and garbled OCR fragments that are not real names.',
     '7. If the post is a numbered list ("22 NLP techniques", "Top 10 repos"), return EVERY numbered item in tools - techniques and concepts included, not only installable tools - in the post\'s order, with its number in the name ("1. Text Normalisation"). Do not stop early.',
     '8. Keep the answer compact: leave out any field you would set to null, and keep each tool\'s "claim" to one short sentence (under 15 words). Long lists must still be complete.',
+    '9. post_topic - what the post is ABOUT: "tech" = software, AI tools or models, apps, websites or online services, programming, gadgets, AND tech news (a model release such as "Claude released a new model", company announcements, product launches) even with no repo or link; "money" = ways to earn money (side hustles, sites that pay, freelancing); "other" = clearly not tech or earning: health, fitness, food, beauty, relationships, entertainment, comics, general news, government statistics, shopping deals, life advice. If unsure, use "tech".',
     '',
     'Respond ONLY with valid JSON in this exact structure:',
-    '{"tech_name":"Primary title or main tool/website name","is_multi_tool":true,"tools":[{"name":"Tool or Website Name","github_repo":"owner/repo or null","domain_url":"domain.com or null","pip_command":"pip install ... or null","claim":"Core feature or claim stated"}],"claimed_features":["claim 1","claim 2"],"search_queries":["query 1","query 2"]}',
+    '{"post_topic":"tech","tech_name":"Primary title or main tool/website name","is_multi_tool":true,"tools":[{"name":"Tool or Website Name","github_repo":"owner/repo or null","domain_url":"domain.com or null","pip_command":"pip install ... or null","claim":"Core feature or claim stated"}],"claimed_features":["claim 1","claim 2"],"search_queries":["query 1","query 2"]}',
   ].join('\n');
 
   // Groq's free tier refuses any SINGLE request over 8,000 tokens per minute
@@ -770,7 +774,7 @@ const OS_PATH_PARTS = new Set([
 
 // Earning language only. Currency alone is not enough: "$20/month" is a price,
 // and an AI-tool pricing post must stay a tech post.
-const MONEY_HINT = /\b(?:earn|earns|earning|(?:passive|extra|side|monthly|daily|online|second|additional) income|get paid|getting paid|paid per|pays? (?:you|up to|around)|(?:will|that|which) pay(?: you)?|side ?hustles?|make money|making money|prints? money|passive income|payouts?|work from home|cash ?out|withdraw(?:al)?)\b/i;
+const MONEY_HINT = /\b(?:earn|earns|earning|(?:passive|extra|side|monthly|daily|online|second|additional) income|get paid|getting paid|paid per|pays? (?:you|up to|around)|(?:will|that|which)(?: actually| really| truly)? pay(?: you)?|side ?hustles?|make money|making money|prints? money|passive income|payouts?|work from home|cash ?out|withdraw(?:al)?)\b/i;
 // A pay RATE: a currency amount per unit of work ("$5 to $20 per review").
 // "Cost per task" on an AI pricing slide has no amount next to it and stays a
 // tech post; so does an app that "earned $1M" (past tense, a startup story).
@@ -1860,6 +1864,54 @@ export const analyzeReelApi = async (url) => {
   // Money / side-hustle posts are checked differently - see moneyPost().
   const money = moneyPost(claimsData, [media.caption, ocrText, transcript].join(' '), [media.caption, transcript].join(' '));
   const platforms = money ? moneyPlatforms(claimsData) : [];
+  // Not a tech or money post (Oct 10: friends ran dating, comics, fitness,
+  // diabetes and shopping reels; the tech rules called a comic-character post
+  // "Misleading"). Stop here: no search, no judge, ~5k tokens saved. Measured
+  // on 25 saved reels: 10 of 11 non-tech caught, 0 of 14 tech/money reels
+  // wrongly marked. Code still wins: a repo, an install command or earning
+  // language means the post is checked whatever the label says.
+  const codeSaysTech = money ||
+    (claimsData.tools || []).some((t) => t && ((t.github_repo && t.github_repo !== 'null') || t.pip_command)) ||
+    printedGithubSlugs(ocrText).length > 0 ||
+    /\b(?:pip3?|npm|brew|cargo)\s+install\b|\bnpm i\b/i.test(ocrText + ' ' + transcript);
+  if (claimsData.post_topic === 'other' && !codeSaysTech) {
+    const note = 'Not a tech post. Assay checks tech tools, AI and tech news, and side-hustle claims; this post is about something else, so no verdict was given.';
+    log('NOT TECH', { model: claimsData.tech_name });
+    await logRun({
+      timestamp: new Date().toISOString(),
+      shortcode: (String(url).match(/(?:reel|p)\/([A-Za-z0-9_-]+)/) || [])[1] || url,
+      url: String(url),
+      verdict: 'NOT_TECH',
+      techName: claimsData.tech_name,
+      title: 'Not a tech post',
+      postMode: 'other',
+      ocrChars: ocrText.length,
+      speechChars: transcript.length,
+      captionChars: (media.caption || '').length,
+      sttStats: media.sttStats,
+      claimsJson: JSON.stringify(claimsData),
+      transcript,
+      ocrText,
+      caption: media.caption,
+      author: media.author,
+      durationMs: Date.now() - runStartedAt,
+      models: describeModelsUsed(),
+      tokens: describeRunTokens(),
+    });
+    return {
+      ...media,
+      sourceUrl: media.sourceUrl || url,
+      techName: 'Not a tech post',
+      verdict: 'NOT_TECH',
+      notTech: true,
+      factualReality: note,
+      report: null,
+      confidenceScore: null,
+      tools: [],
+      claims: [],
+      sources: [],
+    };
+  }
   const queries = money
     ? moneyQueries(platforms, claimsData, [media.caption, ocrText, transcript].join(' '))
     : listQueries(claimsData, isListPost(modelTechName, claimsData.tools));
