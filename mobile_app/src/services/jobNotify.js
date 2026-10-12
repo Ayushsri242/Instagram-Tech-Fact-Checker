@@ -64,8 +64,8 @@ export const finishAnalysis = async (result, { alwaysNotify = false } = {}) => {
     const subject = result.techName && result.techName !== 'Unidentified' ? ' - ' + result.techName : '';
     await call(
       'showNotificationWithLink',
-      'Verdict ready: ' + verdict,
-      'Tap to read the fact check' + subject,
+      result.notTech ? 'Not a tech post' : 'Verdict ready: ' + verdict,
+      result.notTech ? 'Assay checks tech and side-hustle posts - no verdict given' : 'Tap to read the fact check' + subject,
       'techfactchecker://result/' + result.reelId
     );
   }
