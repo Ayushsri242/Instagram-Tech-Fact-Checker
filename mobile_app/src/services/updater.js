@@ -47,6 +47,9 @@ let inFlight = null;
 // Returns { status: 'available' | 'latest' | 'none' | 'error' | 'downloading', version }.
 // The Settings button shows it; the launch check ignores it.
 export const checkForUpdates = () => {
+  // A debug build is stamped with an older version and is signed differently:
+  // it kept offering the release "update", which cannot install over it.
+  if (__DEV__) return Promise.resolve({ status: 'latest', version: currentVersion() + ' (debug build)' });
   if (progress !== null) return Promise.resolve({ status: 'downloading', version: null });
   if (!inFlight) inFlight = runCheck().finally(() => { inFlight = null; });
   return inFlight;
