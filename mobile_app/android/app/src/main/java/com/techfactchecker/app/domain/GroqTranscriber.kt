@@ -38,10 +38,9 @@ class GroqTranscriber {
          */
         private const val NO_SPEECH_MAX = 0.6
         // Whisper's defaults: a segment is non-speech only if no_speech_prob
-        // is high AND avg_logprob is below -1.0; compression over 2.4 means
-        // looping, invented text.
+        // is high AND avg_logprob is below -1.0. (Looping text is detected
+        // directly in repeatsItself, not by compression ratio.)
         private const val LOGPROB_MIN = -1.0
-        private const val COMPRESSION_MAX = 2.4
         // Whisper-large-v3 can translate any language to English in one call.
         private const val TRANSLATE_ENDPOINT = "https://api.groq.com/openai/v1/audio/translations"
         /** Shorter than this is noise (music, a breath), not speech. */
@@ -91,6 +90,8 @@ class GroqTranscriber {
                 ?: return ""
             val language = result.optString("language").lowercase().ifBlank { "unknown" }
             var (transcript, dropped, segmentCount) = keptSpeech(result)
+            // Before a translation pass reuses the counters.
+            val dropReasons = "(silent=$dropSilent loop=$dropLoop filler=$dropFiller)"
 
             // Non-English speech (Oct 9: a Hindi side-hustle reel) comes back
             // in its own script - "रेंट ह्यूमन" - which no search engine maps
@@ -118,7 +119,7 @@ class GroqTranscriber {
             lastStats = "groq $MODEL upload=${upload.length() / 1024}kB " +
                 "duration=${"%.1f".format(result.optDouble("duration", 0.0))}s lang=$language" +
                 (if (translated) " translated=en" else "") +
-                " segments=$segmentCount dropped_no_speech=$dropped chars=${transcript.length}"
+                " segments=$segmentCount dropped_no_speech=$dropped $dropReasons chars=${transcript.length}"
             Log.i(TAG, "STT: $lastStats")
             return transcript
         } catch (e: Exception) {
@@ -174,7 +175,14 @@ class GroqTranscriber {
      * silent AND the words are unsure; repetitive output (compression ratio
      * over 2.4) is its other tell for invented text over music.
      */
+    // Why segments were dropped in the last keptSpeech call, for the run log:
+    // speech went missing on Oct 12 and the cause could not be recovered.
+    private var dropSilent = 0
+    private var dropLoop = 0
+    private var dropFiller = 0
+
     private fun keptSpeech(result: JSONObject): Triple<String, Int, Int> {
+        dropSilent = 0; dropLoop = 0; dropFiller = 0
         val segments = result.optJSONArray("segments")
             ?: return Triple(result.optString("text").trim().let { if (isStockFiller(it)) "" else it }, 0, 0)
         val kept = mutableListOf<String>()
@@ -183,10 +191,44 @@ class GroqTranscriber {
             val s = segments.getJSONObject(i)
             val text = s.optString("text").trim()
             val silent = s.optDouble("no_speech_prob", 0.0) > NO_SPEECH_MAX && s.optDouble("avg_logprob", 0.0) < LOGPROB_MIN
-            val looping = s.optDouble("compression_ratio", 0.0) > COMPRESSION_MAX
-            if (silent || looping || isStockFiller(text)) dropped++ else kept.add(text)
+            // Not compression_ratio: Hindi script compresses well, and normal
+            // Hindi sentences scored 2.2-2.6 and were dropped as "looping" (Oct 12:
+            // a doctor explaining arthritis types, a Google Flow credits reel).
+            val looping = repeatsItself(text)
+            when {
+                silent -> { dropped++; dropSilent++ }
+                looping -> { dropped++; dropLoop++ }
+                isStockFiller(text) -> { dropped++; dropFiller++ }
+                else -> kept.add(text)
+            }
         }
         return Triple(kept.joinToString(" ").trim(), dropped, segments.length())
+    }
+
+    /**
+     * Whisper's invented text over music loops: the same word or short phrase
+     * again and again ("thank you thank you thank you thank you"). Look for that
+     * directly - a 1-3 word phrase repeated 4+ times in a row, or a long segment
+     * made of only a handful of distinct words. Works the same in any script.
+     */
+    private fun repeatsItself(text: String): Boolean {
+        val words = text.lowercase().split(Regex("\\s+")).map { it.trim(',', '.', '!', '?', '।') }.filter { it.isNotEmpty() }
+        if (words.size < 6) return false
+        for (n in 1..3) {
+            var i = 0
+            while (i + n <= words.size) {
+                val phrase = words.subList(i, i + n)
+                var count = 1
+                var j = i + n
+                while (j + n <= words.size && words.subList(j, j + n) == phrase) {
+                    count++
+                    j += n
+                }
+                if (count >= 4) return true
+                i++
+            }
+        }
+        return words.size >= 12 && words.toSet().size * 4 < words.size
     }
 
     /**
