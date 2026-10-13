@@ -17,7 +17,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import HomeTour from '../components/HomeTour';
-import { getApiLimits, getOfflineMode, getUnseenResults, clearUnseenResults, getAllReels } from '../services/storage';
+import { getApiLimits, getOfflineMode, getUnseenResults, getAllReels } from '../services/storage';
+import { verdictLabel, verdictColor, savedTime, timeAgo } from '../services/verdicts';
 import { describeLimits } from '../services/api';
 import { getJobState, subscribeJob, JOB_STAGES, setLastFailure } from '../services/jobState';
 import { subscribeUpdateProgress } from '../services/updater';
@@ -25,25 +26,6 @@ import { subscribeUpdateProgress } from '../services/updater';
 const elapsed = (ms) => {
   const s = Math.max(0, Math.floor(ms / 1000));
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
-};
-
-const VERDICT_STYLE = {
-  TRUE: ['True', '#22c55e'],
-  PARTIALLY_TRUE: ['Partly true', '#eab308'],
-  HYPE: ['Hype', '#a855f7'],
-  MISLEADING: ['Misleading', '#f97316'],
-  FAKE: ['Fake', '#ef4444'],
-  FAILED: ["Couldn't check", '#64748B'],
-  NOT_TECH: ['Not a tech post', '#64748B'],
-};
-const verdictLabel = (v) => (VERDICT_STYLE[v] || [String(v || 'Unknown').replace(/_/g, ' ')])[0];
-const verdictColor = (v) => (VERDICT_STYLE[v] || [null, '#64748B'])[1];
-const timeAgo = (ms) => {
-  const m = Math.round((Date.now() - ms) / 60000);
-  if (m < 1) return 'just now';
-  if (m < 60) return m + ' min ago';
-  if (m < 1440) return Math.round(m / 60) + ' h ago';
-  return Math.round(m / 1440) + ' d ago';
 };
 
 export default function HomeScreen({ navigation }) {
@@ -102,9 +84,11 @@ export default function HomeScreen({ navigation }) {
         const offline = await getOfflineMode();
         setIsOffline(offline);
         setLimits(offline ? null : await getApiLimits());
-        // Only fresh, unopened results earn the banner.
-        setUnseen(await getUnseenResults());
-        setRecent((await getAllReels()).slice(0, 4));
+        // Unopened results get a NEW dot in Recent checks. The list grows to
+        // hold all of them (up to 8), so nothing checked while away is hidden.
+        const fresh = await getUnseenResults();
+        setUnseen(fresh);
+        setRecent((await getAllReels()).slice(0, Math.min(8, Math.max(4, fresh.length))));
         setNow(Date.now());
       };
       refresh();
@@ -114,20 +98,6 @@ export default function HomeScreen({ navigation }) {
       return () => clearInterval(timer);
     }, [])
   );
-
-  // Opening any one closes the whole banner; the others stay in History.
-  // The X on the banner: dismiss without opening any verdict (they stay in
-  // History). Before, the banner only went away by opening one of them.
-  const dismissUnseen = async () => {
-    await clearUnseenResults();
-    setUnseen([]);
-  };
-
-  const openUnseen = async (reelId) => {
-    await clearUnseenResults();
-    setUnseen([]);
-    navigation.navigate('Result', { reelId });
-  };
 
   const limitLine = isOffline ? 'OFFLINE MODE' : describeLimits(limits, now);
 
@@ -273,35 +243,9 @@ export default function HomeScreen({ navigation }) {
           </View>
         )}
 
-        {/* A result that finished while the user was elsewhere. Without this, a
-            user who left mid-analysis and came back after Android had killed
-            the app landed here with no sign anything had happened. */}
-        {unseen.length === 1 && (
-          <TouchableOpacity style={styles.readyBanner} onPress={() => openUnseen(unseen[0].reelId)}>
-            <TouchableOpacity style={styles.readyClose} onPress={dismissUnseen} hitSlop={12}>
-              <Text style={styles.readyCloseText}>✕</Text>
-            </TouchableOpacity>
-            <Text style={styles.readyTitle}>Verdict ready: {unseen[0].verdict.replace('_', ' ')}</Text>
-            <Text style={styles.readySub} numberOfLines={1}>{unseen[0].techName} - tap to open</Text>
-          </TouchableOpacity>
-        )}
-        {unseen.length > 1 && (
-          <View style={styles.readyBanner}>
-            <TouchableOpacity style={styles.readyClose} onPress={dismissUnseen} hitSlop={12}>
-              <Text style={styles.readyCloseText}>✕</Text>
-            </TouchableOpacity>
-            <Text style={styles.readyTitle}>{unseen.length} reels checked while you were away</Text>
-            <Text style={styles.readySub}>Check them below, or later in History</Text>
-            {unseen.map((r) => (
-              <TouchableOpacity key={r.reelId} style={styles.readyRow} onPress={() => openUnseen(r.reelId)}>
-                <Text style={styles.readyVerdict}>{r.verdict.replace('_', ' ')}</Text>
-                <Text style={styles.readyName} numberOfLines={1}>{r.techName}</Text>
-                <Text style={styles.readyOpen}>Open</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
+        {/* Results that finished while the user was in Instagram used to get a
+            banner here, repeating Recent checks just below (Oct 13). They are
+            now marked NEW in that list instead. */}
         {/* Home body (Oct 13 redesign): brand, the bubble card, recent checks.
             The old screen was a title and one button in empty space. */}
         <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
@@ -335,9 +279,12 @@ export default function HomeScreen({ navigation }) {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.recentTitle} numberOfLines={1}>{r.techName || r.title || 'Reel'}</Text>
                   <Text style={styles.recentMeta}>
-                    {verdictLabel(r.verdict)}{r.savedAt ? '  ·  ' + timeAgo(r.savedAt) : ''}
+                    {verdictLabel(r.verdict)}{savedTime(r) ? '  ·  ' + timeAgo(savedTime(r)) : ''}
                   </Text>
                 </View>
+                {unseen.some((u) => u.reelId === r.reelId) && (
+                  <View style={styles.newBadge}><Text style={styles.newBadgeText}>NEW</Text></View>
+                )}
                 <Text style={styles.chevron}>›</Text>
               </TouchableOpacity>
             ))
@@ -402,6 +349,8 @@ const styles = StyleSheet.create({
   verdictDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
   recentTitle: { color: colors.textPrimary, fontSize: 15, fontWeight: '600' },
   recentMeta: { color: colors.textSecondary, fontSize: 12.5, marginTop: 2 },
+  newBadge: { backgroundColor: colors.accentCyan, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2, marginLeft: 8 },
+  newBadgeText: { color: '#000', fontSize: 10.5, fontWeight: 'bold', letterSpacing: 0.5 },
   chevron: { color: colors.textMuted, fontSize: 22, marginLeft: 8 },
   container: {
     flex: 1,
@@ -455,15 +404,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: 'bold',
   },
-  readyBanner: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.accentCyan,
-    backgroundColor: colors.surface,
-  },
   jobStrip: {
     marginHorizontal: 16,
     marginTop: 12,
@@ -482,22 +422,6 @@ const styles = StyleSheet.create({
   jobNote: { color: colors.warning || '#eab308', fontSize: 12.5, marginTop: 4 },
   jobTrack: { height: 4, borderRadius: 2, backgroundColor: colors.cardBorder, marginTop: 10, overflow: 'hidden' },
   jobFill: { height: 4, backgroundColor: colors.accentCyan },
-  readyTitle: { color: colors.accentCyan, fontSize: 15, fontWeight: 'bold', paddingRight: 28 },
-  readyClose: { position: 'absolute', top: 8, right: 10, zIndex: 2, padding: 4 },
-  readyCloseText: { color: colors.textMuted, fontSize: 16, fontWeight: 'bold' },
-  readySub: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
-  readyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 10,
-    marginTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: colors.cardBorder,
-  },
-  readyVerdict: { color: colors.accentCyan, fontSize: 13, fontWeight: 'bold', minWidth: 110 },
-  readyName: { flex: 1, color: colors.textPrimary, fontSize: 14 },
-  readyOpen: { color: colors.accentCyan, fontSize: 13, fontWeight: '600' },
   centerContent: {
     flex: 1,
     justifyContent: 'center',
