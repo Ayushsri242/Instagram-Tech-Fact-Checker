@@ -200,7 +200,8 @@ export const describeLimits = (limits, now = Date.now()) => {
   // which never runs out first. The daily TOKEN count does (Oct 7), and Groq
   // never reports it, so it is our own tally of the last 24 hours.
   const lines = [];
-  if (tokParts.length) lines.push(tokParts.join(' · ') + ' of ' + shortCount(tokLimitShown) + '/min');
+  // Oct 13: "Reader 8k · Judge 8k of 8k/min" read as used-up; say "left".
+  if (tokParts.length) lines.push('Left this minute: ' + tokParts.join(' · ') + ' of ' + shortCount(tokLimitShown));
   const usage = limits.usage || {};
   const dayParts = [];
   let dayLimit = DAILY_TOKEN_LIMIT;
@@ -209,7 +210,7 @@ export const describeLimits = (limits, now = Date.now()) => {
     dayParts.push(LIMIT_LABELS[model] + ' ' + shortCount(usedToday(usage[model], now)));
     dayLimit = usage[model].limit || dayLimit;
   }
-  if (dayParts.length) lines.push('Today: ' + dayParts.join(' · ') + ' of ' + shortCount(dayLimit));
+  if (dayParts.length) lines.push('Used today: ' + dayParts.join(' · ') + ' of ' + shortCount(dayLimit));
   else if (runsLeft !== null) lines.push(runsLeft + ' runs left today');
   return lines.length ? lines.join('\n') : null;
 };

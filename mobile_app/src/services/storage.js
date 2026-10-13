@@ -10,7 +10,7 @@ export const saveReelResult = async (result) => {
   try {
     const existing = await getAllReels();
     const filtered = existing.filter((r) => r.reelId !== result.reelId);
-    const updated = [result, ...filtered];
+    const updated = [{ ...result, savedAt: result.savedAt || Date.now() }, ...filtered];
     await AsyncStorage.setItem(STORAGE_KEYS.REELS, JSON.stringify(updated));
   } catch (e) {
     console.error('Failed to save reel:', e);

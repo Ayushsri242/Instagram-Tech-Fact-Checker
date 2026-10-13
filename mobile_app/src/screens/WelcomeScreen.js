@@ -12,7 +12,8 @@ import {
   Linking,
   Platform,
   PermissionsAndroid,
-  Alert
+  Alert,
+  Image,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
@@ -222,13 +223,22 @@ export default function WelcomeScreen({ navigation, route }) {
       >
         {/* Slide 1: Welcome */}
         <View style={[styles.slide, { width }]}>
+          {/* Oct 13: the slide was three lines of text in empty space. */}
+          <Image source={require('../../assets/icon.png')} style={styles.logo} />
           <Text style={styles.title}>Welcome to Assay</Text>
           <Text style={styles.subtitle}>Don't get scammed by fake tech reels.</Text>
-          <Text style={styles.desc}>
-            Assay helps you fact-check Instagram tech reels in real-time using AI.
-          </Text>
-          <TouchableOpacity style={styles.btn} onPress={goToNextSlide}>
-            <Text style={styles.btnText}>Next</Text>
+          {[
+            ['✓', 'Checks every claim in a reel or post against the web'],
+            ['⚡', 'Works while you scroll - one tap on the bubble'],
+            ['💬', 'Ask follow-up questions about any post'],
+          ].map(([icon, text]) => (
+            <View key={text} style={styles.feature}>
+              <Text style={styles.featureIcon}>{icon}</Text>
+              <Text style={styles.featureText}>{text}</Text>
+            </View>
+          ))}
+          <TouchableOpacity style={styles.nextBtn} onPress={goToNextSlide}>
+            <Text style={styles.nextBtnText}>Get started</Text>
           </TouchableOpacity>
         </View>
 
@@ -238,8 +248,8 @@ export default function WelcomeScreen({ navigation, route }) {
             {/* Animated scenes instead of paragraphs (Oct 12: nobody read the text). */}
             <HowItWorks />
 
-            <TouchableOpacity style={styles.btn} onPress={goToNextSlide}>
-              <Text style={styles.btnText}>Next</Text>
+            <TouchableOpacity style={styles.nextBtn} onPress={goToNextSlide}>
+              <Text style={styles.nextBtnText}>Next</Text>
             </TouchableOpacity>
           </ScrollView>
         </View>
@@ -357,6 +367,13 @@ const styles = StyleSheet.create({
   instructionTitle: { color: colors.accentCyan, fontSize: 18, fontWeight: 'bold', marginBottom: 6 },
   btn: { backgroundColor: colors.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 10 },
   btnText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
+  // colors.primary does not exist, so styles.btn drew no button at all.
+  nextBtn: { backgroundColor: colors.accentCyan, paddingVertical: 15, borderRadius: 12, alignItems: 'center', marginTop: 24 },
+  nextBtnText: { color: '#000', fontSize: 16, fontWeight: 'bold' },
+  logo: { width: 96, height: 96, borderRadius: 22, alignSelf: 'center', marginBottom: 20 },
+  feature: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14, marginBottom: 8 },
+  featureIcon: { color: colors.accentCyan, fontSize: 18, width: 30 },
+  featureText: { color: colors.textPrimary, fontSize: 14.5, flex: 1, lineHeight: 20 },
   card: { backgroundColor: colors.surface, padding: 16, borderRadius: 12, marginBottom: 12 },
   cardTitle: { color: colors.textPrimary, fontSize: 16, fontWeight: 'bold', marginBottom: 4 },
   mandatoryBadge: { color: colors.error || '#f87171', fontSize: 12, fontWeight: 'normal' },
