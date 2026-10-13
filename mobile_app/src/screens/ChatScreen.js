@@ -16,7 +16,7 @@ import { chatWithAiApi, analyzeReelApi, askToolQuestion } from '../services/api'
 import { getChatHistory, saveChatMessage, saveReelResult } from '../services/storage';
 import { beginAnalysis, finishAnalysis, failAnalysis } from '../services/jobNotify';
 import { shortRef } from '../services/trace';
-import { friendlyError } from '../services/errors';
+import { friendlyError, canRetry } from '../services/errors';
 
 // Date.now() collides when two messages are created in the same millisecond,
 // which is how a report and its follow-up ended up sharing a key.
@@ -160,6 +160,8 @@ export default function ChatScreen({ route, navigation }) {
           id: newId(),
           sender: 'assistant',
           text: "Couldn't check this reel. " + friendlyError(failureText),
+          // Drawn as a Retry button under the message (Oct 13).
+          retryUrl: canRetry(failureText) ? initialUrl : null,
         };
         setMessages((prev) => [...prev, failureMsg]);
       } finally {
@@ -226,7 +228,7 @@ export default function ChatScreen({ route, navigation }) {
         sender: 'assistant',
         text: "This reel couldn't be checked, so there is nothing to answer from. " +
           (currentReel.factualReality || '') +
-          ' To try again, paste the link on the Home screen or tap the bubble on the reel.',
+          (canRetry(currentReel.factualReality) ? ' Tap Retry on the report screen to try again.' : ''),
       }]);
       setLoading(false);
       return;
@@ -297,6 +299,11 @@ export default function ChatScreen({ route, navigation }) {
             return (
               <View style={[styles.messageBubble, isUser ? styles.userBubble : styles.aiBubble]}>
                 <Text style={[styles.messageText, isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
+                {!!item.retryUrl && (
+                  <TouchableOpacity style={styles.retryBtn} onPress={() => navigation.replace('Chat', { initialUrl: item.retryUrl })}>
+                    <Text style={styles.retryText}>↻  Retry</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             );
           }}
@@ -365,6 +372,8 @@ const styles = StyleSheet.create({
   messageText: { fontSize: 13, lineHeight: 18 },
   userText: { color: '#000', fontWeight: '500' },
   aiText: { color: colors.textPrimary },
+  retryBtn: { alignSelf: 'flex-start', marginTop: 10, backgroundColor: colors.accentCyan, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 16 },
+  retryText: { color: '#000', fontWeight: 'bold', fontSize: 14 },
   progressBarBg: { height: 6, backgroundColor: colors.background, borderRadius: 3, marginTop: 12, overflow: 'hidden' },
   progressBarFill: { height: '100%', backgroundColor: colors.accentCyan },
   inputContainer: { flexDirection: 'row', padding: 12, backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.cardBorder, alignItems: 'center', gap: 8 },

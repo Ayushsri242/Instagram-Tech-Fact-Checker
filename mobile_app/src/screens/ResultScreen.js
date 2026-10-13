@@ -12,6 +12,7 @@ import {
 import { colors } from '../theme/colors';
 import { getReelById, markResultSeen } from '../services/storage';
 import ReportCard from '../components/ReportCard';
+import { canRetry } from '../services/errors';
 import { askToolQuestion } from '../services/api';
 import { trace } from '../services/trace';
 
@@ -169,12 +170,22 @@ export default function ResultScreen({ route, navigation }) {
             <Text style={[styles.actionButtonText, { color: colors.textPrimary }]}>📤 Share</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: colors.accentCyan }]}
-            onPress={() => navigation.navigate('Chat', { reel })}
-          >
-            <Text style={[styles.actionButtonText, { color: '#000' }]}>Ask AI</Text>
-          </TouchableOpacity>
+          {/* A failed check offers Retry instead of Ask AI - there is nothing to ask about (Oct 13). */}
+          {reel.failed && reel.url && canRetry(reel.factualReality) ? (
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: colors.accentCyan }]}
+              onPress={() => navigation.navigate('Chat', { initialUrl: reel.url })}
+            >
+              <Text style={[styles.actionButtonText, { color: '#000' }]}>↻  Retry</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: colors.accentCyan }]}
+              onPress={() => navigation.navigate('Chat', { reel })}
+            >
+              <Text style={[styles.actionButtonText, { color: '#000' }]}>Ask AI</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* The structured report.

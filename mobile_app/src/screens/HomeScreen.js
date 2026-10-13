@@ -232,6 +232,18 @@ export default function HomeScreen({ navigation }) {
               </TouchableOpacity>
             </View>
             <Text style={styles.jobStage}>{job.lastFailure.reason} It is saved in History.</Text>
+            {job.lastFailure.retry && !!job.lastFailure.url && (
+              <TouchableOpacity
+                style={styles.retryBtn}
+                onPress={() => {
+                  const url = job.lastFailure.url;
+                  setLastFailure(null);
+                  navigation.navigate('Chat', { initialUrl: url });
+                }}
+              >
+                <Text style={styles.retryText}>↻  Retry</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
         {/* Between reels: a countdown, not a silent minute. The queue looked
@@ -465,6 +477,8 @@ const styles = StyleSheet.create({
   jobTitle: { flex: 1, color: colors.textPrimary, fontSize: 15, fontWeight: 'bold' },
   jobTime: { color: colors.textMuted, fontSize: 13 },
   jobStage: { color: colors.textMuted, fontSize: 13, marginTop: 6 },
+  retryBtn: { alignSelf: 'flex-start', marginTop: 10, backgroundColor: colors.accentCyan, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 16 },
+  retryText: { color: '#000', fontWeight: 'bold', fontSize: 14 },
   jobNote: { color: colors.warning || '#eab308', fontSize: 12.5, marginTop: 4 },
   jobTrack: { height: 4, borderRadius: 2, backgroundColor: colors.cardBorder, marginTop: 10, overflow: 'hidden' },
   jobFill: { height: 4, backgroundColor: colors.accentCyan },

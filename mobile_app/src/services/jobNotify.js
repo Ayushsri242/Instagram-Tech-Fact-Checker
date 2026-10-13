@@ -1,6 +1,6 @@
 import { NativeModules, AppState } from 'react-native';
 import { addUnseenResult, saveReelResult } from './storage';
-import { friendlyError } from './errors';
+import { friendlyError, canRetry } from './errors';
 import { trace } from './trace';
 import { jobStarted, jobEnded, setLastFailure } from './jobState';
 
@@ -78,7 +78,8 @@ export const failAnalysis = async (message, url = null) => {
   const reason = friendlyError(message);
   const code = (String(url || '').match(/(?:reel|p)\/([A-Za-z0-9_-]+)/) || [])[1] || null;
   jobEnded();
-  setLastFailure({ ref: code, reason, at: Date.now() });
+  // url: the Home strip's Retry button runs the same link again.
+  setLastFailure({ ref: code, reason, at: Date.now(), url: url || null, retry: !!url && canRetry(message) });
   if (url) {
     await saveReelResult({
       reelId: 'failed-' + (code || 'link') + '-' + Date.now(),

@@ -146,9 +146,9 @@ class FloatingBubbleService : Service() {
 
         // Oct 13: was a 120 px flat cyan circle with white "AI" - poor contrast,
         // too small on dense screens, and "Again?" did not fit. Now a 56 dp
-        // circle with the app icon and a coloured ring; no text to overflow.
+        // circle (now 46 dp) with the app icon and a coloured ring; no text to overflow.
         // The window is 8 dp larger so the shadow is not clipped.
-        val size = dp(56)
+        val size = dp(46) // 56 dp looked too big on the phone (Oct 13)
         val params = WindowManager.LayoutParams(
             size + dp(8),
             size + dp(8),
@@ -174,7 +174,7 @@ class FloatingBubbleService : Service() {
         val icon = ImageView(this).apply {
             setImageResource(com.techfactchecker.mobile.R.drawable.bubble_icon) // a plain PNG: the mipmap is an adaptive icon on API 26+
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setPadding(dp(4), dp(4), dp(4), dp(4))
+            setPadding(dp(3), dp(3), dp(3), dp(3))
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         }
         body.addView(icon)
