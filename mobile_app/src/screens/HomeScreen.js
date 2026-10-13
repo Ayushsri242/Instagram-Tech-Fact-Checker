@@ -10,12 +10,14 @@ import {
   Platform,
   StatusBar,
   ActivityIndicator,
+  ScrollView,
+  NativeModules,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import HomeTour from '../components/HomeTour';
-import { getApiLimits, getOfflineMode, getUnseenResults, clearUnseenResults } from '../services/storage';
+import { getApiLimits, getOfflineMode, getUnseenResults, clearUnseenResults, getAllReels } from '../services/storage';
 import { describeLimits } from '../services/api';
 import { getJobState, subscribeJob, JOB_STAGES, setLastFailure } from '../services/jobState';
 import { subscribeUpdateProgress } from '../services/updater';
@@ -25,11 +27,31 @@ const elapsed = (ms) => {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 };
 
+const VERDICT_STYLE = {
+  TRUE: ['True', '#22c55e'],
+  PARTIALLY_TRUE: ['Partly true', '#eab308'],
+  HYPE: ['Hype', '#a855f7'],
+  MISLEADING: ['Misleading', '#f97316'],
+  FAKE: ['Fake', '#ef4444'],
+  FAILED: ["Couldn't check", '#64748B'],
+  NOT_TECH: ['Not a tech post', '#64748B'],
+};
+const verdictLabel = (v) => (VERDICT_STYLE[v] || [String(v || 'Unknown').replace(/_/g, ' ')])[0];
+const verdictColor = (v) => (VERDICT_STYLE[v] || [null, '#64748B'])[1];
+const timeAgo = (ms) => {
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  if (m < 1440) return Math.round(m / 60) + ' h ago';
+  return Math.round(m / 1440) + ' d ago';
+};
+
 export default function HomeScreen({ navigation }) {
   const [url, setUrl] = useState('');
   const [limits, setLimits] = useState(null);
   const [isOffline, setIsOffline] = useState(false);
   const [unseen, setUnseen] = useState([]);
+  const [recent, setRecent] = useState([]);
   const [now, setNow] = useState(Date.now());
   const [job, setJob] = useState(getJobState());
   const [tick, setTick] = useState(Date.now());
@@ -43,6 +65,7 @@ export default function HomeScreen({ navigation }) {
   const historyRef = React.useRef(null);
   const settingsRef = React.useRef(null);
   const bubbleRef = React.useRef(null);
+  const recentRef = React.useRef(null);
 
   // The update check itself runs from App.js at launch; Home only shows the
   // download progress once the user accepts an update.
@@ -81,6 +104,7 @@ export default function HomeScreen({ navigation }) {
         setLimits(offline ? null : await getApiLimits());
         // Only fresh, unopened results earn the banner.
         setUnseen(await getUnseenResults());
+        setRecent((await getAllReels()).slice(0, 4));
         setNow(Date.now());
       };
       refresh();
@@ -111,6 +135,15 @@ export default function HomeScreen({ navigation }) {
   // - a YouTube link went into the pipeline and failed a minute later - while
   // the bubble already ignored non-Instagram clipboards. The link is also pulled
   // out of surrounding text ("Check this https://www.instagram.com/reel/X/...").
+  const startBubble = async () => {
+    try {
+      await NativeModules.TechFactChecker.startDoomscrollMode();
+      alert('Bubble started. Open Instagram, copy a reel link and tap the bubble.');
+    } catch (e) {
+      alert('Error: ' + e.message);
+    }
+  };
+
   const handleSend = () => {
     if (!url.trim()) return;
     const m = url.match(/https?:\/\/(?:www\.|m\.)?instagram\.com\/(?:[A-Za-z0-9_.]+\/)?(reels?|p)\/([A-Za-z0-9_-]+)/i);
@@ -257,26 +290,48 @@ export default function HomeScreen({ navigation }) {
           </View>
         )}
 
-        {/* Center Title (Empty State) */}
-        <View style={styles.centerContent}>
-          <Text style={styles.title}>Assay</Text>
-          <Text style={styles.subtitle}>Fact-check tech reels in seconds</Text>
-          <TouchableOpacity 
-            ref={bubbleRef}
-            style={{ marginTop: 24, padding: 12, backgroundColor: colors.accentCyan, borderRadius: 8 }}
-            onPress={async () => {
-              const { NativeModules } = require('react-native');
-              try {
-                await NativeModules.TechFactChecker.startDoomscrollMode();
-                alert('Doomscroll Mode started! Floating bubble should appear.');
-              } catch (e) {
-                alert('Error: ' + e.message);
-              }
-            }}
-          >
-            <Text style={{ color: '#000', fontWeight: 'bold' }}>Start Doomscroll Mode</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Home body (Oct 13 redesign): brand, the bubble card, recent checks.
+            The old screen was a title and one button in empty space. */}
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+          <Text style={styles.brand}>Assay</Text>
+          <Text style={styles.tagline}>Fact-check tech reels in seconds</Text>
+
+          <View style={styles.heroCard}>
+            <Text style={styles.heroTitle}>Check while you scroll</Text>
+            <Text style={styles.heroText}>Start the bubble, copy a reel link in Instagram, then tap the bubble. You never leave Instagram.</Text>
+            <TouchableOpacity ref={bubbleRef} style={styles.heroBtn} onPress={startBubble}>
+              <Text style={styles.heroBtnText}>▶  Start Doomscroll Mode</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* collapsable={false}: Android drops layout-only views, and the tour has to measure this one. */}
+          <View ref={recentRef} collapsable={false}>
+          <View style={styles.recentHead}>
+            <Text style={styles.sectionTitle}>Recent checks</Text>
+            {recent.length > 0 && (
+              <TouchableOpacity onPress={() => navigation.navigate('History')} hitSlop={10}>
+                <Text style={styles.seeAll}>See all</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          {recent.length === 0 ? (
+            <Text style={styles.emptyText}>Your verdicts will appear here. Paste a link below to try your first check.</Text>
+          ) : (
+            recent.map((r) => (
+              <TouchableOpacity key={r.reelId} style={styles.recentRow} onPress={() => navigation.navigate('Result', { reel: r })}>
+                <View style={[styles.verdictDot, { backgroundColor: verdictColor(r.verdict) }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.recentTitle} numberOfLines={1}>{r.techName || r.title || 'Reel'}</Text>
+                  <Text style={styles.recentMeta}>
+                    {verdictLabel(r.verdict)}{r.savedAt ? '  ·  ' + timeAgo(r.savedAt) : ''}
+                  </Text>
+                </View>
+                <Text style={styles.chevron}>›</Text>
+              </TouchableOpacity>
+            ))
+          )}
+          </View>
+        </ScrollView>
 
         {/* Input Bar at Bottom */}
         <View style={styles.inputContainer} ref={inputRef}>
@@ -303,8 +358,10 @@ export default function HomeScreen({ navigation }) {
             containerRef={containerRef}
             onDone={finishTour}
             steps={[
-              { ref: inputRef, title: 'Paste a link here', text: 'Copy any Instagram reel or post link and paste it here to fact-check it.' },
-              { ref: bubbleRef, title: 'Or check while you scroll', text: 'Start the bubble, copy a reel link in Instagram and tap the bubble. No need to leave Instagram.' },
+              // Oct 13: the bubble leads now that it heads the redesigned Home.
+              { ref: bubbleRef, title: 'Start here', text: 'Start Doomscroll Mode to check reels while you scroll Instagram.' },
+              { ref: recentRef, title: 'Recent checks', text: 'Your latest verdicts show up here. Tap one to open its report.' },
+              { ref: inputRef, title: 'Or paste a link', text: 'Paste any Instagram reel or post link here to check it right away.' },
               { ref: historyRef, title: 'Your past checks', text: 'Every verdict is saved here, so you can reopen it any time.' },
               { ref: settingsRef, title: 'Settings', text: 'Your Groq key, permissions and app updates live here.' },
             ]}
@@ -317,6 +374,23 @@ export default function HomeScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
+  body: { paddingHorizontal: 20, paddingBottom: 24 },
+  brand: { color: colors.textPrimary, fontSize: 34, fontWeight: 'bold', marginTop: 12, letterSpacing: 0.5 },
+  tagline: { color: colors.accentCyan, fontSize: 14, marginTop: 2 },
+  heroCard: { marginTop: 22, backgroundColor: colors.surface, borderRadius: 18, padding: 18, borderWidth: 1, borderColor: 'rgba(0,229,255,0.35)' },
+  heroTitle: { color: colors.textPrimary, fontSize: 18, fontWeight: 'bold' },
+  heroText: { color: colors.textSecondary, fontSize: 14, marginTop: 6, lineHeight: 20 },
+  heroBtn: { marginTop: 16, backgroundColor: colors.accentCyan, borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
+  heroBtnText: { color: '#000', fontWeight: 'bold', fontSize: 15 },
+  recentHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 26, marginBottom: 8 },
+  sectionTitle: { color: colors.textPrimary, fontSize: 16, fontWeight: 'bold' },
+  seeAll: { color: colors.accentCyan, fontSize: 14 },
+  emptyText: { color: colors.textMuted, fontSize: 14, lineHeight: 20, marginTop: 4 },
+  recentRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14, marginBottom: 8 },
+  verdictDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
+  recentTitle: { color: colors.textPrimary, fontSize: 15, fontWeight: '600' },
+  recentMeta: { color: colors.textSecondary, fontSize: 12.5, marginTop: 2 },
+  chevron: { color: colors.textMuted, fontSize: 22, marginLeft: 8 },
   container: {
     flex: 1,
     backgroundColor: colors.background,

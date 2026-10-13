@@ -115,7 +115,9 @@ export default function ChatScreen({ route, navigation }) {
         text: `Check this link: ${initialUrl}`,
       };
       
-      setMessages([welcomeMsg, initialUserMsg]);
+      // The link first, then the report, then the invitation to ask (Oct 13:
+      // the welcome sat above the link and read out of order).
+      setMessages([initialUserMsg]);
       setLoading(true);
 
       // Keeps the process alive and shows "analysing" while the user is away.
@@ -141,10 +143,10 @@ export default function ChatScreen({ route, navigation }) {
           // Plain-text fallback for old saved reels and for the chat context.
           text: result.factualReality || result.summaryMarkdown || 'Analyzed successfully.',
         };
-        setMessages([welcomeMsg, initialUserMsg, aiMsg]);
-        await saveChatMessage(result.reelId, welcomeMsg);
+        setMessages([initialUserMsg, aiMsg, welcomeMsg]);
         await saveChatMessage(result.reelId, initialUserMsg);
         await saveChatMessage(result.reelId, aiMsg);
+        await saveChatMessage(result.reelId, welcomeMsg);
         console.log("[DEBUG_CHAT] AI report:", result.verdict, "| tools:", (result.report && result.report.tools ? result.report.tools.length : 0));
       } catch (err) {
         const failureText = err && err.message ? err.message : String(err);

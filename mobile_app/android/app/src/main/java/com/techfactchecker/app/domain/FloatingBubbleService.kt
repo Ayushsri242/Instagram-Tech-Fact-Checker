@@ -16,6 +16,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 
@@ -24,10 +25,16 @@ class FloatingBubbleService : Service() {
     private companion object {
         const val FLOW_TAG = AnalysisService.FLOW_TAG
         const val PROGRESS_CHANNEL_ID = AnalysisService.CHANNEL_ID
+        const val READY_COLOR = "#00E5FF"
+        const val CONFIRM_COLOR = "#FFC107"
+        const val CONFIRM_MS = 8000L
     }
 
     private lateinit var windowManager: WindowManager
     private lateinit var floatingView: View
+    // The bubble's circle: a dark fill with a ring whose colour is the state.
+    private lateinit var bubbleBody: View
+    private val bubbleRing = android.graphics.drawable.GradientDrawable()
     private lateinit var closeView: View
 
 
@@ -44,13 +51,7 @@ class FloatingBubbleService : Service() {
             if (intent.action == "com.techfactchecker.SET_BUBBLE_COLOR") {
                 val color = intent.getStringExtra("color") ?: return
         
-                if (::floatingView.isInitialized) {
-                    (floatingView as FrameLayout).getChildAt(0).let {
-                        (it as TextView).text = "AI"
-                        val shape = it.background as android.graphics.drawable.GradientDrawable
-                        shape.setColor(Color.parseColor(color))
-                    }
-                }
+                setBubble(color)
             }
         }
     }
@@ -143,9 +144,14 @@ class FloatingBubbleService : Service() {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
+        // Oct 13: was a 120 px flat cyan circle with white "AI" - poor contrast,
+        // too small on dense screens, and "Again?" did not fit. Now a 56 dp
+        // circle with the app icon and a coloured ring; no text to overflow.
+        // The window is 8 dp larger so the shadow is not clipped.
+        val size = dp(56)
         val params = WindowManager.LayoutParams(
-            120,
-            120,
+            size + dp(8),
+            size + dp(8),
             layoutFlag,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
@@ -156,24 +162,24 @@ class FloatingBubbleService : Service() {
         params.y = 300
 
         val container = FrameLayout(this)
-        val text = TextView(this).apply {
-            text = "AI"
-            setTextColor(Color.WHITE)
-            textSize = 16f
-            gravity = Gravity.CENTER
-            
-            val shape = android.graphics.drawable.GradientDrawable()
-            shape.shape = android.graphics.drawable.GradientDrawable.OVAL
-            shape.setColor(Color.parseColor("#00E5FF")) // Cyan
-            background = shape
-            
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
+        bubbleRing.shape = android.graphics.drawable.GradientDrawable.OVAL
+        bubbleRing.setColor(Color.parseColor("#0F141C"))
+        bubbleRing.setStroke(dp(3), Color.parseColor(READY_COLOR))
+        val body = FrameLayout(this).apply {
+            background = bubbleRing
+            elevation = dp(5).toFloat()
+            clipToOutline = true
+            layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
         }
-        
-        container.addView(text)
+        val icon = ImageView(this).apply {
+            setImageResource(com.techfactchecker.mobile.R.drawable.bubble_icon) // a plain PNG: the mipmap is an adaptive icon on API 26+
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        }
+        body.addView(icon)
+        container.addView(body)
+        bubbleBody = body
         floatingView = container
 
         var initialX = 0
@@ -261,11 +267,23 @@ class FloatingBubbleService : Service() {
     private var confirmCode: String? = null
     private var confirmUntil = 0L
 
-    private fun setBubble(label: String, color: String) {
-        if (!::floatingView.isInitialized) return
-        (floatingView as FrameLayout).getChildAt(0).let {
-            (it as TextView).text = label
-            (it.background as android.graphics.drawable.GradientDrawable).setColor(Color.parseColor(color))
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    // The ring colour is the bubble's state: cyan ready, orange got the link,
+    // yellow waiting for a confirming tap. pulse = a short bounce to draw the eye.
+    private fun setBubble(color: String, pulse: Boolean = false) {
+        if (!::bubbleBody.isInitialized) return
+        bubbleRing.setStroke(dp(3), Color.parseColor(color))
+        if (pulse) {
+            bubbleBody.animate().cancel()
+            bubbleBody.scaleX = 1f
+            bubbleBody.scaleY = 1f
+            val up = { bubbleBody.animate().scaleX(1.15f).scaleY(1.15f).setDuration(160) }
+            up().withEndAction {
+                bubbleBody.animate().scaleX(1f).scaleY(1f).setDuration(160).withEndAction {
+                    up().withEndAction { bubbleBody.animate().scaleX(1f).scaleY(1f).setDuration(160).start() }.start()
+                }.start()
+            }.start()
         }
     }
 
@@ -281,17 +299,18 @@ class FloatingBubbleService : Service() {
             if (text.contains("instagram.com")) {
                 // An accidental tap while scrolling re-sent the last copied
                 // link (Oct 9, friends' testing). A link already sent in the
-                // last 24 h needs a second tap within 4 s; the first one only
-                // shows a toast over Instagram and "Again?" on the bubble.
+                // last 24 h needs a second tap within 8 s; the first one only
+                // shows a toast over Instagram and turns the ring yellow.
+                // (Oct 13: 4 s was too short to read the toast and tap.)
                 val code = Regex("(?:reels?|p)/([A-Za-z0-9_-]+)").find(text)?.groupValues?.get(1)
                 val now = System.currentTimeMillis()
                 if (code != null && SentLinks.recentlySent(this, code, now) && !(confirmCode == code && now < confirmUntil)) {
                     confirmCode = code
-                    confirmUntil = now + 4000
-                    setBubble("Again?", "#FFC107")
+                    confirmUntil = now + CONFIRM_MS
+                    setBubble(CONFIRM_COLOR, pulse = true)
                     android.widget.Toast.makeText(
                         this,
-                        "Already checked (or in progress). Tap again within 4 s to check it again.",
+                        "You already checked this reel. Tap the bubble again to check it once more.",
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                     FlowLog.init(this)
@@ -299,18 +318,14 @@ class FloatingBubbleService : Service() {
                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                         if (confirmCode == code && System.currentTimeMillis() >= confirmUntil) {
                             confirmCode = null
-                            setBubble("AI", "#00E5FF")
+                            setBubble(READY_COLOR)
                         }
-                    }, 4100)
+                    }, CONFIRM_MS + 100)
                     return
                 }
                 confirmCode = null
                 if (code != null) SentLinks.mark(this, code, now)
-                (floatingView as FrameLayout).getChildAt(0).let {
-                    (it as TextView).text = "..."
-                    val shape = it.background as android.graphics.drawable.GradientDrawable
-                    shape.setColor(Color.parseColor("#FF9800"))
-                }
+                setBubble("#FF9800", pulse = true)
                 FlowLog.init(this)
                 FlowLog.i("bubble: tapped, link " + (Regex("(?:reel|p)/([A-Za-z0-9_-]+)").find(text)?.groupValues?.get(1) ?: text.take(60)) + " handed to JS")
                 postReceivedNotification()
