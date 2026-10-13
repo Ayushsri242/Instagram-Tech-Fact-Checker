@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, NativeModules, ScrollView, Share, Alert } from 'react-native';
 import * as FileSystem from 'expo-file-system';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from '../theme/colors';
 import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey, restoreGroqKeyFromBackup } from '../services/secrets';
 import { isGroqKey } from '../services/api';
@@ -211,6 +212,16 @@ export default function SettingsScreen({ navigation }) {
             onPress={() => navigation.navigate('Permissions', { fromSettings: true, initialSlide: 1 })}
           >
             <Text style={styles.btnText}>Read Instructions</Text>
+          </TouchableOpacity>
+          {/* Replays the Home tour and the sample check (HomeTour). */}
+          <TouchableOpacity
+            style={styles.downloadBtn}
+            onPress={async () => {
+              await AsyncStorage.removeItem('@tfc_tutorial_done').catch(() => {});
+              navigation.navigate('Home');
+            }}
+          >
+            <Text style={styles.btnText}>Replay Tour</Text>
           </TouchableOpacity>
         </View>
       </View>

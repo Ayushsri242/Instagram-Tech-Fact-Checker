@@ -107,7 +107,7 @@ export default function ChatScreen({ route, navigation }) {
         // No emoji in this file. A unicode emoji in the same module as a
         // catch block re-triggers a Hermes/Fast Refresh parse bug that
         // surfaces as "ReferenceError: Property 'err' doesn't exist".
-        text: `Welcome to Ask AI!\n\nWhen analysis is done, you can ask me any questions about the information in this post.\n\nNote: To check a completely new link, you must go back to the Home page.`
+        text: 'Ask me anything about this post - the tools, the claims, or whether it is worth trying.'
       };
       const initialUserMsg = {
         id: newId(),
@@ -184,7 +184,7 @@ export default function ChatScreen({ route, navigation }) {
           {
             id: newId(),
             sender: 'assistant',
-            text: `Welcome to Ask AI!\n\nWhen analysis is done, you can ask me any questions about the information in this post.\n\nNote: To check a completely new link, you must go back to the Home page.`,
+            text: 'Ask me anything about this post - the tools, the claims, or whether it is worth trying.',
           }
         ]);
       }
@@ -272,7 +272,7 @@ export default function ChatScreen({ route, navigation }) {
       >
         <View style={styles.header}>
           <Text style={styles.headerTitle}>{techName !== 'Unknown Tool' ? techName : 'New Session'}</Text>
-          <Text style={styles.headerSubtitle}>On-Device Technical Q&A</Text>
+          <Text style={styles.headerSubtitle}>Ask about this post</Text>
         </View>
 
         <FlatList
@@ -323,7 +323,7 @@ export default function ChatScreen({ route, navigation }) {
         <View style={styles.inputContainer}>
           <TextInput
             style={styles.input}
-            placeholder="Ask question... (Go to Home for new link)"
+            placeholder="Ask a question..."
             placeholderTextColor={colors.textMuted}
             value={input}
             onChangeText={setInput}

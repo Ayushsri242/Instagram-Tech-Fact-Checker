@@ -149,7 +149,10 @@ export default function ResultScreen({ route, navigation }) {
               </View>
             )}
           </View>
-          <Text style={styles.authorText}>👤 @{reel.author || 'Creator'} • 💰 {reel.pricingModel || 'Open Source'}</Text>
+          {/* No '@Creator' placeholder when the handle is unknown (Oct 13). */}
+          <Text style={styles.authorText}>
+            {reel.author && !/^(creator|unknown)$/i.test(reel.author) ? '👤 @' + reel.author + ' • ' : ''}💰 {reel.pricingModel || 'Open Source'}
+          </Text>
           {!!postLink && (
             <TouchableOpacity onPress={() => Linking.openURL(postLink).catch(() => {})}>
               <Text style={styles.linkText} numberOfLines={1}>🔗 {postLink}</Text>
@@ -185,6 +188,7 @@ export default function ResultScreen({ route, navigation }) {
         {reel.report ? (
           <ReportCard
             report={reel.report}
+            compact
             techName={reel.techName || reel.title}
             onAskTool={(tool) => navigation.navigate('Chat', { reel, initialQuery: askToolQuestion(tool) })}
           />

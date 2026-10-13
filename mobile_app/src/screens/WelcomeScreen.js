@@ -17,6 +17,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import { colors } from '../theme/colors';
+import HowItWorks from '../components/HowItWorks';
 import { saveGroqApiKey, getGroqApiKey, restoreGroqKeyFromBackup } from '../services/secrets';
 import { isGroqKey } from '../services/api';
 
@@ -234,27 +235,8 @@ export default function WelcomeScreen({ navigation, route }) {
         {/* Slide 2: How to Use */}
         <View style={[styles.slide, { width }]}>
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40, justifyContent: 'center', flexGrow: 1 }}>
-            <Text style={styles.title}>How to Use</Text>
-            
-            <View style={styles.instructionBlock}>
-              <Text style={styles.instructionTitle}>1. The Doomscroll Bubble</Text>
-              <Text style={styles.desc}>Tap 'Start Doomscroll Mode' on Home to spawn the bubble. Open Instagram, copy a tech reel's link, then tap the bubble. It turns orange, then blue when the link is received by the app.</Text>
-            </View>
-
-            <View style={styles.instructionBlock}>
-              <Text style={styles.instructionTitle}>2. Manual Check</Text>
-              <Text style={styles.desc}>Alternatively, copy an Instagram link, open Assay, paste it, and tap 'Check'. Wait for the analysis to finish.</Text>
-            </View>
-
-            <View style={styles.instructionBlock}>
-              <Text style={styles.instructionTitle}>Notifications & Verdicts</Text>
-              <Text style={styles.desc}>If notifications are enabled, you will receive updates about processing and when the verdict is ready. Click the notification or go to the History tab to view the summary.</Text>
-            </View>
-
-            <View style={styles.instructionBlock}>
-              <Text style={styles.instructionTitle}>Ask AI</Text>
-              <Text style={styles.desc}>Inside the fact-check report, use the 'Ask AI' button to chat with our chatbot for more information about the reel.</Text>
-            </View>
+            {/* Animated scenes instead of paragraphs (Oct 12: nobody read the text). */}
+            <HowItWorks />
 
             <TouchableOpacity style={styles.btn} onPress={goToNextSlide}>
               <Text style={styles.btnText}>Next</Text>

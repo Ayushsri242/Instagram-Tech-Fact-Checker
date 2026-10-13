@@ -14,6 +14,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
+import HomeTour from '../components/HomeTour';
 import { getApiLimits, getOfflineMode, getUnseenResults, clearUnseenResults } from '../services/storage';
 import { describeLimits } from '../services/api';
 import { getJobState, subscribeJob, JOB_STAGES, setLastFailure } from '../services/jobState';
@@ -35,13 +36,13 @@ export default function HomeScreen({ navigation }) {
   const [updateProgress, setUpdateProgress] = useState(null);
 
   // Coach Mark state
-  const [tutorialStep, setTutorialStep] = useState(0); // 0 = off, 1 = input, 2 = history, 3 = settings
-  const [targetLayout, setTargetLayout] = useState(null);
+  const [showTour, setShowTour] = useState(false);
 
   const containerRef = React.useRef(null);
   const inputRef = React.useRef(null);
   const historyRef = React.useRef(null);
   const settingsRef = React.useRef(null);
+  const bubbleRef = React.useRef(null);
 
   // The update check itself runs from App.js at launch; Home only shows the
   // download progress once the user accepts an update.
@@ -53,7 +54,7 @@ export default function HomeScreen({ navigation }) {
       AsyncStorage.getItem('@tfc_tutorial_done').then((done) => {
         if (done !== 'yes') {
           // Add a small delay to let UI render before starting
-          setTimeout(() => setTutorialStep(1), 500);
+          setTimeout(() => setShowTour(true), 500);
         }
       });
 
@@ -67,36 +68,9 @@ export default function HomeScreen({ navigation }) {
     }, [])
   );
 
-  React.useEffect(() => {
-    if (!tutorialStep || !containerRef.current) return;
-
-    let targetRef = null;
-    if (tutorialStep === 1) targetRef = inputRef;
-    else if (tutorialStep === 2) targetRef = historyRef;
-    else if (tutorialStep === 3) targetRef = settingsRef;
-
-    if (targetRef && targetRef.current) {
-      setTimeout(() => {
-        targetRef.current.measureLayout(
-          containerRef.current,
-          (left, top, width, height) => {
-            setTargetLayout({ x: left, y: top, width, height });
-          },
-          () => {
-            console.log('measureLayout failed');
-          }
-        );
-      }, 100);
-    } else if (tutorialStep > 3) {
-      AsyncStorage.setItem('@tfc_tutorial_done', 'yes');
-      setTutorialStep(0);
-      setTargetLayout(null);
-    }
-  }, [tutorialStep]);
-
-  const advanceTutorial = () => {
-    setTargetLayout(null);
-    setTutorialStep(s => s + 1);
+  const finishTour = () => {
+    AsyncStorage.setItem('@tfc_tutorial_done', 'yes').catch(() => {});
+    setShowTour(false);
   };
 
   useFocusEffect(
@@ -163,15 +137,17 @@ export default function HomeScreen({ navigation }) {
                 <Text style={styles.iconText}>History</Text>
               </TouchableOpacity>
             </View>
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              {!!limitLine && <Text style={styles.limitText}>{limitLine}</Text>}
-            </View>
+            <View style={{ flex: 1 }} />
             <View ref={settingsRef}>
               <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.iconButton}>
                 <Text style={styles.iconText}>Settings</Text>
               </TouchableOpacity>
             </View>
           </View>
+
+        {/* Groq usage on its own row: squeezed between History and Settings it
+            wrapped into tiny unreadable text (Oct 13 recording). */}
+        {!!limitLine && <Text style={styles.limitText}>{limitLine.split(String.fromCharCode(10)).join('   ·   ')}</Text>}
 
         {updateProgress !== null && (
           <View style={styles.updateBanner}>
@@ -283,8 +259,10 @@ export default function HomeScreen({ navigation }) {
 
         {/* Center Title (Empty State) */}
         <View style={styles.centerContent}>
-          <Text style={styles.title}>Tech Fact Checker</Text>
+          <Text style={styles.title}>Assay</Text>
+          <Text style={styles.subtitle}>Fact-check tech reels in seconds</Text>
           <TouchableOpacity 
+            ref={bubbleRef}
             style={{ marginTop: 24, padding: 12, backgroundColor: colors.accentCyan, borderRadius: 8 }}
             onPress={async () => {
               const { NativeModules } = require('react-native');
@@ -319,43 +297,18 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* Coach Mark Overlay */}
-        {tutorialStep > 0 && targetLayout && (
-          <View style={[StyleSheet.absoluteFill, { zIndex: 1000 }]}>
-            {/* Dark overlays around the target */}
-            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: targetLayout.y, backgroundColor: 'rgba(0,0,0,0.7)' }} />
-            <View style={{ position: 'absolute', top: targetLayout.y + targetLayout.height, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)' }} />
-            <View style={{ position: 'absolute', top: targetLayout.y, left: 0, width: targetLayout.x, height: targetLayout.height, backgroundColor: 'rgba(0,0,0,0.7)' }} />
-            <View style={{ position: 'absolute', top: targetLayout.y, left: targetLayout.x + targetLayout.width, right: 0, height: targetLayout.height, backgroundColor: 'rgba(0,0,0,0.7)' }} />
-
-            {/* Target Highlight Ring */}
-            <View style={{ position: 'absolute', top: targetLayout.y - 2, left: targetLayout.x - 2, width: targetLayout.width + 4, height: targetLayout.height + 4, borderWidth: 2, borderColor: colors.accentCyan, borderRadius: 8 }} />
-
-            {/* Tooltip Box */}
-            <View style={{
-              position: 'absolute',
-              top: tutorialStep === 1 ? targetLayout.y - 100 : targetLayout.y + targetLayout.height + 16,
-              left: 20, right: 20,
-              backgroundColor: colors.surface,
-              padding: 16,
-              borderRadius: 12,
-              alignItems: 'center',
-              borderWidth: 1,
-              borderColor: colors.cardBorder,
-            }}>
-              <Text style={{ color: colors.textPrimary, fontSize: 16, fontWeight: 'bold', marginBottom: 16, textAlign: 'center' }}>
-                {tutorialStep === 1 && "Paste any link here to fact-check it."}
-                {tutorialStep === 2 && "See past verdicts here."}
-                {tutorialStep === 3 && "Manage keys and settings here."}
-              </Text>
-              <TouchableOpacity
-                style={{ backgroundColor: colors.accentCyan, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 }}
-                onPress={advanceTutorial}
-              >
-                <Text style={{ color: '#000', fontWeight: 'bold' }}>{tutorialStep === 3 ? "Got it!" : "Next"}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+        {/* First-run tour: spotlight each control, then a sample check (HomeTour). */}
+        {showTour && (
+          <HomeTour
+            containerRef={containerRef}
+            onDone={finishTour}
+            steps={[
+              { ref: inputRef, title: 'Paste a link here', text: 'Copy any Instagram reel or post link and paste it here to fact-check it.' },
+              { ref: bubbleRef, title: 'Or check while you scroll', text: 'Start the bubble, copy a reel link in Instagram and tap the bubble. No need to leave Instagram.' },
+              { ref: historyRef, title: 'Your past checks', text: 'Every verdict is saved here, so you can reopen it any time.' },
+              { ref: settingsRef, title: 'Settings', text: 'Your Groq key, permissions and app updates live here.' },
+            ]}
+          />
         )}
         </View>
       </KeyboardAvoidingView>
@@ -389,11 +342,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   limitText: {
-    fontSize: 11,
-    lineHeight: 15,
+    fontSize: 11.5,
+    lineHeight: 16,
     textAlign: 'center',
-    marginHorizontal: 6,
-    color: colors.textMuted,
+    marginHorizontal: 16,
+    marginBottom: 6,
+    color: colors.textSecondary,
     backgroundColor: colors.surface,
     paddingHorizontal: 8,
     paddingVertical: 4,
