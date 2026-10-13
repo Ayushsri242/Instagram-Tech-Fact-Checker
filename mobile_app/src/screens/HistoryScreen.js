@@ -2,13 +2,29 @@ import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  FlatList,
+  SectionList,
   TouchableOpacity,
   StyleSheet,
   SafeAreaView,
 } from 'react-native';
 import { colors } from '../theme/colors';
 import { getAllReels, deleteReelById } from '../services/storage';
+import { verdictLabel, verdictColor, savedTime, dayLabel, whenText } from '../services/verdicts';
+
+// Newest first, under "Today", "Yesterday", "Oct 11"... (Oct 13: History had no
+// times at all). Checks saved before times were recorded go under "Earlier".
+const groupByDay = (reels) => {
+  const sections = [];
+  for (const r of reels) {
+    const t = savedTime(r);
+    const title = t ? dayLabel(t) : 'Earlier';
+    let sec = sections.find((x) => x.title === title);
+    if (!sec) sections.push((sec = { title, data: [] }));
+    sec.data.push(r);
+  }
+  const at = (sec) => savedTime(sec.data[0]) || 0;
+  return sections.sort((a, b) => at(b) - at(a));
+};
 
 export default function HistoryScreen({ navigation }) {
   const [reels, setReels] = useState([]);
@@ -32,29 +48,30 @@ export default function HistoryScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Saved Library</Text>
-      </View>
-
+      {/* The screen header already says "History"; a second title repeated it. */}
       {reels.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyText}>No saved fact-checks yet.</Text>
           <Text style={styles.emptySubtext}>Analyze or share a reel to start!</Text>
         </View>
       ) : (
-        <FlatList
-          data={reels}
+        <SectionList
+          sections={groupByDay(reels)}
           keyExtractor={(item) => item.reelId}
           contentContainerStyle={styles.listContent}
+          stickySectionHeadersEnabled={false}
+          renderSectionHeader={({ section }) => <Text style={styles.dayHeader}>{section.title}</Text>}
           renderItem={({ item }) => (
             <TouchableOpacity
               style={styles.card}
               onPress={() => navigation.navigate('Result', { reel: item })}
             >
+              <View style={[styles.verdictDot, { backgroundColor: verdictColor(item.verdict) }]} />
               <View style={styles.cardInfo}>
-                <Text style={styles.cardTitle}>{item.techName || item.title}</Text>
-                <Text style={styles.cardSubtitle} numberOfLines={1}>{item.title}</Text>
-                <Text style={styles.cardVerdict}>{item.verdict}</Text>
+                <Text style={styles.cardTitle} numberOfLines={1}>{item.techName || item.title}</Text>
+                <Text style={styles.cardMeta}>
+                  {verdictLabel(item.verdict)}{savedTime(item) ? '  ·  ' + whenText(savedTime(item)) : ''}
+                </Text>
               </View>
 
               <TouchableOpacity
@@ -85,9 +102,19 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   listContent: {
-    padding: 16,
-    gap: 12,
+    paddingHorizontal: 16,
+    paddingBottom: 24,
   },
+  dayHeader: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  verdictDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
+  cardMeta: { color: colors.textSecondary, fontSize: 12.5, marginTop: 3 },
   emptyContainer: {
     flex: 1,
     alignItems: 'center',
@@ -107,7 +134,9 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.surface,
     borderRadius: 14,
-    padding: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

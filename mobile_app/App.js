@@ -102,7 +102,7 @@ export default function App() {
         <Stack.Screen
           name="History"
           component={HistoryScreen}
-          options={{ title: 'Saved Library' }}
+          options={{ title: 'History' }}
         />
         <Stack.Screen
           name="Chat"

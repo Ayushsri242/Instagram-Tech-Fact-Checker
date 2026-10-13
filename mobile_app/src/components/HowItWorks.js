@@ -181,7 +181,9 @@ const SCENES = [SceneStart, SceneCopy, SceneTap, SceneResults, ScenePaste, Scene
 // Manual (Oct 12: auto-advance was too fast). Swipe or use the arrows; the
 // step on screen replays its animation slowly until the user moves on. A
 // nested horizontal ScrollView takes the swipe before the Welcome pager does.
-export default function HowItWorks() {
+// onDone: leave the tutorial. The button that does it is pinned to the bottom
+// of the screen (Oct 13: the old Next sat below the animation, out of sight).
+export default function HowItWorks({ onDone }) {
   const [step, setStep] = useState(0);
   const [pageW, setPageW] = useState(0);
   const pager = useRef(null);
@@ -204,7 +206,10 @@ export default function HowItWorks() {
     setStep(next);
   };
 
+  const last = step === STEPS.length - 1;
   return (
+    <View style={styles.outer}>
+    <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
     <View style={styles.wrap} onLayout={(e) => setPageW(e.nativeEvent.layout.width)}>
       {pageW > 0 && (
         <ScrollView
@@ -246,11 +251,30 @@ export default function HowItWorks() {
       </View>
       {step === 0 && <Text style={styles.hint}>Swipe to see how it works →</Text>}
     </View>
+    </ScrollView>
+    {!!onDone && (
+      <View style={styles.footer}>
+        <TouchableOpacity style={styles.footerBtn} onPress={() => (last ? onDone() : go(step + 1))}>
+          <Text style={styles.footerBtnText}>{last ? 'Continue' : 'Next step'}</Text>
+        </TouchableOpacity>
+        {!last && (
+          <TouchableOpacity onPress={onDone} hitSlop={10}>
+            <Text style={styles.skip}>Skip tutorial</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  outer: { flex: 1, alignSelf: 'stretch' },
   wrap: { alignItems: 'center', paddingVertical: 8 },
+  footer: { paddingTop: 10, paddingBottom: 6, alignItems: 'center', borderTopWidth: 1, borderTopColor: colors.cardBorder },
+  footerBtn: { alignSelf: 'stretch', backgroundColor: colors.accentCyan, borderRadius: 12, paddingVertical: 15, alignItems: 'center' },
+  footerBtnText: { color: '#000', fontSize: 16, fontWeight: 'bold' },
+  skip: { color: colors.textMuted, fontSize: 13.5, marginTop: 10 },
   phone: { borderRadius: 24, borderWidth: 3, borderColor: '#3a3f4b', backgroundColor: '#0b0d12', padding: 6 },
   screen: { width: SCREEN_W, height: SCREEN_H, borderRadius: 16, backgroundColor: colors.background, overflow: 'hidden' },
   shot: { position: 'absolute', left: 0, top: 0, width: SCREEN_W, height: SCREEN_H },

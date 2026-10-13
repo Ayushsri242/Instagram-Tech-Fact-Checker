@@ -243,15 +243,10 @@ export default function WelcomeScreen({ navigation, route }) {
         </View>
 
         {/* Slide 2: How to Use */}
-        <View style={[styles.slide, { width }]}>
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40, justifyContent: 'center', flexGrow: 1 }}>
-            {/* Animated scenes instead of paragraphs (Oct 12: nobody read the text). */}
-            <HowItWorks />
-
-            <TouchableOpacity style={styles.nextBtn} onPress={goToNextSlide}>
-              <Text style={styles.nextBtnText}>Next</Text>
-            </TouchableOpacity>
-          </ScrollView>
+        <View style={[styles.slide, { width, paddingTop: 8, paddingBottom: 12, justifyContent: 'flex-start' }]}>
+          {/* Animated scenes instead of paragraphs (Oct 12: nobody read the
+              text). HowItWorks scrolls itself and pins its own Next button. */}
+          <HowItWorks onDone={goToNextSlide} />
         </View>
 
         {/* Slide 3: Hard Gate + Permissions */}
@@ -331,7 +326,7 @@ export default function WelcomeScreen({ navigation, route }) {
 
             <View style={styles.card}>
               <Text style={styles.cardTitle}>6. In-App Updates <Text style={styles.optionalBadge}>(Built-in)</Text></Text>
-              <Text style={styles.cardDesc}>I will edit your AndroidManifest.xml to add REQUEST_INSTALL_PACKAGES. Without this, Android blocks apps from updating themselves.</Text>
+              <Text style={styles.cardDesc}>Assay tells you when a new version is out. You can also check for updates any time in Settings and install the latest one from there.</Text>
             </View>
 
             <TouchableOpacity
@@ -345,12 +340,9 @@ export default function WelcomeScreen({ navigation, route }) {
         </View>
       </ScrollView>
 
-      {/* Pagination Dots */}
-      <View style={styles.pagination}>
-        {[0, 1, 2].map((i) => (
-          <View key={i} style={[styles.dot, currentSlide === i && styles.dotActive]} />
-        ))}
-      </View>
+      {/* No page dots (Oct 13): they sat under the tutorial's own buttons, and
+          the active dot used colors.primary, which does not exist - so only
+          two of the three ever showed. Every slide has its own button now. */}
     </SafeAreaView>
   );
 }
