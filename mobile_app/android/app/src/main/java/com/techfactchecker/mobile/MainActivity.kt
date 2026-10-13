@@ -23,6 +23,17 @@ class MainActivity : ReactActivity() {
    * Returns the name of the main component registered from JavaScript. This is used to schedule
    * rendering of the component.
    */
+  // The doomscroll bubble is for other apps; hide it while Assay is in front.
+  override fun onResume() {
+    super.onResume()
+    sendBroadcast(android.content.Intent("com.techfactchecker.SET_BUBBLE_VISIBLE").setPackage(packageName).putExtra("visible", false))
+  }
+
+  override fun onPause() {
+    super.onPause()
+    sendBroadcast(android.content.Intent("com.techfactchecker.SET_BUBBLE_VISIBLE").setPackage(packageName).putExtra("visible", true))
+  }
+
   override fun getMainComponentName(): String = "main"
 
   /**

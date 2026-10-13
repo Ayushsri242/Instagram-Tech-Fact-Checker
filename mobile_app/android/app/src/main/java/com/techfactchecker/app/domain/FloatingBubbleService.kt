@@ -33,6 +33,14 @@ class FloatingBubbleService : Service() {
 
     private val commandReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+            // Hidden while Assay itself is open: it sat on top of screen titles
+            // ("AI oduction Agentic RAG Course", Oct 13 screen recording).
+            if (intent.action == "com.techfactchecker.SET_BUBBLE_VISIBLE") {
+                if (::floatingView.isInitialized) {
+                    floatingView.visibility = if (intent.getBooleanExtra("visible", true)) View.VISIBLE else View.GONE
+                }
+                return
+            }
             if (intent.action == "com.techfactchecker.SET_BUBBLE_COLOR") {
                 val color = intent.getStringExtra("color") ?: return
         
@@ -53,6 +61,7 @@ class FloatingBubbleService : Service() {
         super.onCreate()
 
         val filter = android.content.IntentFilter("com.techfactchecker.SET_BUBBLE_COLOR")
+        filter.addAction("com.techfactchecker.SET_BUBBLE_VISIBLE")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(commandReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {

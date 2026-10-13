@@ -43,7 +43,9 @@ const openUrl = (url) => Linking.openURL(url).catch(() => {});
 
 // onAskTool(tool) - provided by the screen; opens chat about one tool the report
 // had no room to check. Without it the chips are shown but not tappable.
-export default function ReportCard({ report, techName, onAskTool }) {
+// compact: the Result screen already shows the verdict and title in its top
+// card; drawing them again here repeated them (Oct 13 recording).
+export default function ReportCard({ report, techName, onAskTool, compact = false }) {
   if (!report) return null;
   const [showSources, setShowSources] = useState(false);
   const verdict = VERDICT_STYLE[report.verdict] || VERDICT_STYLE.UNKNOWN;
@@ -51,11 +53,13 @@ export default function ReportCard({ report, techName, onAskTool }) {
 
   return (
     <View style={styles.card}>
-      <View style={[styles.verdictBar, { backgroundColor: verdict.color }]}>
-        <Text style={styles.verdictText}>{verdict.label}</Text>
-      </View>
+      {!compact && (
+        <View style={[styles.verdictBar, { backgroundColor: verdict.color }]}>
+          <Text style={styles.verdictText}>{verdict.label}</Text>
+        </View>
+      )}
 
-      {!!techName && techName !== 'Unknown Technology' && (
+      {!compact && !!techName && techName !== 'Unknown Technology' && (
         <Text style={[styles.techName, techName === 'Unidentified' && styles.techUnknown]}>
           {techName === 'Unidentified' ? 'Could not identify the tool' : techName}
         </Text>
@@ -189,7 +193,7 @@ const styles = StyleSheet.create({
   verdictText: { color: '#000', fontWeight: '800', fontSize: 12, letterSpacing: 0.8 },
   techName: { color: colors.textPrimary, fontSize: 19, fontWeight: '700', marginBottom: 4 },
   techUnknown: { color: colors.textMuted, fontSize: 16, fontStyle: 'italic' },
-  toolsReal: { color: colors.textMuted, fontSize: 12, marginBottom: 6 },
+  toolsReal: { color: colors.textSecondary, fontSize: 12.5, marginBottom: 6 },
   reality: { color: colors.textPrimary, fontSize: 14, lineHeight: 19, marginBottom: 2 },
   section: { marginTop: 11 },
   sectionTitle: {
@@ -236,7 +240,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   caveat: { color: colors.warning || '#eab308', fontSize: 12, lineHeight: 18, marginTop: 5 },
-  confidence: { color: colors.textMuted, fontSize: 11.5, lineHeight: 16, marginTop: 6 },
+  confidence: { color: colors.textSecondary, fontSize: 12, lineHeight: 17, marginTop: 6 },
   sourcesToggle: {
     color: colors.accentCyan,
     fontSize: 11,

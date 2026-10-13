@@ -75,6 +75,8 @@ export default function App() {
       <Stack.Navigator
         initialRouteName={firstRoute}
         screenOptions={{
+          // A clean slide; the default left the old screen showing through (Oct 13).
+          animation: 'slide_from_right',
           headerStyle: {
             backgroundColor: colors.surface,
           },
