@@ -33,3 +33,13 @@ export const friendlyError = (message) => {
   }
   return 'Something went wrong while checking this reel. Please try again.';
 };
+
+// Whether a Retry button can help (Oct 13). A network drop, a busy minute, an
+// unreadable answer or Instagram not loading can pass on a second try; a
+// login-only reel, a used-up day, a bad key or a too-long post cannot. Works
+// on the raw error and on the friendly sentence saved with a failed check.
+const NO_RETRY = /logged-in users|daily limit|not accepted|too long to check/i;
+export const canRetry = (message) => {
+  const m = String(message || '');
+  return !NO_RETRY.test(m) && !NO_RETRY.test(friendlyError(m));
+};
