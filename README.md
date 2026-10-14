@@ -24,9 +24,26 @@ Instagram is full of reels like *"this free AI tool replaces your whole team"* o
 
 ## 📲 Install
 
-1. Download the latest APK from [Releases](https://github.com/Ayushsri242/Instagram-Tech-Fact-Checker/releases/tag/verified-production) and install it (allow *install from unknown sources*).
+1. Download the latest APK from [Releases](https://github.com/Ayushsri242/Instagram-Tech-Fact-Checker/releases/latest) and install it (allow *install from unknown sources*).
 2. Open Assay and follow the short setup: get a free Groq key, allow the bubble and notifications.
 3. The app updates itself — it tells you when a new version is out.
+
+### "App was denied access" when allowing *Display over other apps*
+
+Some phones (Android 13+) block this permission for apps installed from a downloaded file. The bubble needs it, so unlock it once — either way works:
+
+**On the phone:** Settings → Apps → **Assay** → **⋮** (top right) → **Allow restricted settings** → confirm. Then grant *Display over other apps* again. (The ⋮ option only appears after one blocked attempt.)
+
+**Or from a laptop with adb** ([Android platform-tools](https://developer.android.com/tools/releases/platform-tools), USB debugging on):
+
+```bash
+# uninstall the blocked copy first (Settings → Apps → Assay → Uninstall), then:
+adb install Assay.apk
+```
+
+Apps installed through adb are not restricted, so the permission can be granted normally.
+
+You only do this once — updates keep the permission.
 
 ## 🏗️ How it works
 
