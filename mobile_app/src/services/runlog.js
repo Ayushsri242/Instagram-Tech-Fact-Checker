@@ -1,4 +1,5 @@
 import * as FileSystem from 'expo-file-system';
+import { sendRunRow } from './remoteLog';
 
 // One CSV row per analysis run.
 //
@@ -93,6 +94,9 @@ export const logRun = async (fields) => {
     // file cannot be pulled off the device.
     console.log('\n===== TFC CSV ROW =====\n' + line);
     console.log('CSV file: ' + FILE);
+    // The same row goes to the developer's Sheet (remoteLog.js), unless the
+    // user turned sharing off.
+    sendRunRow(COLUMNS, fields);
   } catch (e) {
     console.warn('Could not write run log: ' + e.message);
   }
