@@ -222,7 +222,10 @@ export default function WelcomeScreen({ navigation, route }) {
         contentOffset={{ x: initialSlide * width, y: 0 }}
       >
         {/* Slide 1: Welcome */}
-        <View style={[styles.slide, { width }]}>
+        <View style={[styles.slide, { width, paddingVertical: 0 }]}>
+          {/* Scrolls on small screens or large system text (Oct 14: the logo and
+              the button were cut off on a friend's phone). */}
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingVertical: 24 }}>
           {/* Oct 13: the slide was three lines of text in empty space. */}
           <Image source={require('../../assets/icon.png')} style={styles.logo} />
           <Text style={styles.title}>Welcome to Assay</Text>
@@ -240,6 +243,7 @@ export default function WelcomeScreen({ navigation, route }) {
           <TouchableOpacity style={styles.nextBtn} onPress={goToNextSlide}>
             <Text style={styles.nextBtnText}>Get started</Text>
           </TouchableOpacity>
+          </ScrollView>
         </View>
 
         {/* Slide 2: How to Use */}
@@ -329,6 +333,10 @@ export default function WelcomeScreen({ navigation, route }) {
               <Text style={styles.cardDesc}>Assay tells you when a new version is out. You can also check for updates any time in Settings and install the latest one from there.</Text>
             </View>
 
+            <Text style={[styles.cardDesc, { marginBottom: 12 }]}>
+              Assay shares anonymous check logs (reel link, verdict, errors) to improve accuracy. You can turn this off in Settings.
+            </Text>
+
             <TouchableOpacity
               style={[styles.startBtn, !canStart && styles.startBtnDisabled]}
               onPress={finish}
@@ -362,7 +370,7 @@ const styles = StyleSheet.create({
   // colors.primary does not exist, so styles.btn drew no button at all.
   nextBtn: { backgroundColor: colors.accentCyan, paddingVertical: 15, borderRadius: 12, alignItems: 'center', marginTop: 24 },
   nextBtnText: { color: '#000', fontSize: 16, fontWeight: 'bold' },
-  logo: { width: 96, height: 96, borderRadius: 22, alignSelf: 'center', marginBottom: 20 },
+  logo: { width: 80, height: 80, borderRadius: 22, alignSelf: 'center', marginBottom: 20 },
   feature: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14, marginBottom: 8 },
   featureIcon: { color: colors.accentCyan, fontSize: 18, width: 30 },
   featureText: { color: colors.textPrimary, fontSize: 14.5, flex: 1, lineHeight: 20 },

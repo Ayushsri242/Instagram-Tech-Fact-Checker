@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, NativeModules, ScrollView, Share, Alert } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, NativeModules, ScrollView, Share, Alert, Switch } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from '../theme/colors';
@@ -7,16 +7,19 @@ import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey, restoreGroqKeyFromBack
 import { isGroqKey } from '../services/api';
 import { readRunLog, readOldRunLog, clearRunLog, RUN_LOG_PATH } from '../services/runlog';
 import { checkForUpdates, currentVersion } from '../services/updater';
+import { getShareLogs, setShareLogs } from '../services/remoteLog';
 
 export default function SettingsScreen({ navigation }) {
   const [groqApiKey, setGroqApiKey] = useState('');
   const [hasGroqApiKey, setHasGroqApiKey] = useState(false);
   const [runLogRows, setRunLogRows] = useState(0);
   const [updateStatus, setUpdateStatus] = useState('');
+  const [shareLogs, setShareLogsState] = useState(true);
 
   useEffect(() => {
     checkGroqApiKey();
     countRunLog();
+    getShareLogs().then(setShareLogsState);
   }, []);
 
   // Rows, not bytes: the header line is always there, so an empty log reads 0.
@@ -252,6 +255,27 @@ export default function SettingsScreen({ navigation }) {
         </View>
       </View>
 
+      {/* Oct 14: runs now reach the developer's Sheet on their own
+          (remoteLog.js), so testers no longer share CSVs. This switch is the
+          user's way to opt out. */}
+      <View style={styles.card}>
+        <Text style={styles.title}>Help improve Assay</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={[styles.desc, { flex: 1, marginBottom: 0 }]}>
+            Share anonymous check logs (reel link, verdict, timings, errors) with the developer. Never your API key or personal info.
+          </Text>
+          <Switch
+            value={shareLogs}
+            onValueChange={(on) => { setShareLogsState(on); setShareLogs(on); }}
+            trackColor={{ true: colors.accentCyan, false: colors.cardBorder }}
+            thumbColor="#fff"
+          />
+        </View>
+      </View>
+
+      {/* Developer builds only: the local CSV, for scoring a batch over adb. */}
+      {__DEV__ && (
+      <>
       {/* The run log is one CSV row per analysis and it is how a batch of reels
           is scored. It was only reachable over adb, which meant a phone and a
           cable to read numbers the phone had already written. runlog.js has
@@ -283,6 +307,8 @@ export default function SettingsScreen({ navigation }) {
           )}
         </View>
       </View>
+      </>
+      )}
       </ScrollView>
     </SafeAreaView>
   );
