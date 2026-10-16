@@ -775,7 +775,10 @@ const OS_PATH_PARTS = new Set([
 
 // Earning language only. Currency alone is not enough: "$20/month" is a price,
 // and an AI-tool pricing post must stay a tech post.
-const MONEY_HINT = /\b(?:earn|earns|earning|(?:passive|extra|side|monthly|daily|online|second|additional) income|get paid|getting paid|paid per|pays? (?:you|up to|around)|(?:will|that|which)(?: actually| really| truly)? pay(?: you)?|side ?hustles?|make money|making money|prints? money|passive income|payouts?|work from home|cash ?out|withdraw(?:al)?)\b/i;
+// "Websites that (will) pay" is earning; "the card on which you will pay" is
+// paying for a subscription (Oct 15, free ChatGPT Plus reel), so a bare
+// "will pay" needs "you" after it.
+const MONEY_HINT = /\b(?:earn|earns|earning|(?:passive|extra|side|monthly|daily|online|second|additional) income|get paid|getting paid|paid per|pays? (?:you|up to|around)|(?:that|which)(?: will)?(?: actually| really| truly)? pay(?: you)?|will(?: actually| really| truly)? pay you|side ?hustles?|make money|making money|prints? money|passive income|payouts?|work from home|cash ?out|withdraw(?:al)?)\b/i;
 // A pay RATE: a currency amount per unit of work ("$5 to $20 per review").
 // "Cost per task" on an AI pricing slide has no amount next to it and stays a
 // tech post; so does an app that "earned $1M" (past tense, a startup story).
@@ -791,14 +794,18 @@ const PAY_RATE = /(?:\$|â‚¹|rs\.?\s?|inr\s?)\d[\d,.]*k?\s*(?:(?:to|-)\s*(?:\$|â‚
 // Oct 7 three tech posts were checked as side hustles over one line of slide
 // text: an Airtel price hike ("Rs 59 per month"), an AI tool's pricing card
 // ("$0 / month") and one tool's own "Start Earning" button in a list of seven.
-export const moneyPost = (claimsData, text, headline = text) => {
+//
+// One mention in the SPEECH is not enough either: creators end tech reels with
+// "want to earn from content creation? check my bio" (Oct 15, Tabby AI). The
+// speech counts with the slides (2+ mentions), or once if it names a pay rate.
+export const moneyPost = (claimsData, text, headline = text, speech = '') => {
   const tools = (claimsData && claimsData.tools) || [];
   const codeAnchored = tools.some((t) => (t.github_repo && t.github_repo !== 'null') || t.pip_command) ||
     printedGithubSlugs(text).length > 0 ||
     /\b(?:pip3?|npm|brew|cargo)\s+install\b|\bnpm i\b/i.test(text);
   if (codeAnchored) return false;
   const said = [headline, (claimsData && claimsData.tech_name) || ''].join(' ');
-  if (MONEY_HINT.test(said) || PAY_RATE.test(said)) return true;
+  if (MONEY_HINT.test(said) || PAY_RATE.test(said) || PAY_RATE.test(speech)) return true;
   // The post's own text only: the model's claims restate the same slide, so
   // one "Start Earning" button counted twice (Oct 7, Glambase).
   const body = String(text || '');
@@ -1863,7 +1870,7 @@ export const analyzeReelApi = async (url) => {
   const modelTechName = claimsData.tech_name;
   log('STAGE 1 CLAIMS', claimsData);
   // Money / side-hustle posts are checked differently - see moneyPost().
-  const money = moneyPost(claimsData, [media.caption, ocrText, transcript].join(' '), [media.caption, transcript].join(' '));
+  const money = moneyPost(claimsData, [media.caption, ocrText, transcript].join(' '), media.caption || '', transcript);
   const platforms = money ? moneyPlatforms(claimsData) : [];
   // Not a tech or money post (Oct 10: friends ran dating, comics, fitness,
   // diabetes and shopping reels; the tech rules called a comic-character post
