@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
 
 const STORAGE_KEYS = {
   REELS: '@tech_fact_checker_reels',
@@ -6,12 +7,19 @@ const STORAGE_KEYS = {
   SETTINGS: '@tech_fact_checker_settings',
 };
 
+// Every check stayed forever and the app's storage only grew (Oct 21). Keep
+// the newest 100; older ones go with their AI chats.
+const MAX_REELS = 100;
+
 export const saveReelResult = async (result) => {
   try {
     const existing = await getAllReels();
     const filtered = existing.filter((r) => r.reelId !== result.reelId);
-    const updated = [{ ...result, savedAt: result.savedAt || Date.now() }, ...filtered];
+    const all = [{ ...result, savedAt: result.savedAt || Date.now() }, ...filtered];
+    const updated = all.slice(0, MAX_REELS);
     await AsyncStorage.setItem(STORAGE_KEYS.REELS, JSON.stringify(updated));
+    const dropped = all.slice(MAX_REELS).map((r) => `${STORAGE_KEYS.CHAT_PREFIX}${r.reelId}`);
+    if (dropped.length) await AsyncStorage.multiRemove(dropped);
   } catch (e) {
     console.error('Failed to save reel:', e);
   }
@@ -41,9 +49,17 @@ export const deleteReelById = async (reelId) => {
     const existing = await getAllReels();
     const updated = existing.filter((r) => r.reelId !== reelId);
     await AsyncStorage.setItem(STORAGE_KEYS.REELS, JSON.stringify(updated));
+    await AsyncStorage.removeItem(`${STORAGE_KEYS.CHAT_PREFIX}${reelId}`);
   } catch (e) {
     console.error('Failed to delete reel:', e);
   }
+};
+
+// Settings > Clear history: every check, every AI chat, the NEW badges.
+export const clearAllHistory = async () => {
+  const keys = await AsyncStorage.getAllKeys();
+  const chats = keys.filter((k) => k.startsWith(STORAGE_KEYS.CHAT_PREFIX));
+  await AsyncStorage.multiRemove([STORAGE_KEYS.REELS, UNSEEN_RESULTS_KEY, ...chats]);
 };
 
 export const saveChatMessage = async (reelId, message) => {
@@ -158,5 +174,35 @@ export const getApiLimits = async () => {
     return json ? JSON.parse(json) : null;
   } catch (e) {
     return null;
+  }
+};
+
+// Debug builds: what the app's storage holds, printed to Metro at launch, so
+// the cleanup (old update APKs, the 100-check cap) can be checked (Oct 21).
+export const logStorageUsage = async () => {
+  if (!__DEV__) return;
+  try {
+    const mb = (b) => (b / 1048576).toFixed(2) + ' MB';
+    const lines = [];
+    for (const [label, dir] of [['files', FileSystem.documentDirectory], ['cache', FileSystem.cacheDirectory]]) {
+      let total = 0;
+      const items = [];
+      for (const n of await FileSystem.readDirectoryAsync(dir)) {
+        const info = await FileSystem.getInfoAsync(dir + n, { size: true });
+        total += info.size || 0;
+        items.push([n, info.size || 0]);
+      }
+      items.sort((a, b) => b[1] - a[1]);
+      lines.push(label + ': ' + mb(total) + ' | ' + items.slice(0, 6).map(([n, b]) => n + ' ' + mb(b)).join(', '));
+    }
+    const keys = await AsyncStorage.getAllKeys();
+    const pairs = await AsyncStorage.multiGet(keys);
+    const kb = pairs.reduce((t, [, v]) => t + (v ? v.length : 0), 0) / 1024;
+    const reels = await getAllReels();
+    const chats = keys.filter((k) => k.startsWith(STORAGE_KEYS.CHAT_PREFIX)).length;
+    lines.push('saved data: ' + kb.toFixed(0) + ' KB | checks ' + reels.length + ', AI chats ' + chats);
+    console.log('\n===== ASSAY STORAGE =====\n' + lines.join('\n'));
+  } catch (e) {
+    console.log('Storage report failed: ' + e.message);
   }
 };

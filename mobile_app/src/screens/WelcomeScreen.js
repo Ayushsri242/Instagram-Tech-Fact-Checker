@@ -133,7 +133,12 @@ export default function WelcomeScreen({ navigation, route }) {
     }
   };
 
+  // Android 13+ blocks this permission for apps installed from a file
+  // ("App was denied access"). After the first try, show how to unlock it:
+  // the App info ⋮ menu only appears once the user has hit the block (Oct 21).
+  const [overlayTried, setOverlayTried] = useState(false);
   const openOverlaySettings = () => {
+    setOverlayTried(true);
     TechFactChecker.openOverlaySettings().catch(() => {});
   };
 
@@ -288,6 +293,17 @@ export default function WelcomeScreen({ navigation, route }) {
               >
                 <Text style={styles.btnText}>{permState.overlay ? 'Granted ✓' : 'Grant Permission'}</Text>
               </TouchableOpacity>
+              {overlayTried && !permState.overlay && (
+                <View style={styles.helpBox}>
+                  <Text style={styles.helpTitle}>Blocked by Android? ("App was denied access")</Text>
+                  <Text style={styles.helpStep}>1. Tap Open App info below.</Text>
+                  <Text style={styles.helpStep}>2. Tap ⋮ (top right) → Allow restricted settings, then confirm with your PIN.</Text>
+                  <Text style={styles.helpStep}>3. Come back, tap Grant Permission again, find Assay in the list and turn it on.</Text>
+                  <TouchableOpacity style={styles.helpBtn} onPress={() => Linking.openSettings().catch(() => {})}>
+                    <Text style={styles.helpBtnText}>Open App info</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
 
             {/* OPTIONAL */}
@@ -379,6 +395,11 @@ const styles = StyleSheet.create({
   mandatoryBadge: { color: colors.error || '#f87171', fontSize: 12, fontWeight: 'normal' },
   optionalBadge: { color: colors.textMuted, fontSize: 12, fontWeight: 'normal' },
   cardDesc: { color: colors.textSecondary, fontSize: 13, marginBottom: 12 },
+  helpBox: { marginTop: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.cardBorder, backgroundColor: colors.surfaceLight },
+  helpTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: 'bold', marginBottom: 8 },
+  helpStep: { color: colors.textSecondary, fontSize: 13, marginBottom: 6 },
+  helpBtn: { marginTop: 6, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.accentCyan, alignItems: 'center' },
+  helpBtnText: { color: colors.accentCyan, fontSize: 15, fontWeight: 'bold' },
   actionBtn: { backgroundColor: colors.accentCyan, padding: 12, borderRadius: 8, alignItems: 'center' },
   restoreHint: { color: colors.textMuted, fontSize: 12, marginTop: 2, textAlign: 'center' },
   restoreBtn: { marginTop: 10, padding: 6, alignItems: 'center' },

@@ -72,6 +72,13 @@ const cell = (v) => {
 };
 
 export const logRun = async (fields) => {
+  // Release builds: the Sheet gets the row (remoteLog.js). The local file only
+  // grew, 10-30 KB per check, with nothing in the app to read it (Oct 21).
+  if (!__DEV__) {
+    sendRunRow(COLUMNS, fields);
+    clearRunLog();
+    return;
+  }
   try {
     const header = COLUMNS.join(',');
     const line = COLUMNS.map((c) => cell(fields[c])).join(',');
@@ -128,6 +135,7 @@ export const readRunLog = async () => {
 export const clearRunLog = async () => {
   try {
     await FileSystem.deleteAsync(FILE, { idempotent: true });
+    await FileSystem.deleteAsync(OLD_FILE, { idempotent: true });
   } catch (e) {
     // nothing to clear
   }

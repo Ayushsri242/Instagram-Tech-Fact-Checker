@@ -4,7 +4,7 @@ import * as FileSystem from 'expo-file-system';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { setOfflineMode } from './src/services/storage';
+import { setOfflineMode, logStorageUsage } from './src/services/storage';
 import { startBubbleQueue, takePendingReels } from './src/services/bubbleQueue';
 import { checkForUpdates } from './src/services/updater';
 import { ensureKeyBackup } from './src/services/secrets';
@@ -31,6 +31,7 @@ export default function App() {
   // mount, which on a first launch is only after the whole Welcome flow.
   useEffect(() => {
     checkForUpdates();
+    logStorageUsage();
     // A key saved before the Downloads backup existed gets one now.
     ensureKeyBackup();
   }, []);
