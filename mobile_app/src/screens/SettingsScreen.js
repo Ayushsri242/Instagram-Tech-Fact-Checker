@@ -8,6 +8,7 @@ import { isGroqKey } from '../services/api';
 import { readRunLog, readOldRunLog, clearRunLog, RUN_LOG_PATH } from '../services/runlog';
 import { checkForUpdates, currentVersion } from '../services/updater';
 import { getShareLogs, setShareLogs } from '../services/remoteLog';
+import { clearAllHistory } from '../services/storage';
 
 export default function SettingsScreen({ navigation }) {
   const [groqApiKey, setGroqApiKey] = useState('');
@@ -273,6 +274,28 @@ export default function SettingsScreen({ navigation }) {
         </View>
       </View>
 
+      <View style={styles.card}>
+        <Text style={styles.title}>Storage</Text>
+        <Text style={styles.desc}>
+          Assay keeps your latest 100 checks and their AI chats. Clear them all to free space.
+        </Text>
+        <TouchableOpacity
+          style={styles.clearBtn}
+          onPress={() => Alert.alert('Clear history?', 'All checks and AI chats will be deleted. This cannot be undone.', [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Clear',
+              style: 'destructive',
+              onPress: () => clearAllHistory()
+                .then(() => Alert.alert('Cleared', 'History and AI chats were deleted.'))
+                .catch((e) => Alert.alert('Could not clear', e.message)),
+            },
+          ])}
+        >
+          <Text style={styles.btnText}>Clear history & AI chats</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Developer builds only: the local CSV, for scoring a batch over adb. */}
       {__DEV__ && (
       <>
@@ -339,4 +362,5 @@ const styles = StyleSheet.create({
   restoreText: { color: colors.accentCyan, fontSize: 14, textDecorationLine: 'underline' },
   deleteBtn: { backgroundColor: colors.error, padding: 14, borderRadius: 8, flex: 1, alignItems: 'center' },
   btnText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
+  clearBtn: { backgroundColor: colors.verdictFake, padding: 14, borderRadius: 8, alignItems: 'center' },
 });

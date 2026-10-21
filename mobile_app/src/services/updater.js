@@ -46,9 +46,25 @@ let inFlight = null;
 
 // Returns { status: 'available' | 'latest' | 'none' | 'error' | 'downloading', version }.
 // The Settings button shows it; the launch check ignores it.
+// Each update APK (~25 MB) stayed in the app's files after installing, so the
+// app grew by one APK per update (Oct 21). Runs at launch, when any earlier
+// install is long finished.
+const deleteOldUpdates = async () => {
+  try {
+    const dir = FileSystem.documentDirectory;
+    const names = await FileSystem.readDirectoryAsync(dir);
+    for (const n of names) {
+      if (/^update-.*\.apk$/.test(n)) await FileSystem.deleteAsync(dir + n, { idempotent: true });
+    }
+  } catch (e) {
+    // nothing to clean
+  }
+};
+
 export const checkForUpdates = () => {
   // A debug build is stamped with an older version and is signed differently:
   // it kept offering the release "update", which cannot install over it.
+  if (progress === null && !inFlight) deleteOldUpdates();
   if (__DEV__) return Promise.resolve({ status: 'latest', version: currentVersion() + ' (debug build)' });
   if (progress !== null) return Promise.resolve({ status: 'downloading', version: null });
   if (!inFlight) inFlight = runCheck().finally(() => { inFlight = null; });
