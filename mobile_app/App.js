@@ -16,6 +16,8 @@ import ChatScreen from './src/screens/ChatScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import WelcomeScreen, { PERMISSIONS_DONE_KEY } from './src/screens/WelcomeScreen';
 import { colors } from './src/theme/colors';
+import WhatsNewModal from './src/components/WhatsNewModal';
+import { getUnseenWhatsNew, markWhatsNewSeen } from './src/services/whatsNew';
 
 const Stack = createNativeStackNavigator();
 
@@ -31,6 +33,11 @@ export default function App() {
   // Read before the navigator mounts so the first frame is the right screen. A
   // deep link from a notification still wins - linking overrides this.
   const [firstRoute, setFirstRoute] = useState(null);
+  // "What's new" once after an update (services/whatsNew.js).
+  const [whatsNew, setWhatsNew] = useState(null);
+  useEffect(() => {
+    getUnseenWhatsNew().then(setWhatsNew);
+  }, []);
   // Check for an update the moment the app opens. It used to wait for Home to
   // mount, which on a first launch is only after the whole Welcome flow.
   useEffect(() => {
@@ -77,6 +84,13 @@ export default function App() {
   return (
     <NavigationContainer linking={linking}>
       <StatusBar style="light" backgroundColor={colors.background} />
+      <WhatsNewModal
+        notes={whatsNew}
+        onClose={() => {
+          setWhatsNew(null);
+          markWhatsNewSeen();
+        }}
+      />
       <Stack.Navigator
         initialRouteName={firstRoute}
         screenOptions={{
