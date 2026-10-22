@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Quick Settings tile icon: a magnifier with a tick. Android tints it, so one colour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M10,2a8,8 0,1 0,4.9 14.3l5.4,5.4 1.4,-1.4 -5.4,-5.4A8,8 0,0 0,10 2zM10,4a6,6 0,1 1,0 12a6,6 0,0 1,0 -12z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M8.9,12.6l-2.3,-2.3 1.1,-1.1 1.2,1.2 3.3,-3.3 1.1,1.1z" />
+</vector>

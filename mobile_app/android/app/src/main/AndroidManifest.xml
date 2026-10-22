@@ -24,6 +24,15 @@
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
     
     <service android:name="com.techfactchecker.app.domain.FloatingBubbleService" android:enabled="true" android:exported="false" android:foregroundServiceType="specialUse" />
+    <!-- The "Assay" tile in the pull-down Quick Settings panel: bubble on/off. -->
+    <service android:name="com.techfactchecker.app.domain.BubbleTileService" android:exported="true" android:label="Assay" android:icon="@drawable/ic_tile_assay" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+      <intent-filter>
+        <action android:name="android.service.quicksettings.action.QS_TILE"/>
+      </intent-filter>
+      <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true"/>
+    </service>
+    <!-- Bubble tap with the app closed: runs the check's JS in the background. -->
+    <service android:name="com.techfactchecker.app.domain.BubbleTaskService" android:exported="false" />
     <!-- Restarts the bubble after an app update or a phone restart. -->
     <receiver android:name="com.techfactchecker.app.domain.SystemEventsReceiver" android:exported="true">
       <intent-filter>

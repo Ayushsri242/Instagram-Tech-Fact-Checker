@@ -5,7 +5,8 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { setOfflineMode, logStorageUsage } from './src/services/storage';
-import { startBubbleQueue, takePendingReels } from './src/services/bubbleQueue';
+import { AppRegistry } from 'react-native';
+import { startBubbleQueue, takePendingReels, waitUntilIdle } from './src/services/bubbleQueue';
 import { checkForUpdates } from './src/services/updater';
 import { ensureKeyBackup } from './src/services/secrets';
 import HomeScreen from './src/screens/HomeScreen';
@@ -21,6 +22,9 @@ const Stack = createNativeStackNavigator();
 // Started when the JS engine loads, not when a screen mounts: the bubble must
 // keep working after the user leaves the app (Oct 8, stuck-orange bubble).
 startBubbleQueue();
+// A bubble tap with the app closed loads this JS in the background
+// (BubbleTaskService, Oct 22); the line above already picks up the saved link.
+AppRegistry.registerHeadlessTask('AssayBubbleTask', () => waitUntilIdle);
 
 export default function App() {
   // First launch shows the permissions screen; after that, straight to Home.
