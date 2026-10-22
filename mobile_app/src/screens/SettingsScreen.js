@@ -9,12 +9,15 @@ import { readRunLog, readOldRunLog, clearRunLog, RUN_LOG_PATH } from '../service
 import { checkForUpdates, currentVersion } from '../services/updater';
 import { getShareLogs, setShareLogs } from '../services/remoteLog';
 import { clearAllHistory } from '../services/storage';
+import { WHATS_NEW } from '../services/whatsNew';
+import WhatsNewModal from '../components/WhatsNewModal';
 
 export default function SettingsScreen({ navigation }) {
   const [groqApiKey, setGroqApiKey] = useState('');
   const [hasGroqApiKey, setHasGroqApiKey] = useState(false);
   const [runLogRows, setRunLogRows] = useState(0);
   const [updateStatus, setUpdateStatus] = useState('');
+  const [showWhatsNew, setShowWhatsNew] = useState(false);
   const [shareLogs, setShareLogsState] = useState(true);
 
   useEffect(() => {
@@ -252,6 +255,17 @@ export default function SettingsScreen({ navigation }) {
             <Text style={styles.btnText}>Replay Tour</Text>
           </TouchableOpacity>
         </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.title}>What's New</Text>
+        <Text style={styles.desc}>See what changed in the latest update.</Text>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity style={styles.downloadBtn} onPress={() => setShowWhatsNew(true)}>
+            <Text style={styles.btnText}>What's New</Text>
+          </TouchableOpacity>
+        </View>
+        <WhatsNewModal notes={showWhatsNew ? WHATS_NEW[0] : null} onClose={() => setShowWhatsNew(false)} />
       </View>
 
       <View style={styles.card}>
