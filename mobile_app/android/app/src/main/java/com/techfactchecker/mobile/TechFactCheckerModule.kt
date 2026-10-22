@@ -423,6 +423,39 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
     }
 
     /**
+     * Android 13+ shows "Add Assay tile to Quick Settings?" with one tap.
+     * Resolves "added", "already", "declined" or "unsupported" (older Android:
+     * the user adds it by editing the tile panel).
+     */
+    @ReactMethod
+    fun requestAddTile(promise: Promise) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
+            promise.resolve("unsupported")
+            return
+        }
+        try {
+            val bar = reactContext.getSystemService(android.app.StatusBarManager::class.java)
+            bar.requestAddTileService(
+                android.content.ComponentName(reactContext, com.techfactchecker.app.domain.BubbleTileService::class.java),
+                "Assay",
+                android.graphics.drawable.Icon.createWithResource(reactContext, com.techfactchecker.mobile.R.drawable.ic_tile_assay),
+                reactContext.mainExecutor
+            ) { result ->
+                promise.resolve(
+                    when (result) {
+                        android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> "added"
+                        android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> "already"
+                        android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_NOT_ADDED -> "declined"
+                        else -> "unsupported"
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            promise.resolve("unsupported")
+        }
+    }
+
+    /**
      * Android stops showing the notification prompt after it has been denied
      * twice, so the only way back is the app's notification settings page.
      */

@@ -71,6 +71,8 @@ class FloatingBubbleService : Service() {
         
         // Remembered so the bubble comes back after an update or a reboot.
         BubbleState.set(this, true)
+        BubbleTileService.bubbleRunning = true
+        BubbleTileService.refresh(this)
         startForegroundService()
         createCloseView()
         createFloatingBubble()
@@ -331,6 +333,7 @@ class FloatingBubbleService : Service() {
                 postReceivedNotification()
                 // Saved first, so the link survives JS not listening yet.
                 PendingReels.add(this, text)
+                startJs()
                 checkPickedUp(text)
                 val intent = Intent("com.techfactchecker.REEL_COPIED")
                 intent.setPackage(packageName)
@@ -363,10 +366,22 @@ class FloatingBubbleService : Service() {
      * offer to open it, instead of an orange bubble that never changes. The
      * link stays saved; the app queues it as soon as it starts.
      */
+    // The check runs in JS; start it in the background if the app is closed
+    // (BubbleTaskService), so the user never has to open Assay.
+    private fun startJs() {
+        try {
+            startService(Intent(this, BubbleTaskService::class.java))
+            com.facebook.react.HeadlessJsTaskService.acquireWakeLockNow(this)
+            FlowLog.i("bubble: background JS task started")
+        } catch (e: Exception) {
+            FlowLog.w("bubble: could not start background JS task: " + e.message)
+        }
+    }
+
     private fun checkPickedUp(url: String) {
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
             if (!PendingReels.contains(this, url)) return@postDelayed
-            FlowLog.i("bubble: link not picked up after 6s - app not running, asking to open it")
+            FlowLog.i("bubble: link not picked up after 15s - background start failed, asking to open it")
             try {
                 val manager = getSystemService(NotificationManager::class.java) ?: return@postDelayed
                 val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply {
@@ -389,7 +404,7 @@ class FloatingBubbleService : Service() {
             } catch (e: Exception) {
                 FlowLog.w("bubble: could not post open-app notification: " + e.message)
             }
-        }, 6000)
+        }, 15000) // the background JS start (BubbleTaskService) needs a few seconds
     }
 
     private fun postReceivedNotification() {
@@ -414,6 +429,8 @@ class FloatingBubbleService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        BubbleTileService.bubbleRunning = false
+        BubbleTileService.refresh(this)
 
         try {
             unregisterReceiver(commandReceiver)

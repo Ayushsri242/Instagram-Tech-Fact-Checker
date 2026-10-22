@@ -105,6 +105,13 @@ export const takePendingReels = () => {
   }).catch(() => {});
 };
 
+// The background task (BubbleTaskService) keeps the app alive until this
+// resolves: the saved link has had time to arrive and nothing is queued or running.
+export const waitUntilIdle = async () => {
+  await sleep(5000);
+  while (isProcessing || queue.length) await sleep(2000);
+};
+
 // Once per JS engine; calling it again (App remounting) does nothing.
 export const startBubbleQueue = () => {
   if (started || !TechFactChecker) return;

@@ -205,6 +205,30 @@ export default function SettingsScreen({ navigation }) {
         </View>
       </View>
 
+      {/* Oct 22: start the bubble from the pull-down panel, like Shazam. */}
+      <View style={styles.card}>
+        <Text style={styles.title}>Quick Settings Tile</Text>
+        <Text style={styles.desc}>
+          Swipe down from the top of the screen and tap the Assay tile to turn the
+          bubble on or off, without opening the app.
+        </Text>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={styles.downloadBtn}
+            onPress={async () => {
+              const r = await NativeModules.TechFactChecker.requestAddTile().catch(() => 'unsupported');
+              if (r === 'added' || r === 'already') {
+                alert('The Assay tile is in your Quick Settings panel.');
+              } else if (r === 'unsupported') {
+                alert('Swipe down twice from the top, tap the pencil (Edit), and drag the Assay tile into your tiles.');
+              }
+            }}
+          >
+            <Text style={styles.btnText}>Add Assay Tile</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
       <View style={styles.card}>
         <Text style={styles.title}>How to Use Assay</Text>
         <Text style={styles.desc}>
