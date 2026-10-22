@@ -1,10 +1,14 @@
 package com.techfactchecker.app.domain
 
+import android.app.ActivityManager
 import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
@@ -33,24 +37,63 @@ class BubbleTileService : TileService() {
 
     override fun onStartListening() {
         super.onStartListening()
+        val on = isRunning()
+        FlowLog.init(this)
+        FlowLog.i("tile: panel open, bubble " + (if (on) "on" else "off"))
+        show(on)
+    }
+
+    // Oct 22 test: the tile stayed grey with the bubble on (the flag alone was
+    // stale), so ask Android whether the bubble service is actually running.
+    private fun isRunning(): Boolean = try {
+        @Suppress("DEPRECATION")
+        getSystemService(ActivityManager::class.java).getRunningServices(50)
+            .any { it.service.className == FloatingBubbleService::class.java.name }
+    } catch (e: Exception) {
+        bubbleRunning
+    }
+
+    private fun show(on: Boolean) {
         val tile = qsTile ?: return
-        tile.state = if (bubbleRunning) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        tile.state = if (on) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = if (bubbleRunning) "Bubble on" else "Bubble off"
+            tile.subtitle = if (on) "Bubble on" else "Bubble off"
         }
         tile.updateTile()
+    }
+
+    // The bubble only shows once the panel closes, so a tap needs its own
+    // signal or users tap again and again (Oct 22 test): a tick plus the tile
+    // changing at once.
+    private fun buzz() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        try {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                getSystemService(VibratorManager::class.java).defaultVibrator
+            } else {
+                getSystemService(Vibrator::class.java)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK))
+            } else {
+                vibrator.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
+            }
+        } catch (e: Exception) {
+            // no vibrator; the tile change is enough
+        }
     }
 
     override fun onClick() {
         super.onClick()
         FlowLog.init(this)
+        buzz()
         val bubble = Intent(this, FloatingBubbleService::class.java)
-        if (bubbleRunning) {
+        if (isRunning()) {
             FlowLog.i("tile: bubble off")
             BubbleState.set(this, false)
             stopService(bubble)
             bubbleRunning = false
-            onStartListening()
+            show(false)
             return
         }
         // No overlay permission: open the app, whose setup screen asks for it.
@@ -61,6 +104,7 @@ class BubbleTileService : TileService() {
         }
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(bubble) else startService(bubble)
+            show(true)
             FlowLog.i("tile: bubble on")
         } catch (e: Exception) {
             // Android may refuse a background start; the app's own button still works.
