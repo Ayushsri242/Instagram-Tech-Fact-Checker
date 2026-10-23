@@ -815,6 +815,61 @@ export const moneyPost = (claimsData, text, headline = text, speech = '') => {
   return hits >= 2;
 };
 
+// ---- News mode (Oct 23) ----
+//
+// A security-incident / tech-news reel is about an EVENT, not a tool. The PHP
+// "PHP2Shell" reel (two critical CVEs, patched Oct 21, found with AI) went down
+// the tool path: it searched "Cloudflare cloudflare.com" and "Qualys
+// qualys.com", read 4 pages (none of them news), and the judge - whose
+// knowledge predates the event - called "AI caught the bug" unsupported and the
+// verdict MISLEADING, twice. Every core claim was true; only "half the internet
+// was down" and "WordPress runs half the internet" were inflated.
+//
+// A CVE id is enough; otherwise 3 different incident words. Code-anchored
+// posts (a repo, an install command) stay tech posts. Checked on 173 logged
+// posts: none switched mode.
+const CVE_ID = /\bCVE-\d{4}-\d{3,}\b/gi;
+const NEWS_HINT = /\b(?:vulnerabilit(?:y|ies)|zero[- ]day|0-day|exploit(?:ed|s)?|data breach|breached|hacked|hackers?|ransomware|malware|remote code execution|RCE|security (?:update|patch|release|flaw|bug)|emergency (?:update|patch)|patched|leaked|outage|went down|CVSS)\b/gi;
+export const newsPost = (claimsData, text) => {
+  const tools = (claimsData && claimsData.tools) || [];
+  const codeAnchored = tools.some((t) => (t.github_repo && t.github_repo !== 'null') || t.pip_command) ||
+    printedGithubSlugs(text).length > 0 ||
+    /\b(?:pip3?|npm|brew|cargo)\s+install\b|\bnpm i\b/i.test(text);
+  if (codeAnchored) return false;
+  const body = String(text || '');
+  if ((body.match(CVE_ID) || []).length) return true;
+  return new Set((body.match(NEWS_HINT) || []).map((m) => m.toLowerCase())).size >= 3;
+};
+
+// Searches about the EVENT: each CVE id, the event name, then each claim next
+// to the event name, then the model's own queries without the "<product>
+// <domain>" homepage lookups that filled the PHP run.
+const newsQueries = (claimsData, text) => {
+  const name = String((claimsData && claimsData.tech_name) || '').trim();
+  const out = [];
+  const add = (q) => {
+    q = String(q || '').replace(/\s+/g, ' ').trim();
+    if (q.length >= 4 && out.length < 10 && !out.some((x) => x.toLowerCase() === q.toLowerCase())) out.push(q);
+  };
+  const cves = [...new Set((String(text || '').match(CVE_ID) || []).map((c) => c.toUpperCase()))];
+  for (const c of cves.slice(0, 2)) add(c);
+  if (name) add(name + ' news');
+  for (const c of ((claimsData && claimsData.claimed_features) || []).slice(0, 5)) {
+    const words = String(c).split(/\s+/).slice(0, 10).join(' ');
+    add((name && !words.toLowerCase().includes(name.toLowerCase()) ? name + ' ' : '') + words);
+  }
+  for (const q of (claimsData && claimsData.search_queries) || []) {
+    if (/\s(?:official|[\w-]+\.(?:com|org|net|io|ai|dev))$/i.test(String(q))) continue;
+    add(q);
+  }
+  return out;
+};
+
+// News articles, advisories and vendor blog posts, not homepages or login
+// pages: a dated path, or a news/blog/security/advisory section.
+const NEWS_URL = /\/20\d\d\/|\/(?:news|blog|blogs|security|advisor(?:y|ies)|article|articles|press|research|threat|vulnerabilit)/i;
+const isNewsRow = (row) => NEWS_URL.test(String(row && row.url || '')) || /CVE-\d{4}-\d{3,}/i.test(String(row && row.title || ''));
+
 // The platforms the post names, in the order it names them.
 const moneyPlatforms = (claimsData) => {
   const out = [];
@@ -1051,6 +1106,8 @@ const rankEvidence = (evidence, techName, tools, pinned = [], opts = {}) => {
     // not when the domain IS the subject, e.g. nanobot.wiki.
     if (!onTopic && /^https?:\/\/[^/]+\/?$/.test(item.url || '')) s -= 8;
     if ((item.pagePreview || '').length > 0) s += 3;
+    // News mode: articles and advisories about the event outrank homepages.
+    if (opts.news && isNewsRow(item)) s += 30;
     return s;
   };
 
@@ -1156,7 +1213,8 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     'Title: ' + (item.title || ''),
     'URL: ' + (item.url || ''),
     'Snippet: ' + (item.snippet || '').slice(0, 300),
-    'Page Context: ' + extractClaimAnchored(item.pagePreview, MAX_PAGE_PREVIEW),
+    // News articles carry the facts in their body; give them more room.
+    'Page Context: ' + extractClaimAnchored(item.pagePreview, post.news && isNewsRow(item) ? 700 : MAX_PAGE_PREVIEW),
   ].join('\n')).join('\n\n');
   transcript = (transcript || '').slice(0, MAX_TRANSCRIPT);
   ocrText = (ocrText || '').slice(0, MAX_OCR);
@@ -1186,6 +1244,17 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
       '5. TRUE: the platforms are operating and users report pay matching the claim.',
       'Judge by the TYPICAL user report, not the best or worst single review. If the evidence has no pay figures at all for a platform, do not guess: say so, and decide from the platforms that do have them.',
       'List each platform in tools (status "verified" only if the evidence shows it operating today). Gotchas must be about money: real pay rates, fees, payout minimums, country limits, tests. Never cite a GitHub repository for a money post.'] : []),
+    ...(post.news ? ['',
+      'THIS IS A TECH NEWS / SECURITY POST about an event: ' + (claimsData.tech_name || 'a recent incident') + '.',
+      'The event may be NEWER than your training data. Never call a claim false, fabricated or unsupported from your own memory. Use the evidence.',
+      'A claim the evidence does not mention is "not confirmed" - say so neutrally. It is not a gotcha and does not lower the verdict on its own.',
+      'For this post these verdict rules replace the tool rules below. Go down the list; the FIRST rule that matches is the verdict:',
+      '1. FAKE: the evidence shows the event did not happen, or is a hoax or a recycled old story presented as new.',
+      '2. MISLEADING: the evidence contradicts the MAIN claim (wrong product, wrong versions, wrong fix), or the advice would leave the viewer worse off.',
+      "3. HYPE: the event is real, but the post's MAIN message is an impact the evidence shows is wildly inflated.",
+      '4. PARTIALLY_TRUE: the event and the advice match the evidence, but some side details are exaggerated or wrong (numbers, market shares, scale of damage).',
+      '5. TRUE: the main claims match the evidence and nothing material is exaggerated.',
+      'factual_reality: say what actually happened according to the evidence, then which parts of the post are exaggerated. Gotchas: only what the evidence shows is wrong, or what the viewer must do (update, patch, which versions). Tools: the affected software and the vendors the post names; "verified" if the evidence shows them.'] : []),
     '',
     'Web Evidence Gathered:', evidenceText,
     '',
@@ -1730,7 +1799,7 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
 // handle as the product; a 7-slide carousel read 2 slides and then denied a
 // real repo existed; evidence rows that scraped to nothing produced a report
 // reasoning from search-result marketing.
-export const deriveConfidence = ({ subjectNamed, coverage, toolsReal, rowsWithText, hasText, searchFailed }) => {
+export const deriveConfidence = ({ subjectNamed, coverage, toolsReal, rowsWithText, hasText, searchFailed, newsRead = null }) => {
   let score = 95;
   const why = [];
   // The web search itself failed (every engine blocked): the verdict rests on
@@ -1748,6 +1817,9 @@ export const deriveConfidence = ({ subjectNamed, coverage, toolsReal, rowsWithTe
   }
   if (rowsWithText < 6) { score -= 10; why.push('only ' + rowsWithText + ' sources carried page text'); }
   if (!hasText) { score -= 15; why.push('little readable text in the post'); }
+  // A news post judged without reading the news (the PHP run read 0 articles
+  // and still scored 85).
+  if (newsRead !== null && newsRead < 2) { score -= 15; why.push('only ' + newsRead + ' news articles read'); }
   return { score: Math.max(10, Math.min(95, score)), why };
 };
 
@@ -1872,13 +1944,17 @@ export const analyzeReelApi = async (url) => {
   // Money / side-hustle posts are checked differently - see moneyPost().
   const money = moneyPost(claimsData, [media.caption, ocrText, transcript].join(' '), media.caption || '', transcript);
   const platforms = money ? moneyPlatforms(claimsData) : [];
+  // Security incidents and tech news are checked as events - see newsPost().
+  const news = !money && newsPost(claimsData, [media.caption, ocrText, transcript].join(' '));
+  // A news post names products (PHP, WordPress, Cloudflare...) but is not a list of them.
+  const listPost = !money && !news && isListPost(modelTechName, claimsData.tools);
   // Not a tech or money post (Oct 10: friends ran dating, comics, fitness,
   // diabetes and shopping reels; the tech rules called a comic-character post
   // "Misleading"). Stop here: no search, no judge, ~5k tokens saved. Measured
   // on 25 saved reels: 10 of 11 non-tech caught, 0 of 14 tech/money reels
   // wrongly marked. Code still wins: a repo, an install command or earning
   // language means the post is checked whatever the label says.
-  const codeSaysTech = money ||
+  const codeSaysTech = money || news ||
     (claimsData.tools || []).some((t) => t && ((t.github_repo && t.github_repo !== 'null') || t.pip_command)) ||
     printedGithubSlugs(ocrText).length > 0 ||
     /\b(?:pip3?|npm|brew|cargo)\s+install\b|\bnpm i\b/i.test(ocrText + ' ' + transcript);
@@ -1922,8 +1998,11 @@ export const analyzeReelApi = async (url) => {
   }
   const queries = money
     ? moneyQueries(platforms, claimsData, [media.caption, ocrText, transcript].join(' '))
-    : listQueries(claimsData, isListPost(modelTechName, claimsData.tools));
+    : news
+      ? newsQueries(claimsData, [media.caption, ocrText, transcript].join(' '))
+      : listQueries(claimsData, listPost);
   if (money) log('MONEY MODE', { platforms });
+  if (news) log('NEWS MODE', { event: modelTechName });
   log('STAGE 2 QUERIES', queries);
 
   // Structured lookups and web search are independent, so run them together.
@@ -1958,8 +2037,12 @@ export const analyzeReelApi = async (url) => {
   });
 
   // Rescue the rows that scraped to nothing, before ranking picks the 12.
-  // Money posts live or die on what users report, so read more of it.
-  await fillMissingPageText(evidence, money ? 4 : 2);
+  // Money posts live or die on what users report, so read more of it. News
+  // posts live on the articles: read those first (the PHP run read none).
+  await fillMissingPageText(
+    news ? [...evidence].sort((a, b) => Number(isNewsRow(b)) - Number(isNewsRow(a))) : evidence,
+    money || news ? 4 : 2
+  );
   lap('pagefill');
 
   // Decide the subject in code before the model writes anything about it.
@@ -1970,6 +2053,9 @@ export const analyzeReelApi = async (url) => {
   // side-hustle run was titled "gotranscript" after a stranger's repo.
   const subject = money
     ? { name: moneyTitle(platforms, modelTechName, media.author), why: 'money post: titled from its platforms (' + platforms.join(', ') + ')' }
+    // The event is the subject, not a product it mentions (the PHP run was titled "WordPress").
+    : news
+    ? { name: modelTechName || undefined, why: 'news post: titled from the event' }
     : pickSubject(claimsData.tech_name, evidence, ocrText, {
       author: media.author,
       caption: media.caption,
@@ -1989,7 +2075,7 @@ export const analyzeReelApi = async (url) => {
   const pinned = [...new Set([subject.slug, ...printedGithubSlugs(ocrText)].filter(Boolean))];
   const kept = money
     ? rankMoneyEvidence(evidence, platforms)
-    : rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned, { list: isListPost(modelTechName, claimsData.tools) });
+    : rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned, { list: listPost, news });
   if (pinned.length) log('PINNED EVIDENCE', pinned);
   // Wait for the main judge's minute rather than hand the verdict to the
   // backup: on Oct 7, 5 of 13 back-to-back reels were judged by the backup
@@ -2001,21 +2087,22 @@ export const analyzeReelApi = async (url) => {
     await sleep(judgeWait);
     setJobNote(null);
   }
-  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage, kept, { author: media.author, money, platforms });
+  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage, kept, { author: media.author, money, platforms, news });
   lap('synthesis');
   log('STAGE 3 RAW REPORT', report);
   const verdictRaw = report.verdict;
-  const normalized = normalizeReport(report, evidence, { money, list: isListPost(modelTechName, claimsData.tools) });
+  const normalized = normalizeReport(report, evidence, { money, list: listPost });
   normalized.confidence = deriveConfidence({
     // A list of platforms has no single subject to confirm - not a weakness.
     // A list post ("22 NLP techniques", "top 5 recruiters") has no single
     // subject to confirm; being one is not a weakness of the run.
-    subjectNamed: Boolean(subject.name) || money || isListPost(modelTechName, claimsData.tools),
+    subjectNamed: Boolean(subject.name) || money || news || listPost,
     coverage,
     toolsReal: normalized.toolsReal,
     rowsWithText: kept.filter((e) => (e.pagePreview || '').length > 0).length,
     hasText: (ocrText.length + transcript.length) > 200,
     searchFailed,
+    newsRead: news ? kept.filter((e) => isNewsRow(e) && (e.pagePreview || '').length > 0).length : null,
   });
   log('CONFIDENCE', normalized.confidence);
 
@@ -2071,10 +2158,10 @@ export const analyzeReelApi = async (url) => {
   // "Prints a repo link" only marks THE subject when the post prints one link:
   // a "10 GitHub repos" post prints all ten and was titled "searxng" (Oct 7).
   const onePrintedRepo = /slug printed/.test(subject.why || '') && printedGithubSlugs(ocrText).length <= 1;
-  const displayTitle = (!money && isListPost(modelTechName, claimsData.tools) && !onePrintedRepo
+  const displayTitle = (listPost && !onePrintedRepo
     ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
     subject.name || fallbackName ||
-    (isListPost(modelTechName, claimsData.tools) ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
+    (listPost ? listTitle(modelTechName, claimsData.tools, media.author) : null) ||
     'Unidentified';
 
   await logRun({
@@ -2140,7 +2227,7 @@ export const analyzeReelApi = async (url) => {
     ocrText,
     caption: media.caption || '',
     author: media.author || '',
-    postMode: money ? 'money' : 'tech',
+    postMode: money ? 'money' : news ? 'news' : 'tech',
     models: describeModelsUsed(),
     tokens: describeRunTokens(),
     search: searchHealth,

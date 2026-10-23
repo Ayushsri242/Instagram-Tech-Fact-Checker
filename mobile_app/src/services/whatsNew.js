@@ -8,9 +8,11 @@ import { PERMISSIONS_DONE_KEY } from '../screens/WelcomeScreen';
 // the first time the app opens after updating. No new entry = no popup.
 export const WHATS_NEW = [
   {
-    id: '2026-10-22',
+    // New id on Oct 23 (news line added), so phones that saw the Oct 22 notes see it again.
+    id: '2026-10-23',
     title: "What's new in Assay",
     items: [
+      'Reels about hacks, security bugs and tech news are now checked against the latest news articles.',
       'Start the bubble from anywhere: swipe down from the top of your screen and tap the Assay tile. Add it from Settings.',
       'Checks now run even when Assay is closed. Copy a reel, tap the bubble, and the result arrives as a notification.',
       'The tile buzzes and changes colour when you tap it, so you know the bubble is on.',
