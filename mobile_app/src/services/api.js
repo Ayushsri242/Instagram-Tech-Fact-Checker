@@ -828,17 +828,24 @@ export const moneyPost = (claimsData, text, headline = text, speech = '') => {
 // A CVE id is enough; otherwise 3 different incident words. Code-anchored
 // posts (a repo, an install command) stay tech posts. Checked on 173 logged
 // posts: none switched mode.
+//
+// "Code-anchored" is read from the POST'S OWN TEXT only, not from the model's
+// tool fields. On the two "Black October" posts (Oct 23) the model filled in
+// BerriAI/litellm and "pip install litellm" for a news roundup that printed
+// neither, so both went down the tool path, read product homepages, found no
+// incident reports and called a true post MISLEADING at 95.
 const CVE_ID = /\bCVE-\d{4}-\d{3,}\b/gi;
 const NEWS_HINT = /\b(?:vulnerabilit(?:y|ies)|zero[- ]day|0-day|exploit(?:ed|s)?|data breach|breached|hacked|hackers?|ransomware|malware|remote code execution|RCE|security (?:update|patch|release|flaw|bug)|emergency (?:update|patch)|patched|leaked|outage|went down|CVSS)\b/gi;
 export const newsPost = (claimsData, text) => {
-  const tools = (claimsData && claimsData.tools) || [];
-  const codeAnchored = tools.some((t) => (t.github_repo && t.github_repo !== 'null') || t.pip_command) ||
-    printedGithubSlugs(text).length > 0 ||
+  const codeAnchored = printedGithubSlugs(text).length > 0 ||
     /\b(?:pip3?|npm|brew|cargo)\s+install\b|\bnpm i\b/i.test(text);
   if (codeAnchored) return false;
   const body = String(text || '');
-  if ((body.match(CVE_ID) || []).length) return true;
-  return new Set((body.match(NEWS_HINT) || []).map((m) => m.toLowerCase())).size >= 3;
+  const words = new Set((body.match(NEWS_HINT) || []).map((m) => m.toLowerCase())).size;
+  // A CVE id needs one incident word with it: "22 NLP Techniques" uses
+  // CVE-2026-12345 as a sample entity to extract, with no incident at all.
+  if ((body.match(CVE_ID) || []).length && words >= 1) return true;
+  return words >= 3;
 };
 
 // Searches about the EVENT: each CVE id, the event name, then each claim next
@@ -1284,11 +1291,12 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     '- gotchas: at most 4 items, each one short sentence under 100 characters. Only real blockers, not generic advice.',
     '- tools[].what_it_does: ONE short sentence, under 90 characters.',
     '- tools: ONLY software, platforms, or websites the post tells the viewer to use. Do NOT list generic concepts or section headings as tools.',
+    '- tools[].role: "main" if the post is about this tool, it is new or little-known, or the post tells the viewer to install or use it; every item of a list post is "main". "mention" if it is a well-known product only named in passing (e.g. Node.js, PHP, GitLab in a news roundup).',
     'Ground every tool/platform entry in the evidence above. Set "status" to "verified" if the evidence confirms the GitHub repo OR the official website/platform exists. Set to "not_found" if neither can be found. Never invent a repo, install command, URL, price or hardware requirement.',
     'Prefer the canonical repository over a fork or mirror. If a repo looks like a fork of a more popular project, name the original.',
     '',
     'Return ONLY JSON:',
-    '{"tech_name":"string","verdict":"TRUE","pricing_model":"Open Source or Commercial","github_url":"https://github.com/... or null","factual_reality":"2-4 sentence explanation","claims":["one plain sentence per claim"],"tools":[{"name":"Tool or Website Name","repo":"owner/repo or null","website":"domain.com or null","install":"pip install x or null","what_it_does":"one plain sentence","caveat":"one plain sentence or null","status":"verified"}],"gotchas":["one plain sentence per caveat"]}',
+    '{"tech_name":"string","verdict":"TRUE","pricing_model":"Open Source or Commercial","github_url":"https://github.com/... or null","factual_reality":"2-4 sentence explanation","claims":["one plain sentence per claim"],"tools":[{"name":"Tool or Website Name","repo":"owner/repo or null","website":"domain.com or null","install":"pip install x or null","what_it_does":"one plain sentence","caveat":"one plain sentence or null","status":"verified","role":"main"}],"gotchas":["one plain sentence per caveat"]}',
   ].join('\n');
   return callGroq(apiKey, [
     { role: 'system', content: 'You are a precise, objective AI technical fact checker. Output strictly valid JSON.' },
@@ -1836,6 +1844,7 @@ const normalizeReport = (report, evidence, opts = {}) => {
       whatItDoes: clampSentences(cleanLine(t.what_it_does), 1, 100),
       caveat: cleanLine(t.caveat) || null,
       status: ['verified', 'not_found'].includes(t.status) ? t.status : 'unverified',
+      role: t.role === 'mention' ? 'mention' : 'main',
     }))
     // The model keeps listing non-tools: "Telegram", "WhatsApp", "ZArchitecture"
     // (OCR noise from a heading) and outright inventions. An entry with no repo,
@@ -1844,7 +1853,8 @@ const normalizeReport = (report, evidence, opts = {}) => {
     .filter((t) => t.repo || t.website || t.install || t.status === 'verified')
     // A list post shows every checked item (Oct 9: friends saw "6 of 9"
     // verified on 9-item lists - the other three were cut here, not missing).
-    .slice(0, opts.list ? 15 : 6);
+    // Other posts are cut to 4 cards below, after mentions are moved out.
+    .slice(0, 15);
   // References come from pages we actually fetched, so they cannot be invented.
   const references = [];
   for (const item of evidence || []) {
@@ -1854,7 +1864,7 @@ const normalizeReport = (report, evidence, opts = {}) => {
     }
     if (references.length >= 8) break;
   }
-  return applyEvidenceRules({
+  const out = applyEvidenceRules({
     verdict,
     factualReality: clampSentences(cleanLine(report.factual_reality), 2, 220),
     claims: cleanList(report.claims, 4).map((c) => clampSentences(c, 1, 110)),
@@ -1863,6 +1873,17 @@ const normalizeReport = (report, evidence, opts = {}) => {
     references,
     toolsReal: null,
   }, evidence, report.tech_name, opts);
+  // Cards only for tools that tell the reader something (Oct 23). A news
+  // roundup showed 14 cards, most of them "Node.js is real". Well-known
+  // products named in passing move to "Also mentioned"; toolsReal still counts
+  // every tool. An install command or a missing tool always keeps its card.
+  const keep = (t) => !!t.install || t.status === 'not_found';
+  const ranked = out.tools.filter((t) => t.role === 'main' || keep(t))
+    .sort((a, b) => keep(b) - keep(a));
+  const cards = opts.list ? ranked : ranked.slice(0, 4);
+  out.mentionTools = out.tools.filter((t) => !cards.includes(t));
+  out.tools = out.tools.filter((t) => cards.includes(t));
+  return out;
 };
 
 // Exposed for tools/replay.js, which re-runs recorded runs through the picker
@@ -2117,7 +2138,11 @@ export const analyzeReelApi = async (url) => {
     if (t.name) covered.add(flatKey(t.name));
     if (t.repo) covered.add(flatKey(String(t.repo).split('/').pop()));
   }
-  normalized.otherTools = allClaimedTools
+  const mentioned = (normalized.mentionTools || [])
+    .map((t) => ({ name: t.name, repo: t.repo, description: t.whatItDoes || '' }));
+  for (const t of mentioned) covered.add(flatKey(t.name));
+  delete normalized.mentionTools;
+  normalized.otherTools = mentioned.concat(allClaimedTools
     .filter((t) => {
       const k = flatKey(t.name);
       return k && !covered.has(k);
@@ -2128,7 +2153,7 @@ export const analyzeReelApi = async (url) => {
       // same-name project the search happens to find.
       repo: t.github_repo && t.github_repo !== 'null' ? t.github_repo : null,
       description: t.claim || '',
-    }));
+    })));
 
   // Last resort for the title, and it is still a lookup rather than a guess.
   //

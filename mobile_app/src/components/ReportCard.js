@@ -127,20 +127,16 @@ export default function ReportCard({ report, techName, onAskTool, compact = fals
 
 
       {otherTools.length > 0 && (
-        <Section title="ALSO MENTIONED (TAP TO VERIFY)">
-          {otherTools.map((t, i) => (
-            <TouchableOpacity key={i} style={styles.toolCard} disabled={!onAskTool} onPress={() => onAskTool && onAskTool(t)}>
-              <View style={styles.toolHeader}>
-                <Text style={styles.toolName}>{t.name}</Text>
-                {!!onAskTool && (
-                  <View style={[styles.badge, { borderColor: colors.accentCyan }]}>
-                    <Text style={[styles.badgeText, { color: colors.accentCyan }]}>ASK AI</Text>
-                  </View>
-                )}
-              </View>
-              {!!t.description && <Text style={styles.toolDesc} numberOfLines={3}>{t.description}</Text>}
-            </TouchableOpacity>
-          ))}
+        // One row of name chips, not cards (Oct 23): a news roundup listed 14
+        // tools and the card became a scroll. Tap a chip to ask AI about it.
+        <Section title={onAskTool ? 'ALSO MENTIONED (TAP TO ASK AI)' : 'ALSO MENTIONED'}>
+          <View style={styles.chipRow}>
+            {otherTools.map((t, i) => (
+              <TouchableOpacity key={i} style={styles.chip} disabled={!onAskTool} onPress={() => onAskTool && onAskTool(t)}>
+                <Text style={styles.chipText}>{t.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </Section>
       )}
 
@@ -217,16 +213,16 @@ const styles = StyleSheet.create({
   badge: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 7, paddingVertical: 1 },
   badgeText: { fontSize: 10, fontWeight: '700' },
   toolBody: { color: colors.textPrimary, fontSize: 13, lineHeight: 18, marginTop: 2 },
-  // "Also mentioned" rows. Both styles were referenced but never defined, so the
-  // description fell back to Android's default BLACK text on the dark card.
-  toolCard: {
-    borderLeftWidth: 2,
-    borderLeftColor: colors.cardBorder,
-    paddingLeft: 10,
-    paddingVertical: 2,
-    marginBottom: 10,
+  // "Also mentioned" chips.
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  chip: {
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
   },
-  toolDesc: { color: colors.textSecondary, fontSize: 12.5, lineHeight: 17, marginTop: 3 },
+  chipText: { color: colors.textSecondary, fontSize: 12.5 },
   link: { color: colors.accentCyan, fontSize: 13, marginTop: 4 },
   code: {
     color: colors.textPrimary,
