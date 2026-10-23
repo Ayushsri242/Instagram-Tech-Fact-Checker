@@ -8,6 +8,14 @@ import { PERMISSIONS_DONE_KEY } from '../screens/WelcomeScreen';
 // the first time the app opens after updating. No new entry = no popup.
 export const WHATS_NEW = [
   {
+    id: '2026-10-23b',
+    title: "What's new in Assay",
+    items: [
+      'News posts that name many apps (like a list of hacks) are now checked against the news, not the apps\' homepages.',
+      'Reports are shorter: only the tools that matter get a card. The rest are listed by name under "Also mentioned".',
+    ],
+  },
+  {
     // New id on Oct 23 (news line added), so phones that saw the Oct 22 notes see it again.
     id: '2026-10-23',
     title: "What's new in Assay",
