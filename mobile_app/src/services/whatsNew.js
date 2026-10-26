@@ -8,6 +8,16 @@ import { PERMISSIONS_DONE_KEY } from '../screens/WelcomeScreen';
 // the first time the app opens after updating. No new entry = no popup.
 export const WHATS_NEW = [
   {
+    id: '2026-10-26',
+    title: "What's new in Assay",
+    items: [
+      'New grey verdict "Couldn\'t verify": when Assay finds nothing for or against a post, it says so instead of calling it fake.',
+      'Links printed in a post (GitHub repos, websites) are now opened and read directly.',
+      'Fewer made-up warnings: a warning with a number or a "scam" claim must come from a real source.',
+      'IPO and other finance news posts are checked against the news.',
+    ],
+  },
+  {
     id: '2026-10-23b',
     title: "What's new in Assay",
     items: [
