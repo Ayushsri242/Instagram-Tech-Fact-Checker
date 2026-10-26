@@ -16,6 +16,8 @@ const VERDICT_STYLE = {
   HYPE: { label: 'HYPE', color: '#f97316' },
   MISLEADING: { label: 'MISLEADING', color: '#ef4444' },
   FAKE: { label: 'FAKE', color: '#dc2626' },
+  // Nothing was found for or against the post (Oct 26) - not a verdict against it.
+  UNVERIFIED: { label: 'UNVERIFIED', color: '#94a3b8' },
   UNKNOWN: { label: 'UNKNOWN', color: '#94a3b8' },
 };
 

@@ -7,6 +7,7 @@ const VERDICT_STYLE = {
   HYPE: ['Hype', '#a855f7'],
   MISLEADING: ['Misleading', '#f97316'],
   FAKE: ['Fake', '#ef4444'],
+  UNVERIFIED: ["Couldn't verify", '#94a3b8'],
   FAILED: ["Couldn't check", '#64748B'],
   NOT_TECH: ['Not a tech post', '#64748B'],
 };

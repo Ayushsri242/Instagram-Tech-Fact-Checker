@@ -836,6 +836,7 @@ export const moneyPost = (claimsData, text, headline = text, speech = '') => {
 // incident reports and called a true post MISLEADING at 95.
 const CVE_ID = /\bCVE-\d{4}-\d{3,}\b/gi;
 const NEWS_HINT = /\b(?:vulnerabilit(?:y|ies)|zero[- ]day|0-day|exploit(?:ed|s)?|data breach|breached|hacked|hackers?|ransomware|malware|remote code execution|RCE|security (?:update|patch|release|flaw|bug)|emergency (?:update|patch)|patched|leaked|outage|went down|CVSS)\b/gi;
+const FIN_HINT = /\b(?:IPO|grey market premium|GMP|price band|issue size|allotment|listing (?:date|day|gains?)|anchor investors?|subscribed \d+(?:\.\d+)?x)\b/gi;
 export const newsPost = (claimsData, text) => {
   const codeAnchored = printedGithubSlugs(text).length > 0 ||
     /\b(?:pip3?|npm|brew|cargo)\s+install\b|\bnpm i\b/i.test(text);
@@ -845,7 +846,11 @@ export const newsPost = (claimsData, text) => {
   // A CVE id needs one incident word with it: "22 NLP Techniques" uses
   // CVE-2026-12345 as a sample entity to extract, with no incident at all.
   if ((body.match(CVE_ID) || []).length && words >= 1) return true;
-  return words >= 3;
+  // Finance news (Oct 26): the Jio IPO post went down the tool path, searched
+  // eight bank homepages and was judged against an issue size the model
+  // remembered. Two different IPO terms make it an event.
+  const finance = new Set((body.match(FIN_HINT) || []).map((m) => m.toLowerCase())).size;
+  return words >= 3 || finance >= 2;
 };
 
 // Searches about the EVENT: each CVE id, the event name, then each claim next
@@ -875,7 +880,7 @@ const newsQueries = (claimsData, text) => {
 // News articles, advisories and vendor blog posts, not homepages or login
 // pages: a dated path, or a news/blog/security/advisory section.
 const NEWS_URL = /\/20\d\d\/|\/(?:news|blog|blogs|security|advisor(?:y|ies)|article|articles|press|research|threat|vulnerabilit)/i;
-const isNewsRow = (row) => NEWS_URL.test(String(row && row.url || '')) || /CVE-\d{4}-\d{3,}/i.test(String(row && row.title || ''));
+const isNewsRow = (row) => NEWS_URL.test(String(row && row.url || '')) || /\bCVE-\d{4}-\d{3,}\b/i.test(String(row && row.title || ''));
 
 // The platforms the post names, in the order it names them.
 const moneyPlatforms = (claimsData) => {
@@ -1038,6 +1043,54 @@ const printedGithubSlugs = (ocrText) => {
     }
   }
   return out;
+};
+
+// Websites the post prints ("apply.headlinema.com/apply/...", "oxaam.com",
+// "tabitoken.com"), opened directly by checkPrintedSite (Oct 26). Social,
+// CDN and link-in-bio hosts say nothing about the claim; GitHub has its own
+// check. OCR noise ("careers.ey,com", "hcltech.con") simply does not match.
+const SKIP_HOSTS = /(^|\.)(instagram\.com|fbcdn\.net|facebook\.com|youtube\.com|youtu\.be|tiktok\.com|x\.com|twitter\.com|threads\.net|linktr\.ee|linkedin\.com|github\.com|qithub\.com|9ithub\.io|google\.com|whatsapp\.com|t\.me|telegram\.me|wa\.me|bit\.ly|beehiv\.com|substack\.com)$/i;
+// The caption's hosts first (typed, so spelled right), then the slides' by how
+// often they appear. Dropped: the creator's own watermark site ("gittrend.io"
+// on every frame of a gittrend post), placeholders ("llm-gatewayexample.com"),
+// and OCR fragments of a longer host ("token.com" from "tabitoken.com",
+// "pply.headlinema.com" from "apply.headlinema.com").
+export const printedSites = (caption, ocrText, author = '') => {
+  const re = /\b(?:https?:\/\/)?((?:[a-z0-9][a-z0-9-]{0,62}\.)+(?:com|ai|io|dev|app|co|org|net|in|so|me|xyz|tech|sh|gg|site|online|store|shop))\b(\/[\w\-./%?=&#]*)?/gi;
+  const handle = String(author || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const found = new Map();
+  [[caption, 100], [ocrText, 1]].forEach(([text, weight]) => {
+    for (const m of String(text || '').matchAll(re)) {
+      const host = m[1].toLowerCase().replace(/^www\./, '');
+      const name = host.split('.').slice(0, -1).join('').replace(/[^a-z0-9]/g, '');
+      if (SKIP_HOSTS.test(host) || /^\d/.test(host) || /example/.test(host)) continue;
+      if (handle.length >= 4 && (name.includes(handle) || handle.includes(name))) continue;
+      const path = m[2] && m[2].length > 1 ? m[2].replace(/[.,)]+$/, '') : '';
+      const prev = found.get(host) || { score: 0, path: '' };
+      found.set(host, { score: prev.score + weight, path: prev.path || path });
+    }
+  });
+  const hosts = [...found.keys()];
+  return hosts
+    // A fragment is cut mid-name ("token.com" in "tabitoken.com"); a parent
+    // domain ("xorcise.ai" under "docs.xorcise.ai") is kept.
+    .filter((h) => !hosts.some((o) => o.length > h.length && o.endsWith(h) && o[o.length - h.length - 1] !== '.'))
+    .sort((x, y) => found.get(y).score - found.get(x).score)
+    .map((h) => 'https://' + h + found.get(h).path);
+};
+
+// The caption's first real sentence, as one extra search (Oct 26). The
+// subject a creator writes in a sentence ("Google just open-sourced a harness
+// that lets your AI agents upgrade themselves") finds the story even when OCR
+// mangled the name on the slide ("Harness²" read as "Harness").
+export const captionLead = (caption) => {
+  const text = String(caption || '').replace(/^>\s*\S+\s+/, '').replace(/#\w+/g, ' ')
+    .replace(/View all [\d,]+ comments/gi, ' ').replace(/\[[^\]]*\]/g, ' ')
+    .replace(/[\u{1F000}-\u{1FFFF}←-⯿\u{FE0F}]/gu, ' ');
+  const sentence = text.replace(/([.!?])\s+/g, '$1\n').split(/\n+/)
+    .map((x) => x.replace(/\s+/g, ' ').trim())
+    .find((x) => x.split(' ').length >= 5 && !/\b(?:comment|follow|dm|link in bio|save this|share this|disclaimer)\b/i.test(x));
+  return sentence ? sentence.replace(/[.!?]+$/, '').split(' ').slice(0, 12).join(' ') : null;
 };
 
 // Groq's free tier caps a single request at 8000 tokens for this org, and a
@@ -1246,26 +1299,34 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
       'For this post these verdict rules replace the tool rules below. Go down the list; the FIRST rule that matches is the verdict:',
       '1. FAKE: the evidence shows a named platform has shut down, or is widely reported as not paying / a scam.',
       '2. MISLEADING: the pay users typically report is BELOW the lowest figure the post claims (claim "$5-$20 per review", users report cents), OR the platform does not pay for that work at all, OR a major catch is hidden (fees to join, payout threshold most never reach, not open in the country the post targets).',
-      '3. HYPE: the per-task pay users report is within the claimed range, but the post sells it as easy, passive or life-changing money ("prints money", "quit your job").',
-      '4. PARTIALLY_TRUE: users report pay INSIDE the claimed range but at its low end, or work is scarce, tests are required, or only some of the listed platforms hold up.',
-      '5. TRUE: the platforms are operating and users report pay matching the claim.',
+      '3. UNVERIFIED: the evidence has no user reports or pay figures for any of the platforms.',
+      '4. HYPE: the per-task pay users report is within the claimed range, but the post sells it as easy, passive or life-changing money ("prints money", "quit your job").',
+      '5. PARTIALLY_TRUE: users report pay INSIDE the claimed range but at its low end, or work is scarce, tests are required, or only some of the listed platforms hold up.',
+      '6. TRUE: the platforms are operating and users report pay matching the claim.',
       'Judge by the TYPICAL user report, not the best or worst single review. If the evidence has no pay figures at all for a platform, do not guess: say so, and decide from the platforms that do have them.',
       'List each platform in tools (status "verified" only if the evidence shows it operating today). Gotchas must be about money: real pay rates, fees, payout minimums, country limits, tests. Never cite a GitHub repository for a money post.'] : []),
     ...(post.news ? ['',
-      'THIS IS A TECH NEWS / SECURITY POST about an event: ' + (claimsData.tech_name || 'a recent incident') + '.',
+      'THIS IS A NEWS POST (tech, security or finance) about an event: ' + (claimsData.tech_name || 'a recent incident') + '.',
       'The event may be NEWER than your training data. Never call a claim false, fabricated or unsupported from your own memory. Use the evidence.',
       'A claim the evidence does not mention is "not confirmed" - say so neutrally. It is not a gotcha and does not lower the verdict on its own.',
       'For this post these verdict rules replace the tool rules below. Go down the list; the FIRST rule that matches is the verdict:',
       '1. FAKE: the evidence shows the event did not happen, or is a hoax or a recycled old story presented as new.',
       '2. MISLEADING: the evidence contradicts the MAIN claim (wrong product, wrong versions, wrong fix), or the advice would leave the viewer worse off.',
-      "3. HYPE: the event is real, but the post's MAIN message is an impact the evidence shows is wildly inflated.",
-      '4. PARTIALLY_TRUE: the event and the advice match the evidence, but some side details are exaggerated or wrong (numbers, market shares, scale of damage).',
-      '5. TRUE: the main claims match the evidence and nothing material is exaggerated.',
+      '3. UNVERIFIED: no evidence row reports the event at all.',
+      "4. HYPE: the event is real, but the post's MAIN message is an impact the evidence shows is wildly inflated.",
+      '5. PARTIALLY_TRUE: the event and the advice match the evidence, but some side details are exaggerated or wrong (numbers, market shares, scale of damage).',
+      '6. TRUE: the main claims match the evidence and nothing material is exaggerated.',
       'factual_reality: say what actually happened according to the evidence, then which parts of the post are exaggerated. Gotchas: only what the evidence shows is wrong, or what the viewer must do (update, patch, which versions). Tools: the affected software and the vendors the post names; "verified" if the evidence shows them.'] : []),
     '',
     'Web Evidence Gathered:', evidenceText,
     '',
     'Evaluation Principles:',
+    // Oct 26: the judge wrote "official issue size ~62,000 cr" (Jio IPO),
+    // "links reported as scams" and "linked to malware" - none of it in any
+    // evidence row. Its knowledge is older than the posts it checks.
+    '- Facts come from the evidence and the post, never from your memory: your training data is older than this post. Every number, date, price, version, and every "scam", "malware", "phishing" or "hacked" statement you write must appear in an evidence row or in the post. If no row says it, do not write it.',
+    '- Not found is not false: a claim the evidence does not mention is "not confirmed". A row marked BLOCKED means the site exists but refused to be read.',
+    '- Counters (stars, downloads, followers, users) in a screenshot are a snapshot from when it was taken; they grow. A higher number today is not a contradiction. Flag a count only when the post states it HIGHER than the evidence shows.',
     '- If MULTI-TOOL list (e.g. 5 tools): check each tool against evidence. If real GitHub repositories / pip packages exist, the verdict should reflect their collective authenticity. In the summary, give a concise bulleted breakdown for EVERY tool with its repo, practical utility, and caveats.',
     '- If SINGLE-TOOL: evaluate the single tool deeply.',
     '- Practical Utility First: if a shorthand trick or prompt (e.g. "/eli5") actually produces the claimed result in practice because the AI understands the intent, mark it TRUE or PARTIALLY_TRUE and explain prompt semantics vs native command.',
@@ -1277,12 +1338,18 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     // vs Misleading, True vs Misleading, Misleading vs Partly true on three
     // reels). Each border below is the one that flipped.
     'Verdict: go down this list; the FIRST rule that matches is the verdict.',
-    '1. FAKE: there is POSITIVE evidence against the post: the tool/offer is reported as a scam, has shut down, the link or repo the post itself prints is dead, or the only thing with that name is an unrelated project the post claims you can download. "Found nothing" is NOT fake - see rule 2.',
-    '2. MISLEADING: any of: the main tool/offer could not be found anywhere in the evidence (say "could not be verified") - EXCEPT a personal project demo, which follows the Personal project rule above; the offer exists but only for a restricted group (eligible startups, students, one country, new accounts, a waitlist) while the post presents it as open to anyone; a severe catch the post hides (it is paid when the post says free, a hard usage cap, a required paid plan); the post misdescribes what the tool does.',
-    '3. HYPE: the tools exist and do roughly what is shown, but the post wildly overstates the result ("replaces your whole team", "100x faster", "zero effort", "never pay again").',
-    '4. PARTIALLY_TRUE: the tools exist and work as shown, with minor caveats the post leaves out (early alpha, needs an API key, setup required, some listed items not found, small usage limits).',
-    '5. TRUE: the tools exist, are accessible as described, and do what the post shows.',
-    'For a list post, judge the list as a whole: one unfindable item out of many is a PARTIALLY_TRUE caveat, not MISLEADING for the whole post.',
+    // Oct 26: "could not be found" used to be MISLEADING (rule 2). On 10
+    // checked posts it turned real things the search missed into MISLEADING or
+    // FAKE: a CVPR repo the post printed, a live internship page, a site that
+    // blocks readers. Not finding something is UNVERIFIED, never a verdict
+    // against the post.
+    '1. FAKE: there is POSITIVE evidence against the post: the tool/offer is reported as a scam, has shut down, the link or repo the post itself prints is dead, or the only thing with that name is an unrelated project the post claims you can download. "Found nothing" is NOT fake - see rule 3.',
+    '2. MISLEADING: the evidence or the post itself contradicts the main claim: the offer exists but only for a restricted group (eligible startups, students, one country, new accounts, a waitlist) while the post presents it as open to anyone; a severe catch the post hides (it is paid when the post says free, a hard usage cap, a required paid plan, your data goes to an unknown third party); the post misdescribes what the tool does.',
+    '3. UNVERIFIED: the main tool/offer/claim does not appear in the evidence at all (or only as a BLOCKED row), and nothing above matches. Say exactly what could not be checked. Not for a personal project demo, which follows the Personal project rule above.',
+    '4. HYPE: the tools exist and do roughly what is shown, but the post wildly overstates the result ("replaces your whole team", "100x faster", "zero effort", "never pay again").',
+    '5. PARTIALLY_TRUE: the tools exist and work as shown, with minor caveats the post leaves out (early alpha, needs an API key, setup required, some listed items not found, small usage limits).',
+    '6. TRUE: the tools exist, are accessible as described, and do what the post shows.',
+    'For a list post, judge the list as a whole: one unfindable item out of many is a PARTIALLY_TRUE caveat, not MISLEADING or UNVERIFIED for the whole post.',
     '',
     'Return FIELDS ONLY. Do not write markdown, headings, bullet characters, tables or emoji inside any value.',
     'BE BRIEF. This is a card the reader scans in five seconds, not an article; they ask follow-up questions in chat afterwards.',
@@ -1452,6 +1519,28 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     }
   }
 
+  // A gotcha may only state a fact the evidence or the post contains (Oct 26).
+  // The judge wrote "official issue size ~62,000 cr" on the Jio IPO post,
+  // "links from Trakin.ai have been reported as scams" and "linked to malware
+  // scams" - no evidence row said any of it. A number (3+ digits) or an
+  // accusation that appears nowhere in the rows or the post is dropped.
+  const digits = (s) => String(s || '').replace(/(\d),(?=\d)/g, '$1');
+  const known = digits(rows.map(hay).join(' ') + ' ' + (opts.postText || '')).toLowerCase();
+  const ACCUSE = /\b(scams?|scammers?|fraud(?:ulent)?|phishing|malware|stolen|hacked|backdoor(?:ed)?)\b/gi;
+  const unsupported = (g) => {
+    const nums = (digits(g).match(/\d{3,}/g) || []).filter((n) => !known.includes(n));
+    const words = (g.match(ACCUSE) || []).filter((w) => !known.includes(w.toLowerCase().replace(/s$/, '')));
+    return nums.length ? 'number ' + nums[0] : words.length ? '"' + words[0] + '"' : null;
+  };
+  report.droppedGotchas = 0;
+  report.gotchas = (report.gotchas || []).filter((g) => {
+    const why = unsupported(g);
+    if (!why) return true;
+    notes.push(`Dropped gotcha (${why} is in no evidence row or the post): "${g}"`);
+    report.droppedGotchas += 1;
+    return false;
+  });
+
   // Two questions, two answers.
   //
   // Asking one model for one word produced a reflex: four runs of
@@ -1472,9 +1561,23 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     notes.push(`Overrode FAKE: ${verified}/${tools.length} tools were verified to exist.`);
     report.verdict = 'MISLEADING';
   }
-  if (report.verdict === 'TRUE' && (missing > 0 || verified === 0)) {
+  // A news post is about an event, and may name no tool at all.
+  if (report.verdict === 'TRUE' && (missing > 0 || (verified === 0 && !opts.news))) {
     notes.push(`Downgraded TRUE (verified=${verified}, missing=${missing}).`);
     report.verdict = 'PARTIALLY_TRUE';
+  }
+  // Not found is not false (Oct 26). A FAKE or MISLEADING that rests only on
+  // "could not be verified" - the main tools all missing, or the judge's own
+  // words - with no row saying scam, shut down or dead is UNVERIFIED.
+  const mainTools = tools.filter((t) => t.role !== 'mention');
+  const mainMissing = mainTools.length > 0 && mainTools.every((t) => t.status !== 'verified');
+  const saysUnverified = /could not be (?:verified|found|located|confirmed)|cannot be (?:verified|found|located|confirmed)|no (?:public |independent )?(?:evidence|record|data|proof|information) (?:was |is )?(?:found|available)|not (?:found|corroborated|confirmed) (?:in|by) (?:any |public |the )?(?:evidence|sources)|lack(?:s)? (?:public |independent )?(?:verification|confirmation|evidence)/i
+    .test(report.factualReality || '');
+  const NEGATIVE = /\b(?:scam|fraud|phishing|malware|shut(?:ting)? down|discontinued|not paying|never paid|hoax|repo(?:sitory)? not found|site not found)\b/i;
+  if ((report.verdict === 'FAKE' || report.verdict === 'MISLEADING') && (mainMissing || saysUnverified) &&
+      !rows.some((r) => NEGATIVE.test(hay(r)))) {
+    notes.push(`${report.verdict} -> UNVERIFIED: nothing in the evidence is against the post; it was only not found.`);
+    report.verdict = 'UNVERIFIED';
   }
     // A MISLEADING -> HYPE softening rule used to sit here. It fired twice and
   // was wrong both times, most damagingly on a reel about resetting Claude
@@ -1664,7 +1767,18 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
     const short = m[2].trim();
     return Math.max(baseScore(n), baseScore(m[1].trim()) + (short.length >= 3 ? baseScore(short) : 0));
   };
+  // A name that only appears as an entry in a ranked list ("#1 Meta-Harness |
+  // #2 Harness Scaling | #3 ReasoningBank") is a competitor on a leaderboard,
+  // not the subject, unless the caption names it (Oct 26: the post was about
+  // Google's Harness², and the report judged Stanford's Meta-Harness).
+  const rankedOnly = (needle) => {
+    const n = String(needle || '').toLowerCase();
+    if (n.length < 3 || countOf(caption, n) > 0) return false;
+    const escaped = n.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+    return new RegExp('#\\s?\\d{1,2}\\s+' + escaped).test(ocr);
+  };
   const score = (needle) => {
+    if (rankedOnly(needle)) return 0;
     const source = aliases[needle];
     return nameScore(needle) + (source ? nameScore(source) : 0);
   };
@@ -1807,7 +1921,7 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
 // handle as the product; a 7-slide carousel read 2 slides and then denied a
 // real repo existed; evidence rows that scraped to nothing produced a report
 // reasoning from search-result marketing.
-export const deriveConfidence = ({ subjectNamed, coverage, toolsReal, rowsWithText, hasText, searchFailed, newsRead = null }) => {
+export const deriveConfidence = ({ subjectNamed, coverage, toolsReal, rowsWithText, hasText, searchFailed, newsRead = null, mainOpened = true, droppedGotchas = 0, verdict = null }) => {
   let score = 95;
   const why = [];
   // The web search itself failed (every engine blocked): the verdict rests on
@@ -1828,11 +1942,21 @@ export const deriveConfidence = ({ subjectNamed, coverage, toolsReal, rowsWithTe
   // A news post judged without reading the news (the PHP run read 0 articles
   // and still scored 85).
   if (newsRead !== null && newsRead < 2) { score -= 15; why.push('only ' + newsRead + ' news articles read'); }
+  // Oct 26: nine wrong verdicts out of ten checked posts scored 85-95, because
+  // the score counted evidence collected, not whether the post's own subject
+  // was ever seen in it or the judge stuck to the evidence.
+  if (!mainOpened && subjectNamed) { score -= 25; why.push('main tool not found in any fetched page'); }
+  if (droppedGotchas > 0) {
+    score -= Math.min(20, droppedGotchas * 10);
+    why.push(droppedGotchas + ' unsupported claim' + (droppedGotchas > 1 ? 's' : '') + ' removed');
+  }
+  // Nothing was found to judge by; the number must not read as certainty.
+  if (verdict === 'UNVERIFIED') score = Math.min(score, 40);
   return { score: Math.max(10, Math.min(95, score)), why };
 };
 
 const normalizeReport = (report, evidence, opts = {}) => {
-  const VERDICTS = ['TRUE', 'PARTIALLY_TRUE', 'HYPE', 'MISLEADING', 'FAKE'];
+  const VERDICTS = ['TRUE', 'PARTIALLY_TRUE', 'HYPE', 'MISLEADING', 'FAKE', 'UNVERIFIED'];
   const verdict = VERDICTS.includes(report.verdict) ? report.verdict : 'UNKNOWN';
   const tools = (Array.isArray(report.tools) ? report.tools : [])
     .filter((t) => t && typeof t === 'object' && cleanLine(t.name))
@@ -2022,6 +2146,8 @@ export const analyzeReelApi = async (url) => {
     : news
       ? newsQueries(claimsData, [media.caption, ocrText, transcript].join(' '))
       : listQueries(claimsData, listPost);
+  const lead = !money && !news ? captionLead(media.caption) : null;
+  if (lead && !queries.some((q) => q.toLowerCase() === lead.toLowerCase())) queries.splice(1, 0, lead);
   if (money) log('MONEY MODE', { platforms });
   if (news) log('NEWS MODE', { event: modelTechName });
   log('STAGE 2 QUERIES', queries);
@@ -2044,7 +2170,12 @@ export const analyzeReelApi = async (url) => {
   jobStage(3);
   // The pricing check needs the search results, so the router runs after them.
   // Its own lookups are already parallel inside runVerifiers.
-  const verified = await runVerifiers(claimsData, transcript, ocrText, searched, { money });
+  const printedText = [media.caption, ocrText].join(' ');
+  const verified = await runVerifiers(claimsData, transcript, ocrText, searched, {
+    money,
+    printedRepos: printedGithubSlugs(printedText),
+    printedSites: printedSites(media.caption, ocrText, media.author),
+  });
   const structured = verified.rows;
   lap('verifiers');
   log('STAGE 2 STRUCTURED', structured.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet })));
@@ -2112,7 +2243,10 @@ export const analyzeReelApi = async (url) => {
   lap('synthesis');
   log('STAGE 3 RAW REPORT', report);
   const verdictRaw = report.verdict;
-  const normalized = normalizeReport(report, evidence, { money, list: listPost });
+  const normalized = normalizeReport(report, evidence, {
+    money, news, list: listPost,
+    postText: [media.caption, ocrText, transcript].join(' '),
+  });
   normalized.confidence = deriveConfidence({
     // A list of platforms has no single subject to confirm - not a weakness.
     // A list post ("22 NLP techniques", "top 5 recruiters") has no single
@@ -2124,7 +2258,12 @@ export const analyzeReelApi = async (url) => {
     hasText: (ocrText.length + transcript.length) > 200,
     searchFailed,
     newsRead: news ? kept.filter((e) => isNewsRow(e) && (e.pagePreview || '').length > 0).length : null,
+    // A tech post whose main tool was never confirmed in any fetched page.
+    mainOpened: money || news || (normalized.tools || []).some((t) => t.status === 'verified'),
+    droppedGotchas: normalized.droppedGotchas || 0,
+    verdict: normalized.verdict,
   });
+  delete normalized.droppedGotchas;
   log('CONFIDENCE', normalized.confidence);
 
   // Tools mentioned in the video/slides but not promoted to the top verified list

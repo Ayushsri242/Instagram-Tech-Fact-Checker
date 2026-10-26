@@ -275,6 +275,67 @@ export const readPage = async (url, maxChars = 8000) => {
   }
 };
 
+// ---------------------------------------------- links the post itself prints
+//
+// Oct 26: the post printed github.com/orange-3dv-team/mocha (a CVPR 2026
+// repo, 972 stars) and apply.headlinema.com (a live internship page), the
+// search engine returned neither, and both posts were called MISLEADING
+// because "the repo cannot be found". A link on the post is opened directly.
+//
+// Only positive rows come back. A 404 or a dead host is NOT reported as "link
+// is dead": OCR misreads slugs and paths, and a misread must never become FAKE.
+export const checkPrintedRepo = async (slug) => {
+  try {
+    const { data } = await axios.get(`https://api.github.com/repos/${slug}`, {
+      headers: { Accept: 'application/vnd.github+json' },
+      timeout: TIMEOUT,
+    });
+    const full = data.full_name || slug;
+    let readme = '';
+    try {
+      const res = await axios.get(`https://raw.githubusercontent.com/${full}/HEAD/README.md`, { timeout: TIMEOUT, responseType: 'text' });
+      readme = String(res.data || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    } catch (e) { /* no README is fine; the repo row stands */ }
+    return [row(
+      `GitHub - ${full} (the repo the post prints)`,
+      `https://github.com/${full}`,
+      `REPO EXISTS: ${full}, ${data.stargazers_count} stars, last push ${String(data.pushed_at || '').slice(0, 10)}. ${data.description || ''}`,
+      readme
+    )];
+  } catch (e) {
+    return [];
+  }
+};
+
+export const checkPrintedSite = async (url) => {
+  const host = (String(url).match(/^https?:\/\/([^/?#]+)/i) || [])[1] || url;
+  const origin = 'https://' + host;
+  // The printed path first, then the site's front page: an OCR'd path is
+  // often cut short ("software-engineering-internesc").
+  for (const target of url === origin ? [origin] : [url, origin]) {
+    const text = await readPage(target, 4000);
+    // The reader returns its own page for a 404 ("Warning: Target URL
+    // returned error 404"), which is not the site's content.
+    if (text && !/Target URL returned error \d+/i.test(text)) {
+      return [row(`${host} - the page the post links to`, target, text.slice(0, 300), text)];
+    }
+  }
+  // The reader got nothing. A site that answers 401/403/429 exists and blocks
+  // readers (oxaam.com answers 403 to every bot) - that is not "not found".
+  try {
+    const res = await axios.get(origin, { timeout: TIMEOUT, validateStatus: () => true, responseType: 'text' });
+    if ([401, 403, 429, 503].includes(res.status)) {
+      return [row(
+        `${host} - BLOCKED (the site exists but refused to be read)`,
+        origin,
+        `SITE BLOCKED: ${host}, which the post prints, answered HTTP ${res.status} to the reader. The site exists; its content could not be read.`,
+        ''
+      )];
+    }
+  } catch (e) { /* unreachable or misread: say nothing */ }
+  return [];
+};
+
 /**
  * Fills page text for rows that came back empty, best few only.
  *
@@ -444,6 +505,14 @@ export const runVerifiers = async (claimsData, transcript = '', ocrText = '', ev
     seen.add(key);
     jobs.push(fn().catch(() => []));
   };
+
+  // Links the post prints, opened directly (see checkPrintedRepo).
+  for (const slug of (opts.printedRepos || []).slice(0, 3)) {
+    once(`ghrepo:${slug}`, () => checkPrintedRepo(slug));
+  }
+  for (const site of (opts.printedSites || []).slice(0, 3)) {
+    once(`site:${site}`, () => checkPrintedSite(site));
+  }
 
   // Money / side-hustle posts (opts.money): the platforms are websites, not
   // code, so PyPI, Hugging Face, GitHub-name and Hacker News lookups only
