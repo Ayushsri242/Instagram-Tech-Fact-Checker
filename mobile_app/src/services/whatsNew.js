@@ -8,6 +8,15 @@ import { PERMISSIONS_DONE_KEY } from '../screens/WelcomeScreen';
 // the first time the app opens after updating. No new entry = no popup.
 export const WHATS_NEW = [
   {
+    id: '2026-10-26b',
+    title: "What's new in Assay",
+    items: [
+      'Assay reads more of the page a post links to, so details like pay or hours are no longer missed.',
+      'Websites a post sends you to are checked on Trustpilot, including sites flagged for fake reviews.',
+      'Posts that don\'t name their tool are matched to it by what they describe, not by a rival shown on a chart.',
+    ],
+  },
+  {
     id: '2026-10-26',
     title: "What's new in Assay",
     items: [
