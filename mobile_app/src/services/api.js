@@ -1366,12 +1366,15 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     // blocks readers. Not finding something is UNVERIFIED, never a verdict
     // against the post.
     '1. FAKE: there is POSITIVE evidence against the post: the tool/offer is reported as a scam, has shut down, the link or repo the post itself prints is dead, or the only thing with that name is an unrelated project the post claims you can download. "Found nothing" is NOT fake - see rule 3.',
-    '2. MISLEADING: the evidence or the post itself contradicts the main claim: the offer exists but only for a restricted group (eligible startups, students, one country, new accounts, a waitlist) while the post presents it as open to anyone; a severe catch the post hides (it is paid when the post says free, a hard usage cap, a required paid plan, your data goes to an unknown third party); the post misdescribes what the tool does; or a row says TRUSTPILOT WARNING about the site the post sends people to (its rating was removed for fake or incentivised reviews) - that is evidence against the site, not a lack of evidence.',
+    '2. MISLEADING: the evidence or the post itself contradicts the main claim: the offer exists but only for a restricted group (eligible startups, students, one country, new accounts, a waitlist) while the post presents it as open to anyone; a severe catch the post hides (it is paid when the post says free, a hard usage cap, a required paid plan, your data goes to an unknown third party); the evidence shows the tool does something different from what the post says it does (loose or broad wording about a real tool that does the thing, like "removes filters" for an uncensored model, is not this; neither is a missing install route such as no pip package when the tool is published elsewhere - those are caveats); or a row says TRUSTPILOT WARNING about the site the post sends people to (its rating was removed for fake or incentivised reviews) - that is evidence against the site, not a lack of evidence.',
     '3. UNVERIFIED: the main tool/offer/claim does not appear in the evidence at all (or only as a BLOCKED row), and nothing above matches. Say exactly what could not be checked. Not for a personal project demo, which follows the Personal project rule above.',
     '4. HYPE: the tools exist and do roughly what is shown, but the post wildly overstates the result ("replaces your whole team", "100x faster", "zero effort", "never pay again").',
-    '5. PARTIALLY_TRUE: the tools exist and work as shown, with minor caveats the post leaves out (early alpha, needs an API key, setup required, some listed items not found, small usage limits).',
+    '5. PARTIALLY_TRUE: the tools exist and work as shown, with minor caveats the evidence shows and the post leaves out (early alpha, needs an API key, setup required, small usage limits).',
     '6. TRUE: the tools exist, are accessible as described, and do what the post shows.',
     'For a list post, judge the list as a whole: one unfindable item out of many is a PARTIALLY_TRUE caveat, not MISLEADING or UNVERIFIED for the whole post.',
+    // Nov 16: 4 of 5 phone near-misses were TRUE posts marked PARTIALLY_TRUE
+    // over gotchas like "not fully confirmed" and "no independent verification".
+    '"Not confirmed" is not a caveat: a detail the evidence does not mention never moves a post from TRUE to PARTIALLY_TRUE and is not a gotcha. A caveat is something a source states.',
     '',
     'Return FIELDS ONLY. Do not write markdown, headings, bullet characters, tables or emoji inside any value.',
     'BE BRIEF. This is a card the reader scans in five seconds, not an article; they ask follow-up questions in chat afterwards.',
@@ -1565,13 +1568,15 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
   // the post. null = not found anywhere.
   const proven = (proof) => {
     if (!proof) return null;
-    const quote = words(proof.quote);
-    if (quote.length < 3) return null;
+    // A quote with "..." in it skips words; each part must be in the same
+    // source (Nov 16: Oxaam's MISLEADING was cancelled over one such quote).
+    const parts = String(proof.quote).split(/\.{3}|…/).map(words).filter((p) => p.length >= 3);
+    if (!parts.length) return null;
     const n = Number(String(proof.source).replace(/[^\d]/g, '')) || 0;
     const post = { text: opts.postText, url: null };
     const named = /post/i.test(String(proof.source)) ? post : sources[n - 1] ? { text: hay(sources[n - 1]), url: sources[n - 1].url } : null;
     const all = [named, ...rows.map((r) => ({ text: hay(r), url: r.url })), post].filter(Boolean);
-    return all.find((c) => inText(quote, c.text)) || null;
+    return all.find((c) => parts.every((p) => inText(p, c.text))) || null;
   };
   const host = (url) => (url ? String(url).split('/')[2] || '' : 'the post').replace(/^www\./, '');
   let items = [];
@@ -1590,10 +1595,16 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     delete t.caveatProof;
   }
   // A FAKE or MISLEADING must rest on words someone actually wrote.
-  if ((report.verdict === 'FAKE' || report.verdict === 'MISLEADING') && !proven(report.verdictProof)) {
+  const basisAt = proven(report.verdictProof);
+  if ((report.verdict === 'FAKE' || report.verdict === 'MISLEADING') && !basisAt) {
     notes.push(`${report.verdict} -> UNVERIFIED: the verdict's quote (${report.verdictProof ? '"' + report.verdictProof.quote + '"' : 'none'}) is in no source.`);
     report.verdict = 'UNVERIFIED';
   }
+  // Kept for the run log: what the verdict rested on, and whether the quote
+  // was found. Every logged report had this blank before (Nov 16).
+  report.verdictBasis = report.verdictProof
+    ? { quote: report.verdictProof.quote, from: basisAt ? host(basisAt.url) : null }
+    : null;
   delete report.verdictProof;
 
   // A rename the resolver confirmed must not be silently dropped.
@@ -1627,6 +1638,32 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     report.droppedGotchas += 1;
     return false;
   });
+  // "Not confirmed" is not a catch (Nov 16). On the phone run, 4 of 5 near
+  // misses (MoCha, Jio IPO, Reason Network, Black October) went TRUE ->
+  // PARTIALLY_TRUE on gotchas like "not fully confirmed by the paper" or "no
+  // independent verification" - the judge quoted the post's claim and called
+  // it unconfirmed, so the quote check passed. Such points move to a separate
+  // "Not checked" line, and a PARTIALLY_TRUE with no real catch left is TRUE.
+  // Second phone run added: "lacks supporting sources", "excerpts do not
+  // mention", "does not specify", "is not substantiated".
+  const DOUBT = /\b(?:not (?:fully |independently |publicly |officially )?(?:confirmed|verified|documented|corroborated|supported|substantiated)|no (?:independent |explicit |public |official |direct )?(?:evidence|verification|confirmation|proof|data|record)|lacks? (?:supporting |public |independent )?(?:evidence|verification|confirmation|support|sources?)|unverified|unsubstantiated|cannot be (?:verified|confirmed)|could not be (?:verified|confirmed)|isn.t confirmed|do(?:es)? not (?:mention|specify|state|confirm)|not (?:explicitly )?stated|without (?:proof|evidence))\b/i;
+  const notChecked = [];
+  items = items.filter((g) => {
+    if (!DOUBT.test(g.text)) return true;
+    notChecked.push(g.text);
+    return false;
+  });
+  for (const t of report.tools || []) {
+    if (t.caveat && DOUBT.test(t.caveat)) { notChecked.push(t.caveat); t.caveat = null; }
+  }
+  if (notChecked.length) notes.push(`Moved to Not checked (no evidence against, only not confirmed): ${notChecked.map((s) => '"' + s + '"').join(' ; ')}`);
+  report.notChecked = notChecked.slice(0, 3);
+  const missingMain = (report.tools || []).some((t) => t.role !== 'mention' && t.status === 'not_found');
+  const caveatLeft = (report.tools || []).some((t) => t.caveat);
+  if (report.verdict === 'PARTIALLY_TRUE' && notChecked.length && !items.length && !caveatLeft && !missingMain && !opts.money) {
+    notes.push('PARTIALLY_TRUE -> TRUE: every catch was only "not confirmed"; none is evidence against the post.');
+    report.verdict = 'TRUE';
+  }
   report.gotchas = items.map((g) => g.text);
   // Where each gotcha came from, for the card ("from trustpilot.com").
   report.gotchaSources = items.map((g) => ({ from: g.from, url: g.url }));
@@ -1651,8 +1688,11 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     notes.push(`Overrode FAKE: ${verified}/${tools.length} tools were verified to exist.`);
     report.verdict = 'MISLEADING';
   }
-  // A news post is about an event, and may name no tool at all.
-  if (report.verdict === 'TRUE' && (missing > 0 || (verified === 0 && !opts.news))) {
+  // A news post is about an event, and may name no tool at all. Only a missing
+  // MAIN tool counts (Nov 16: Reason Network's TRUE was downgraded because one
+  // tool named in passing, out of 8, was not found).
+  const missingMainCount = tools.filter((t) => t.status === 'not_found' && t.role !== 'mention').length;
+  if (report.verdict === 'TRUE' && (missingMainCount > 0 || (verified === 0 && !opts.news))) {
     notes.push(`Downgraded TRUE (verified=${verified}, missing=${missing}).`);
     report.verdict = 'PARTIALLY_TRUE';
   }
@@ -1668,6 +1708,18 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
       !rows.some((r) => NEGATIVE.test(hay(r)))) {
     notes.push(`${report.verdict} -> UNVERIFIED: nothing in the evidence is against the post; it was only not found.`);
     report.verdict = 'UNVERIFIED';
+  }
+  // A Trustpilot warning on the site the post sends people to is evidence
+  // against it (Nov 16). Oxaam: the judge listed the warning as a gotcha and
+  // still answered UNVERIFIED; the prompt rule alone did not hold.
+  const warned = rows.find((r) => /TRUSTPILOT WARNING/.test(hay(r)) && (() => {
+    const m = String(r.url || '').match(/trustpilot\.com\/review\/(?:www\.)?([^/?#]+)/i);
+    const base = m ? m[1].toLowerCase().split('.')[0] : '';
+    return base.length >= 3 && String(opts.postText || '').toLowerCase().includes(base);
+  })());
+  if (report.verdict === 'UNVERIFIED' && warned) {
+    notes.push(`UNVERIFIED -> MISLEADING: Trustpilot removed the rating of the post's own site (${warned.url}) for fake or incentivised reviews.`);
+    report.verdict = 'MISLEADING';
   }
     // A MISLEADING -> HYPE softening rule used to sit here. It fired twice and
   // was wrong both times, most damagingly on a reel about resetting Claude

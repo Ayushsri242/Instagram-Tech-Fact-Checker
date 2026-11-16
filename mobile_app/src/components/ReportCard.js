@@ -161,6 +161,11 @@ export default function ReportCard({ report, techName, onAskTool, compact = fals
         </Section>
       )}
 
+      {/* Points the sources neither confirm nor contradict (Nov 16). */}
+      {(report.notChecked || []).length > 0 && (
+        <Text style={styles.gotchaSource}>Not checked: {report.notChecked.join(' ')}</Text>
+      )}
+
       {/* Sources were hidden to keep the card short, which also removed the
           reader's only way to check it. References are built exclusively from
           pages the pipeline actually fetched, so this list is the evidence the

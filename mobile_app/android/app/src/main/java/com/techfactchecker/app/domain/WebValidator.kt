@@ -72,8 +72,8 @@ class WebValidator {
                 val remaining = response.header("x-ratelimit-remaining")
                 if ((response.code == 403 || response.code == 429) && remaining == "0") {
                     gitHubRateLimited = true
-                    Log.w("TFC_DEBUG", "GH rate limited (60/h unauthenticated). Repos become UNVERIFIED, not missing.")
-                    return@withContext null
+                    Log.w("TFC_DEBUG", "GH rate limited (60/h unauthenticated). Trying the README instead.")
+                    return@withContext readmeFallback(cleanSlug)
                 }
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: ""
@@ -108,7 +108,29 @@ class WebValidator {
         } catch (e: Exception) {
             Log.w("TFC_DEBUG", "GH verify failed for " + cleanSlug + ": " + e.message)
         }
-        return@withContext null
+        // Any other refusal (403 without the rate header, 5xx, timeout).
+        return@withContext readmeFallback(cleanSlug)
+    }
+
+    /**
+     * The GitHub API refused (Nov 16). Unauthenticated it allows 60 calls an
+     * hour per IP, and phones on shared mobile IPs run out: MoCha's printed
+     * repo was refused, never reached the judge, and the verdict was
+     * UNVERIFIED. The README comes off raw.githubusercontent.com, which is not
+     * the API; if it exists, the repo exists. Stars are unknown.
+     */
+    private suspend fun readmeFallback(cleanSlug: String): EvidenceSource? {
+        val readme = fetchGitHubReadme(cleanSlug)
+        if (readme.isBlank()) return null
+        Log.i("TFC_DEBUG", "GH verified by README (API refused): " + cleanSlug)
+        val result = EvidenceSource(
+            title = "GitHub - " + cleanSlug,
+            url = "https://github.com/" + cleanSlug,
+            snippet = "Stars: unknown (GitHub API limit) | README found",
+            pagePreview = readme
+        )
+        repoCache[cleanSlug] = Optional(result)
+        return result
     }
 
     /**
