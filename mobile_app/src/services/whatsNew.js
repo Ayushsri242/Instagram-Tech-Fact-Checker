@@ -14,6 +14,7 @@ export const WHATS_NEW = [
       'Assay reads more of the page a post links to, so details like pay or hours are no longer missed.',
       'Websites a post sends you to are checked on Trustpilot, including sites flagged for fake reviews.',
       'Posts that don\'t name their tool are matched to it by what they describe, not by a rival shown on a chart.',
+      'Every warning now shows where it came from. Tap it to open that page. Warnings with no real source are removed.',
     ],
   },
   {
