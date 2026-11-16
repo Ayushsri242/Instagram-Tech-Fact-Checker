@@ -1099,6 +1099,7 @@ export const captionLead = (caption) => {
 // Budget the payload instead of truncating it blindly at the end.
 const MAX_EVIDENCE_ROWS = 12;
 const MAX_PAGE_PREVIEW = 300;
+const OWN_PAGE_PREVIEW = 1500;
 const MAX_TRANSCRIPT = 3000;
 const MAX_OCR = 3000;
 
@@ -1155,6 +1156,9 @@ const rankEvidence = (evidence, techName, tools, pinned = [], opts = {}) => {
   ])].filter((n) => n.length >= 3);
   const aboutSubject = (hay) =>
     subjectNeedles.some((n) => new RegExp('(?:^|[^a-z0-9])' + escapeForRegex(n)).test(hay));
+  const LEAD_STOP = /^(?:just|that|this|with|your|their|them|they|have|from|what|when|will|into|lets|without|about|every|which|more|than|here|there|these|those|been|being|could|would|should|also|only|like|make|makes|made|free|best|thing)$/;
+  const leadWords = [...new Set(String(opts.lead || '').toLowerCase().match(/[a-z0-9]{4,}/g) || [])]
+    .filter((w) => !LEAD_STOP.test(w));
 
   const score = (item) => {
     const hay = `${item.url || ''} ${item.title || ''}`.toLowerCase();
@@ -1168,6 +1172,11 @@ const rankEvidence = (evidence, techName, tools, pinned = [], opts = {}) => {
     if ((item.pagePreview || '').length > 0) s += 3;
     // News mode: articles and advisories about the event outrank homepages.
     if (opts.news && isNewsRow(item)) s += 30;
+    // No named subject: rows matching the caption's own description (Oct 26:
+    // "Google just open-sourced a harness that lets your AI agents upgrade
+    // themselves" - Harness²'s repo and articles were found, then trimmed for
+    // rows about GLM-5, the only name left).
+    if (leadWords.length) s += Math.min(20, 5 * leadWords.filter((w) => hay.includes(w)).length);
     return s;
   };
 
@@ -1269,12 +1278,23 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     return result.slice(0, budget);
   };
 
+  // The post's own link and the subject's own repo get a bigger reading budget
+  // (Oct 26): the Headline internship page was opened but the judge saw 300
+  // characters of it, none about the stipend or hours, and called it
+  // unverified; Reason Network's README listed every agent the judge then said
+  // "public docs do not confirm". At most two rows, to stay inside 8k tokens.
+  const subjectRepo = post.subjectSlug ? 'github.com/' + String(post.subjectSlug).toLowerCase() : null;
+  const isOwn = (item) => / \(the repo the post prints\)$| - the page the post links to$/.test(String(item.title || '')) ||
+    Boolean(subjectRepo && String(item.url || '').toLowerCase().replace(/\/$/, '').endsWith(subjectRepo));
+  const ownRows = new Set(kept.filter(isOwn).slice(0, 2));
+  const ownPage = (item) => ownRows.has(item);
   const evidenceText = kept.map((item) => [
     'Title: ' + (item.title || ''),
     'URL: ' + (item.url || ''),
     'Snippet: ' + (item.snippet || '').slice(0, 300),
     // News articles carry the facts in their body; give them more room.
-    'Page Context: ' + extractClaimAnchored(item.pagePreview, post.news && isNewsRow(item) ? 700 : MAX_PAGE_PREVIEW),
+    'Page Context: ' + extractClaimAnchored(item.pagePreview, ownPage(item) ? OWN_PAGE_PREVIEW
+      : post.news && isNewsRow(item) ? 700 : MAX_PAGE_PREVIEW),
   ].join('\n')).join('\n\n');
   transcript = (transcript || '').slice(0, MAX_TRANSCRIPT);
   ocrText = (ocrText || '').slice(0, MAX_OCR);
@@ -1288,7 +1308,7 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     '',
     'Extracted Claims & Tools:', JSON.stringify(claimsData),
     ...(claimsData.tech_name === null ? ['',
-      'SUBJECT UNIDENTIFIED: Do not guess the primary tool or subject name. State clearly in factual_reality that the primary subject could not be confidently identified, and only evaluate the tools that were found.'] : []),
+      'SUBJECT UNIDENTIFIED: Do not guess the primary tool or subject name. If ONE evidence source describes the same thing the caption describes - same company AND the same mechanism or numbers - judge the post against that source and name it as the subject (Oct 26: a post that never named Google\'s Harness² had its repo and an article about it in the evidence). Otherwise state clearly in factual_reality that the primary subject could not be confidently identified, and only evaluate the tools that were found.'] : []),
     ...(coverage ? ['',
       'EXTRACTION WAS INCOMPLETE: this post declares ' + coverage.declared +
       ' slides and only ' + coverage.seen + ' were read. Anything the post promotes may be on a slide nobody saw,' +
@@ -1344,7 +1364,7 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     // blocks readers. Not finding something is UNVERIFIED, never a verdict
     // against the post.
     '1. FAKE: there is POSITIVE evidence against the post: the tool/offer is reported as a scam, has shut down, the link or repo the post itself prints is dead, or the only thing with that name is an unrelated project the post claims you can download. "Found nothing" is NOT fake - see rule 3.',
-    '2. MISLEADING: the evidence or the post itself contradicts the main claim: the offer exists but only for a restricted group (eligible startups, students, one country, new accounts, a waitlist) while the post presents it as open to anyone; a severe catch the post hides (it is paid when the post says free, a hard usage cap, a required paid plan, your data goes to an unknown third party); the post misdescribes what the tool does.',
+    '2. MISLEADING: the evidence or the post itself contradicts the main claim: the offer exists but only for a restricted group (eligible startups, students, one country, new accounts, a waitlist) while the post presents it as open to anyone; a severe catch the post hides (it is paid when the post says free, a hard usage cap, a required paid plan, your data goes to an unknown third party); the post misdescribes what the tool does; or a row says TRUSTPILOT WARNING about the site the post sends people to (its rating was removed for fake or incentivised reviews) - that is evidence against the site, not a lack of evidence.',
     '3. UNVERIFIED: the main tool/offer/claim does not appear in the evidence at all (or only as a BLOCKED row), and nothing above matches. Say exactly what could not be checked. Not for a personal project demo, which follows the Personal project rule above.',
     '4. HYPE: the tools exist and do roughly what is shown, but the post wildly overstates the result ("replaces your whole team", "100x faster", "zero effort", "never pay again").',
     '5. PARTIALLY_TRUE: the tools exist and work as shown, with minor caveats the post leaves out (early alpha, needs an API key, setup required, some listed items not found, small usage limits).',
@@ -1573,7 +1593,7 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
   const mainMissing = mainTools.length > 0 && mainTools.every((t) => t.status !== 'verified');
   const saysUnverified = /could not be (?:verified|found|located|confirmed)|cannot be (?:verified|found|located|confirmed)|no (?:public |independent )?(?:evidence|record|data|proof|information) (?:was |is )?(?:found|available)|not (?:found|corroborated|confirmed) (?:in|by) (?:any |public |the )?(?:evidence|sources)|lack(?:s)? (?:public |independent )?(?:verification|confirmation|evidence)/i
     .test(report.factualReality || '');
-  const NEGATIVE = /\b(?:scam|fraud|phishing|malware|shut(?:ting)? down|discontinued|not paying|never paid|hoax|repo(?:sitory)? not found|site not found)\b/i;
+  const NEGATIVE = /\b(?:scam|fraud|phishing|malware|shut(?:ting)? down|discontinued|not paying|never paid|hoax|repo(?:sitory)? not found|site not found|trustpilot warning)\b/i;
   if ((report.verdict === 'FAKE' || report.verdict === 'MISLEADING') && (mainMissing || saysUnverified) &&
       !rows.some((r) => NEGATIVE.test(hay(r)))) {
     notes.push(`${report.verdict} -> UNVERIFIED: nothing in the evidence is against the post; it was only not found.`);
@@ -1699,6 +1719,21 @@ const GITHUB_RESERVED_PATHS = new Set([
   'explore', 'trending', 'login', 'join', 'site', 'readme', 'users', 'new',
 ]);
 
+// A name that only appears as an entry in a ranked list ("#1 Meta-Harness |
+// #2 Harness Scaling | #3 ReasoningBank") is a competitor on a leaderboard,
+// not the subject, unless the caption names it (Oct 26: the post was about
+// Google's Harness², and the report judged Stanford's Meta-Harness).
+// Spelling-blind: the repo is "metaharness", the slide says "Meta-Harness"
+// (the 1.0.112 run still judged the wrong project because of the hyphen).
+// caption and ocr arrive lower-cased with the " | " separators flattened.
+const leaderboardOnly = (needle, caption, ocr) => {
+  const chars = String(needle || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (chars.length < 3) return false;
+  const loose = chars.split('').join('[-_.\\s]?');
+  if (new RegExp(loose).test(caption)) return false;
+  return new RegExp('#\\s?\\d{1,2}\\s+' + loose).test(ocr);
+};
+
 const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
   let modelName = rawModelName;
   // OCR joins lines with " | ", so the slide reading "Smart Devs Don't / Use
@@ -1767,16 +1802,7 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
     const short = m[2].trim();
     return Math.max(baseScore(n), baseScore(m[1].trim()) + (short.length >= 3 ? baseScore(short) : 0));
   };
-  // A name that only appears as an entry in a ranked list ("#1 Meta-Harness |
-  // #2 Harness Scaling | #3 ReasoningBank") is a competitor on a leaderboard,
-  // not the subject, unless the caption names it (Oct 26: the post was about
-  // Google's Harness², and the report judged Stanford's Meta-Harness).
-  const rankedOnly = (needle) => {
-    const n = String(needle || '').toLowerCase();
-    if (n.length < 3 || countOf(caption, n) > 0) return false;
-    const escaped = n.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
-    return new RegExp('#\\s?\\d{1,2}\\s+' + escaped).test(ocr);
-  };
+  const rankedOnly = (needle) => leaderboardOnly(needle, caption, ocr);
   const score = (needle) => {
     if (rankedOnly(needle)) return 0;
     const source = aliases[needle];
@@ -1848,6 +1874,10 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
     const printed = printedRepoNames.has(repoName.toLowerCase());
     const hits = score(repoName) + (printed ? 100 : 0);
     if (hits < 1) continue;
+    // Seen once on a slide, never in the caption and not printed: a model
+    // named in a benchmark label ("WORKBUDDY-BENCH GLM-5"), not the subject
+    // (Oct 26, the Harness² post was then titled "GLM-5").
+    if (!printed && hits < 2 && countOf(caption, repoName) === 0) continue;
     if (candidates.some((c) => c.name.toLowerCase() === repoName.toLowerCase())) continue;
     candidates.push({ name: repoName, slug: m[1] + '/' + m[2], hits, printed, dismissed: isDismissed(repoName) || isBaseline(repoName) });
   }
@@ -2148,6 +2178,15 @@ export const analyzeReelApi = async (url) => {
       : listQueries(claimsData, listPost);
   const lead = !money && !news ? captionLead(media.caption) : null;
   if (lead && !queries.some((q) => q.toLowerCase() === lead.toLowerCase())) queries.splice(1, 0, lead);
+  // A site the post sends people to is checked by its reputation (Oct 26): the
+  // Oxaam post's 16 searches went on brand names it misspells on purpose
+  // ("Phigma AI", "Adubye Pro"), and none on the site itself, so the Trustpilot
+  // warning about oxaam.com was never found. Searching "is oxaam.com legit"
+  // returned a MIPS simulator and aquarium filters, so the verifiers open
+  // trustpilot.com/review/<site> directly instead.
+  const sitesPrinted = printedSites(media.caption, ocrText, media.author);
+  const siteDomain = !money && !news && sitesPrinted.length
+    ? sitesPrinted[0].split('/')[2].split('.').slice(-2).join('.') : null;
   if (money) log('MONEY MODE', { platforms });
   if (news) log('NEWS MODE', { event: modelTechName });
   log('STAGE 2 QUERIES', queries);
@@ -2174,7 +2213,8 @@ export const analyzeReelApi = async (url) => {
   const verified = await runVerifiers(claimsData, transcript, ocrText, searched, {
     money,
     printedRepos: printedGithubSlugs(printedText),
-    printedSites: printedSites(media.caption, ocrText, media.author),
+    printedSites: sitesPrinted,
+    reviewSite: siteDomain,
   });
   const structured = verified.rows;
   lap('verifiers');
@@ -2217,6 +2257,21 @@ export const analyzeReelApi = async (url) => {
   if (subject.name !== undefined && subject.name !== claimsData.tech_name) {
     claimsData = { ...claimsData, tech_name: subject.name };
   }
+  // Leaderboard rivals are not the post's tools either (Oct 26): with the
+  // subject rejected, "Meta-Harness" stayed in the tool list carrying the
+  // caption's claim, and the judge checked Stanford's repo against it.
+  const rivalNames = new Set();
+  // Not on a "Top 10" post, whose ranked entries ARE the subject - but a
+  // post with four tools counts as a list too, so test the title, not listPost.
+  if (!money && !news && !LIST_NAME.test(String(modelTechName || ''))) {
+    const flat = (t) => String(t || '').toLowerCase().replace(/[|\n]+/g, ' ').replace(/\s+/g, ' ');
+    const rivals = (claimsData.tools || []).filter((t) => leaderboardOnly(t.name, flat(media.caption), flat(ocrText)));
+    if (rivals.length && rivals.length < claimsData.tools.length) {
+      log('LEADERBOARD RIVALS DROPPED', rivals.map((t) => t.name));
+      rivals.forEach((t) => rivalNames.add(flatKey(t.name)));
+      claimsData = { ...claimsData, tools: claimsData.tools.filter((t) => !rivals.includes(t)) };
+    }
+  }
 
   const coverage = slideCoverage(ocrText, media.imagesUsed);
   if (coverage) log('COVERAGE', coverage);
@@ -2227,7 +2282,11 @@ export const analyzeReelApi = async (url) => {
   const pinned = [...new Set([subject.slug, ...printedGithubSlugs(ocrText)].filter(Boolean))];
   const kept = money
     ? rankMoneyEvidence(evidence, platforms)
-    : rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned, { list: listPost, news });
+    : rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned, {
+      list: listPost,
+      news,
+      lead: claimsData.tech_name || news ? '' : captionLead(media.caption),
+    });
   if (pinned.length) log('PINNED EVIDENCE', pinned);
   // Wait for the main judge's minute rather than hand the verdict to the
   // backup: on Oct 7, 5 of 13 back-to-back reels were judged by the backup
@@ -2239,7 +2298,7 @@ export const analyzeReelApi = async (url) => {
     await sleep(judgeWait);
     setJobNote(null);
   }
-  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage, kept, { author: media.author, money, platforms, news });
+  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage, kept, { author: media.author, money, platforms, news, subjectSlug: subject.slug });
   lap('synthesis');
   log('STAGE 3 RAW REPORT', report);
   const verdictRaw = report.verdict;
@@ -2305,7 +2364,7 @@ export const analyzeReelApi = async (url) => {
   // fetched, so an invented repo can never become the headline.
   const evidenceUrls = evidence.map((e) => String(e.url || '').toLowerCase()).join(' ');
   const traceable = (normalized.tools || []).filter(
-    (t) => t.repo && evidenceUrls.includes(String(t.repo).toLowerCase())
+    (t) => t.repo && evidenceUrls.includes(String(t.repo).toLowerCase()) && !rivalNames.has(flatKey(t.name))
   );
   const fallbackName = traceable.length === 1 ? traceable[0].name : null;
   if (!subject.name && fallbackName) {

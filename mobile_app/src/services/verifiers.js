@@ -284,6 +284,8 @@ export const readPage = async (url, maxChars = 8000) => {
 //
 // Only positive rows come back. A 404 or a dead host is NOT reported as "link
 // is dead": OCR misreads slugs and paths, and a misread must never become FAKE.
+const OWN_PAGE_CHARS = 2500;
+
 export const checkPrintedRepo = async (slug) => {
   try {
     const { data } = await axios.get(`https://api.github.com/repos/${slug}`, {
@@ -296,12 +298,15 @@ export const checkPrintedRepo = async (slug) => {
       const res = await axios.get(`https://raw.githubusercontent.com/${full}/HEAD/README.md`, { timeout: TIMEOUT, responseType: 'text' });
       readme = String(res.data || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     } catch (e) { /* no README is fine; the repo row stands */ }
-    return [row(
-      `GitHub - ${full} (the repo the post prints)`,
-      `https://github.com/${full}`,
-      `REPO EXISTS: ${full}, ${data.stargazers_count} stars, last push ${String(data.pushed_at || '').slice(0, 10)}. ${data.description || ''}`,
-      readme
-    )];
+    return [{
+      ...row(
+        `GitHub - ${full} (the repo the post prints)`,
+        `https://github.com/${full}`,
+        `REPO EXISTS: ${full}, ${data.stargazers_count} stars, last push ${String(data.pushed_at || '').slice(0, 10)}. ${data.description || ''}`
+      ),
+      // The post's own link is the best evidence there is; keep more of it.
+      pagePreview: readme.slice(0, OWN_PAGE_CHARS),
+    }];
   } catch (e) {
     return [];
   }
@@ -317,7 +322,7 @@ export const checkPrintedSite = async (url) => {
     // The reader returns its own page for a 404 ("Warning: Target URL
     // returned error 404"), which is not the site's content.
     if (text && !/Target URL returned error \d+/i.test(text)) {
-      return [row(`${host} - the page the post links to`, target, text.slice(0, 300), text)];
+      return [{ ...row(`${host} - the page the post links to`, target, text.slice(0, 300)), pagePreview: text.slice(0, OWN_PAGE_CHARS) }];
     }
   }
   // The reader got nothing. A site that answers 401/403/429 exists and blocks
@@ -384,13 +389,21 @@ export const fillMissingPageText = async (rows, limit = 4) => {
 // title ("GoTranscript | Read Customer Service Reviews") with no content, which
 // is all the model had on the first side-hustle runs. Trustpilot is readable
 // through the reader and its page states the score and recent reviews.
-export const checkTrustpilot = async (url, platform) => {
+export const checkTrustpilot = async (url, platform, opts = {}) => {
   const text = await readPage(url, 5000);
   if (!text) return [];
   const score = (text.match(/TrustScore\s*([0-9.]+)\s*out of 5/i) || [])[1] || null;
   const count = (text.match(/([\d,.]+k?)\s+(?:total\s+)?reviews/i) || [])[1] || null;
+  // Oct 26: oxaam.com's page says "This company's rating is unavailable due
+  // to a breach of our guidelines" - the most telling line on it, and the
+  // judge never saw it.
+  const warned = /rating is unavailable due to a breach|breach of our guidelines/i.test(text);
+  // A guessed address (strict) may be Trustpilot's "not found" page: keep it
+  // only when it carries a score or the warning.
+  if (opts.strict && !score && !warned) return [];
   const summary = 'Trustpilot TrustScore ' + (score || 'unknown') + ' out of 5' +
-    (count ? ' from ' + count + ' reviews' : '');
+    (count ? ' from ' + count + ' reviews' : '') +
+    (warned ? '. TRUSTPILOT WARNING: the rating was removed because the company breached Trustpilot guidelines (for example fake or incentivised reviews)' : '');
   return [row(
     'Trustpilot - ' + platform + (score ? ' (' + score + '/5)' : ''),
     url,
@@ -512,6 +525,21 @@ export const runVerifiers = async (claimsData, transcript = '', ocrText = '', ev
   }
   for (const site of (opts.printedSites || []).slice(0, 3)) {
     once(`site:${site}`, () => checkPrintedSite(site));
+  }
+
+  // A site the post prints, reviewed on Trustpilot: read the page, not just
+  // its search title (tech posts; money posts read theirs below).
+  if (!opts.money) {
+    // The address is predictable, so open it rather than hope a search finds it.
+    if (opts.reviewSite) {
+      once('trustpilot:' + opts.reviewSite, () =>
+        checkTrustpilot('https://www.trustpilot.com/review/' + opts.reviewSite, opts.reviewSite, { strict: true }));
+    }
+    const hosts = (opts.printedSites || []).map((u) => (u.split('/')[2] || '').replace(/^www\./, ''));
+    for (const r of evidence || []) {
+      const m = String(r.url || '').match(/trustpilot\.com\/review\/(?:www\.)?([^/?#]+)/i);
+      if (m && hosts.includes(m[1].toLowerCase())) once('trustpilot:' + m[1], () => checkTrustpilot(r.url, m[1]));
+    }
   }
 
   // Money / side-hustle posts (opts.money): the platforms are websites, not
