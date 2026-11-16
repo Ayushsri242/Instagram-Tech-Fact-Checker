@@ -1288,7 +1288,9 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     Boolean(subjectRepo && String(item.url || '').toLowerCase().replace(/\/$/, '').endsWith(subjectRepo));
   const ownRows = new Set(kept.filter(isOwn).slice(0, 2));
   const ownPage = (item) => ownRows.has(item);
-  const evidenceText = kept.map((item) => [
+  // Numbered so every gotcha can name the source it quotes (see PROOF).
+  const evidenceText = kept.map((item, i) => [
+    'Source [' + (i + 1) + ']',
     'Title: ' + (item.title || ''),
     'URL: ' + (item.url || ''),
     'Snippet: ' + (item.snippet || '').slice(0, 300),
@@ -1376,6 +1378,10 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     '- factual_reality: AT MOST 2 sentences, under 220 characters total. Say what the tool/platform is and whether the claim holds. No preamble.',
     '- claims: at most 4 items, each one short sentence under 100 characters.',
     '- gotchas: at most 4 items, each one short sentence under 100 characters. Only real blockers, not generic advice.',
+    // Nov 16: the first wording ("a point you cannot back with a real quote does
+    // not belong in the report") made the judge pick UNVERIFIED on 7 of 13
+    // replayed posts, 4 of them previously correct.
+    '- QUOTES: each gotcha and each tool caveat carries "source" - the number of the Source [n] it comes from, or "post" for the post\'s own caption, speech or slides - and "quote": 4 to 25 words copied word for word from that source. Code deletes a gotcha or caveat whose quote is not in its source. "verdict_basis" quotes the line your verdict rests on most. Quoting is a format rule only: it does not change the verdict rules above and is never a reason to choose UNVERIFIED.',
     '- tools[].what_it_does: ONE short sentence, under 90 characters.',
     '- tools: ONLY software, platforms, or websites the post tells the viewer to use. Do NOT list generic concepts or section headings as tools.',
     '- tools[].role: "main" if the post is about this tool, it is new or little-known, or the post tells the viewer to install or use it; every item of a list post is "main". "mention" if it is a well-known product only named in passing (e.g. Node.js, PHP, GitLab in a news roundup).',
@@ -1383,7 +1389,8 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     'Prefer the canonical repository over a fork or mirror. If a repo looks like a fork of a more popular project, name the original.',
     '',
     'Return ONLY JSON:',
-    '{"tech_name":"string","verdict":"TRUE","pricing_model":"Open Source or Commercial","github_url":"https://github.com/... or null","factual_reality":"2-4 sentence explanation","claims":["one plain sentence per claim"],"tools":[{"name":"Tool or Website Name","repo":"owner/repo or null","website":"domain.com or null","install":"pip install x or null","what_it_does":"one plain sentence","caveat":"one plain sentence or null","status":"verified","role":"main"}],"gotchas":["one plain sentence per caveat"]}',
+    '{"tech_name":"string","verdict":"TRUE","pricing_model":"Open Source or Commercial","github_url":"https://github.com/... or null","factual_reality":"2-4 sentence explanation","claims":["one plain sentence per claim"],"tools":[{"name":"Tool or Website Name","repo":"owner/repo or null","website":"domain.com or null","install":"pip install x or null","what_it_does":"one plain sentence","caveat":{"text":"one plain sentence","source":3,"quote":"exact words from Source [3]"},"status":"verified","role":"main"}],"gotchas":[{"text":"one plain sentence","source":"post","quote":"exact words from the post"}],"verdict_basis":{"source":2,"quote":"exact words from Source [2] that decide the verdict"}}',
+    'A tool with no caveat has "caveat": null.',
   ].join('\n');
   return callGroq(apiKey, [
     { role: 'system', content: 'You are a precise, objective AI technical fact checker. Output strictly valid JSON.' },
@@ -1529,12 +1536,72 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     }
   }
 
+  // Every gotcha, tool caveat and the verdict must quote its source (Nov 16).
+  // The judge wrote warnings no page contained ("linked to malware scams",
+  // "issue size ~62,000 cr"); the number/accusation filter below caught only
+  // those two shapes. Now each point carries a quote, and a quote that is not
+  // in the source it names - or in any row, or the post, since the model
+  // sometimes misnumbers - deletes the point. Matching ignores case and
+  // punctuation, and allows a few words to differ because the page reader
+  // reformats text (markdown, line breaks, curly quotes).
+  report.droppedGotchas = 0;
+  const words = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+  const inText = (quote, text) => {
+    const t = words(text);
+    const flat = ' ' + t.join(' ') + ' ';
+    if (flat.includes(' ' + quote.join(' ') + ' ')) return true;
+    const content = [...new Set(quote.filter((w) => w.length >= 3))];
+    if (content.length < 4) return false;
+    const need = Math.ceil(content.length * 0.85);
+    for (let i = 0; i < t.length; i++) {
+      if (!content.includes(t[i])) continue;
+      const win = new Set(t.slice(i, i + quote.length + 4));
+      if (content.filter((w) => win.has(w)).length >= need) return true;
+    }
+    return false;
+  };
+  const sources = opts.sources || rows;
+  // The source a quote really came from: { url } for a page, { url: null } for
+  // the post. null = not found anywhere.
+  const proven = (proof) => {
+    if (!proof) return null;
+    const quote = words(proof.quote);
+    if (quote.length < 3) return null;
+    const n = Number(String(proof.source).replace(/[^\d]/g, '')) || 0;
+    const post = { text: opts.postText, url: null };
+    const named = /post/i.test(String(proof.source)) ? post : sources[n - 1] ? { text: hay(sources[n - 1]), url: sources[n - 1].url } : null;
+    const all = [named, ...rows.map((r) => ({ text: hay(r), url: r.url })), post].filter(Boolean);
+    return all.find((c) => inText(quote, c.text)) || null;
+  };
+  const host = (url) => (url ? String(url).split('/')[2] || '' : 'the post').replace(/^www\./, '');
+  let items = [];
+  for (const g of report.gotchas || []) {
+    const where = proven(g.proof);
+    if (where) { items.push({ text: g.text, from: host(where.url), url: where.url }); continue; }
+    notes.push(`Dropped gotcha (${g.proof ? 'quote not in any source' : 'no quote'}): "${g.text}"`);
+    report.droppedGotchas += 1;
+  }
+  for (const t of report.tools || []) {
+    if (t.caveat && !proven(t.caveatProof)) {
+      notes.push(`Dropped caveat on "${t.name}" (${t.caveatProof ? 'quote not in any source' : 'no quote'}): "${t.caveat}"`);
+      report.droppedGotchas += 1;
+      t.caveat = null;
+    }
+    delete t.caveatProof;
+  }
+  // A FAKE or MISLEADING must rest on words someone actually wrote.
+  if ((report.verdict === 'FAKE' || report.verdict === 'MISLEADING') && !proven(report.verdictProof)) {
+    notes.push(`${report.verdict} -> UNVERIFIED: the verdict's quote (${report.verdictProof ? '"' + report.verdictProof.quote + '"' : 'none'}) is in no source.`);
+    report.verdict = 'UNVERIFIED';
+  }
+  delete report.verdictProof;
+
   // A rename the resolver confirmed must not be silently dropped.
   const rename = findRow(/RENAME CONFIRMED|RENAMED: /i);
   if (rename) {
     const line = String(rename.snippet || rename.pagePreview || '').replace(/\s+/g, ' ').trim();
-    if (line && !(report.gotchas || []).some((g) => /renamed|now lives at|is now/i.test(g))) {
-      report.gotchas = [line.slice(0, 140), ...(report.gotchas || [])].slice(0, 4);
+    if (line && !items.some((g) => /renamed|now lives at|is now/i.test(g.text))) {
+      items = [{ text: line.slice(0, 140), from: host(rename.url), url: rename.url }, ...items].slice(0, 4);
       notes.push('Added the confirmed rename to gotchas; the model had that row and omitted it.');
     }
   }
@@ -1552,14 +1619,17 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     const words = (g.match(ACCUSE) || []).filter((w) => !known.includes(w.toLowerCase().replace(/s$/, '')));
     return nums.length ? 'number ' + nums[0] : words.length ? '"' + words[0] + '"' : null;
   };
-  report.droppedGotchas = 0;
-  report.gotchas = (report.gotchas || []).filter((g) => {
-    const why = unsupported(g);
+  // Still applied: a real quote can carry an invented number in the sentence.
+  items = items.filter((g) => {
+    const why = unsupported(g.text);
     if (!why) return true;
-    notes.push(`Dropped gotcha (${why} is in no evidence row or the post): "${g}"`);
+    notes.push(`Dropped gotcha (${why} is in no evidence row or the post): "${g.text}"`);
     report.droppedGotchas += 1;
     return false;
   });
+  report.gotchas = items.map((g) => g.text);
+  // Where each gotcha came from, for the card ("from trustpilot.com").
+  report.gotchaSources = items.map((g) => ({ from: g.from, url: g.url }));
 
   // Two questions, two answers.
   //
@@ -1985,6 +2055,9 @@ export const deriveConfidence = ({ subjectNamed, coverage, toolsReal, rowsWithTe
   return { score: Math.max(10, Math.min(95, score)), why };
 };
 
+const proofOf = (v) => (v && typeof v === 'object' && v.quote
+  ? { source: v.source, quote: String(v.quote) } : null);
+
 const normalizeReport = (report, evidence, opts = {}) => {
   const VERDICTS = ['TRUE', 'PARTIALLY_TRUE', 'HYPE', 'MISLEADING', 'FAKE', 'UNVERIFIED'];
   const verdict = VERDICTS.includes(report.verdict) ? report.verdict : 'UNKNOWN';
@@ -1996,7 +2069,8 @@ const normalizeReport = (report, evidence, opts = {}) => {
       website: cleanLine(t.website) || null,
       install: cleanLine(t.install) || null,
       whatItDoes: clampSentences(cleanLine(t.what_it_does), 1, 100),
-      caveat: cleanLine(t.caveat) || null,
+      caveat: cleanLine(t.caveat && typeof t.caveat === 'object' ? t.caveat.text : t.caveat) || null,
+      caveatProof: proofOf(t.caveat),
       status: ['verified', 'not_found'].includes(t.status) ? t.status : 'unverified',
       role: t.role === 'mention' ? 'mention' : 'main',
     }))
@@ -2018,12 +2092,20 @@ const normalizeReport = (report, evidence, opts = {}) => {
     }
     if (references.length >= 8) break;
   }
+  // Gotchas keep the source and quote the judge gave for each (see PROOF).
+  const gotchas = [];
+  for (const g of Array.isArray(report.gotchas) ? report.gotchas : cleanList(report.gotchas)) {
+    const text = clampSentences(cleanList([g], 1)[0] || '', 1, 110);
+    if (text && !gotchas.some((x) => x.text === text)) gotchas.push({ text, proof: proofOf(g) });
+    if (gotchas.length >= 4) break;
+  }
   const out = applyEvidenceRules({
     verdict,
+    verdictProof: proofOf(report.verdict_basis),
     factualReality: clampSentences(cleanLine(report.factual_reality), 2, 220),
     claims: cleanList(report.claims, 4).map((c) => clampSentences(c, 1, 110)),
     tools,
-    gotchas: cleanList(report.gotchas, 4).map((g) => clampSentences(g, 1, 110)),
+    gotchas,
     references,
     toolsReal: null,
   }, evidence, report.tech_name, opts);
@@ -2304,6 +2386,7 @@ export const analyzeReelApi = async (url) => {
   const verdictRaw = report.verdict;
   const normalized = normalizeReport(report, evidence, {
     money, news, list: listPost,
+    sources: kept,
     postText: [media.caption, ocrText, transcript].join(' '),
   });
   normalized.confidence = deriveConfidence({

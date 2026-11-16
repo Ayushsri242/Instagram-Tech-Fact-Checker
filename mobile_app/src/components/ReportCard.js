@@ -144,7 +144,20 @@ export default function ReportCard({ report, techName, onAskTool, compact = fals
 
       {gotchas.length > 0 && (
         <Section title="GOTCHAS">
-          {gotchas.map((g, i) => <Bullet key={`g${i}`}>{g}</Bullet>)}
+          {gotchas.map((g, i) => {
+            // Where the judge quoted it from (Nov 16); older saved reports have none.
+            const src = (report.gotchaSources || [])[i];
+            return (
+              <View key={`g${i}`}>
+                <Bullet>{g}</Bullet>
+                {!!src && !!src.from && (
+                  <TouchableOpacity disabled={!src.url} onPress={() => openUrl(src.url)}>
+                    <Text style={[styles.gotchaSource, !!src.url && styles.gotchaLink]}>from {src.from}</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          })}
         </Section>
       )}
 
@@ -204,6 +217,8 @@ const styles = StyleSheet.create({
   bulletRow: { flexDirection: 'row', marginBottom: 3, paddingRight: 4 },
   bulletDot: { color: colors.accentCyan, fontSize: 14, lineHeight: 19, marginRight: 7 },
   bulletText: { color: colors.textPrimary, fontSize: 13.5, lineHeight: 19, flex: 1 },
+  gotchaSource: { color: colors.textSecondary, fontSize: 11.5, marginLeft: 16, marginTop: -2, marginBottom: 4 },
+  gotchaLink: { color: colors.accentCyan },
   tool: {
     borderLeftWidth: 2,
     borderLeftColor: colors.cardBorder,
