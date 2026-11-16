@@ -716,7 +716,17 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
                     val outcome = webValidator.searchWeb(query, maxResults = 4)
                     engineCounts[outcome.engine] = (engineCounts[outcome.engine] ?: 0) + 1
                     if (outcome.blocked) failedQueries.add(query)
+                    // An "owner/repo github" query keeps only results that name
+                    // the repo (Nov 16). "orange-3dv-team/mocha github" returned
+                    // Orange the telecom company, whose pages crowded the real
+                    // evidence out of the judge's budget.
+                    val repoWord = Regex("^[A-Za-z0-9_.-]+/([A-Za-z0-9_.-]+) github$", RegexOption.IGNORE_CASE)
+                        .find(query)?.groupValues?.get(1)?.lowercase()?.replace(Regex("[-_.]"), "")
                     for (result in outcome.results) {
+                        if (repoWord != null && repoWord.length >= 3) {
+                            val hay = (result.title + " " + result.url + " " + result.snippet).lowercase().replace(Regex("[-_.]"), "")
+                            if (!hay.contains(repoWord)) continue
+                        }
                         searchHits++
                         collect(result)
                     }

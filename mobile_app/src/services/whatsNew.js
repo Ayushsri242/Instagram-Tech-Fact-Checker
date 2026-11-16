@@ -8,13 +8,14 @@ import { PERMISSIONS_DONE_KEY } from '../screens/WelcomeScreen';
 // the first time the app opens after updating. No new entry = no popup.
 export const WHATS_NEW = [
   {
-    id: '2026-10-26b',
+    // New id on Nov 16 ("Not checked" line added), so phones that saw 10-26b see it again.
+    id: '2026-11-16',
     title: "What's new in Assay",
     items: [
       'Assay reads more of the page a post links to, so details like pay or hours are no longer missed.',
-      'Websites a post sends you to are checked on Trustpilot, including sites flagged for fake reviews.',
+      'Websites a post sends you to are checked on Trustpilot, and a site flagged for fake reviews counts against the post.',
       'Posts that don\'t name their tool are matched to it by what they describe, not by a rival shown on a chart.',
-      'Every warning now shows where it came from. Tap it to open that page. Warnings with no real source are removed.',
+      'Every warning shows where it came from; tap it to open that page. Points no source confirms or contradicts are listed under "Not checked" and no longer lower the verdict.',
     ],
   },
   {
