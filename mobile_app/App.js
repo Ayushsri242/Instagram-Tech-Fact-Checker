@@ -8,7 +8,7 @@ import { setOfflineMode, logStorageUsage } from './src/services/storage';
 import { AppRegistry } from 'react-native';
 import { startBubbleQueue, takePendingReels, waitUntilIdle } from './src/services/bubbleQueue';
 import { checkForUpdates } from './src/services/updater';
-import { ensureKeyBackup } from './src/services/secrets';
+import { ensureKeyBackup, loadExaKeyIntoNative } from './src/services/secrets';
 import HomeScreen from './src/screens/HomeScreen';
 import ResultScreen from './src/screens/ResultScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
@@ -45,6 +45,7 @@ export default function App() {
     logStorageUsage();
     // A key saved before the Downloads backup existed gets one now.
     ensureKeyBackup();
+    loadExaKeyIntoNative();
   }, []);
 
   useEffect(() => {

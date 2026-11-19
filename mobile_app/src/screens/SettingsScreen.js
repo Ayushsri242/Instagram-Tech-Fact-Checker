@@ -3,7 +3,7 @@ import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, Nati
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from '../theme/colors';
-import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey, restoreGroqKeyFromBackup } from '../services/secrets';
+import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey, restoreGroqKeyFromBackup, getExaApiKey, saveExaApiKey, deleteExaApiKey } from '../services/secrets';
 import { isGroqKey } from '../services/api';
 import { readRunLog, readOldRunLog, clearRunLog, RUN_LOG_PATH } from '../services/runlog';
 import { checkForUpdates, currentVersion } from '../services/updater';
@@ -15,6 +15,16 @@ import WhatsNewModal from '../components/WhatsNewModal';
 export default function SettingsScreen({ navigation }) {
   const [groqApiKey, setGroqApiKey] = useState('');
   const [hasGroqApiKey, setHasGroqApiKey] = useState(false);
+  const [exaKey, setExaKey] = useState('');
+  const [hasExaKey, setHasExaKey] = useState(false);
+  useEffect(() => { getExaApiKey().then((k) => { setHasExaKey(Boolean(k)); setExaKey(k || ''); }).catch(() => {}); }, []);
+  const saveExa = async () => {
+    if (!exaKey.trim()) return;
+    await saveExaApiKey(exaKey);
+    setHasExaKey(true);
+    Alert.alert('Saved', 'Web searches now go through Exa.');
+  };
+  const removeExa = async () => { await deleteExaApiKey(); setHasExaKey(false); setExaKey(''); };
   const [runLogRows, setRunLogRows] = useState(0);
   const [updateStatus, setUpdateStatus] = useState('');
   const [showWhatsNew, setShowWhatsNew] = useState(false);
@@ -189,6 +199,35 @@ export default function SettingsScreen({ navigation }) {
               <Text style={styles.restoreHint}>Then tap the file named assay_groq_key.txt</Text>
             </TouchableOpacity>
           )}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.title}>Exa Search Key (optional)</Text>
+          <Text style={styles.desc}>
+            Finds the web sources. Without it the app scrapes DuckDuckGo/Bing,
+            which often block it. Free at dashboard.exa.ai ($10 credit a month).
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={exaKey}
+            onChangeText={setExaKey}
+            placeholder="Exa API key"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+          />
+          <Text style={styles.keyStatus}>Status: {hasExaKey ? 'Saved on device' : 'Not saved'}</Text>
+          <View style={styles.buttonRow}>
+            <TouchableOpacity style={styles.downloadBtn} onPress={saveExa}>
+              <Text style={styles.btnText}>Save Key</Text>
+            </TouchableOpacity>
+            {hasExaKey && (
+              <TouchableOpacity style={styles.deleteBtn} onPress={removeExa}>
+                <Text style={styles.btnText}>Delete</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
       <View style={styles.card}>

@@ -75,6 +75,13 @@ class TechFactCheckerModule(private val reactContext: ReactApplicationContext) :
         return "TechFactChecker"
     }
 
+    // Exa search key from Settings (Nov 19). Empty = old engines only.
+    @ReactMethod
+    fun setExaKey(key: String, promise: Promise) {
+        com.techfactchecker.app.domain.WebValidator.exaKey = key.trim()
+        promise.resolve(true)
+    }
+
     @ReactMethod
     fun reloadModel(promise: Promise) {
         try {

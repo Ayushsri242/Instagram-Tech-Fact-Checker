@@ -50,3 +50,15 @@ export const restoreGroqKeyFromBackup = async () => {
   await SecureStore.setItemAsync(BACKED_UP, key.trim().slice(-6));
   return key.trim();
 };
+
+// Exa web search key (Nov 19): DuckDuckGo blocks the app's searches and Bing
+// degrades them; with a key, searches go to Exa first. Optional: without it
+// the old engines are used. Handed to the native search on save and at start.
+const EXA_API_KEY = 'exa_api_key';
+const pushExaKey = async (key) => {
+  try { if (TechFactChecker?.setExaKey) await TechFactChecker.setExaKey(key || ''); } catch (e) { /* older native build */ }
+};
+export const getExaApiKey = () => SecureStore.getItemAsync(EXA_API_KEY);
+export const saveExaApiKey = async (key) => { await SecureStore.setItemAsync(EXA_API_KEY, key.trim()); await pushExaKey(key.trim()); };
+export const deleteExaApiKey = async () => { await SecureStore.deleteItemAsync(EXA_API_KEY); await pushExaKey(''); };
+export const loadExaKeyIntoNative = async () => pushExaKey(await getExaApiKey());

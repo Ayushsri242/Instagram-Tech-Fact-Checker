@@ -33,6 +33,11 @@ class WebValidator {
         // and then serves an "anomaly / challenge" page (HTTP 202) to the
         // rest; the old code read that as "no results", and one side-hustle
         // reel was judged on 1 source with 85% confidence.
+        // Exa search API key, set from Settings; blank = not used.
+        @Volatile
+        var exaKey: String = ""
+        @Volatile
+        var exaFailedUntil: Long = 0L
         @Volatile
         var ddgBlockedUntil: Long = 0L
         @Volatile
@@ -214,6 +219,14 @@ class WebValidator {
 
     suspend fun searchWeb(query: String, maxResults: Int = 4): SearchOutcome {
         val now = System.currentTimeMillis()
+        // Nov 19: Exa first when a key is saved. DuckDuckGo blocks scripted
+        // searches and Bing degrades them; on the laptop's 37 dev posts Exa cut
+        // "couldn't verify" from 14 to 8. Exa returns page text with each hit.
+        if (exaKey.isNotBlank() && now >= exaFailedUntil) {
+            val exa = searchExa(query, maxResults)
+            if (exa != null) return SearchOutcome(exa, "exa", false)
+            exaFailedUntil = now + 5 * 60_000L
+        }
         if (now >= ddgBlockedUntil) {
             val ddg = searchDuckDuckGoChecked(query, maxResults)
             if (ddg != null) return SearchOutcome(ddg, "ddg", false)
@@ -222,12 +235,68 @@ class WebValidator {
             Log.w("WebValidator", "DuckDuckGo bot check - switching to Bing for 10 min")
         }
         if (now >= bingBlockedUntil) {
-            val bing = searchBing(query, maxResults)
+            // Nov 18: Bing answers scripted requests with results for one word
+            // of the query ("User Interviews reviews" -> dictionary pages for
+            // "user"; a test query even got PostgreSQL). Keep only results that
+            // name the query; if none do, the page was degraded: treat as blocked.
+            val bing = searchBing(query, maxResults)?.let { r ->
+                val kept = r.filter { matchesQuery(query, it) }
+                if (r.isNotEmpty() && kept.isEmpty()) null else kept
+            }
             if (bing != null) return SearchOutcome(bing, "bing", false)
             bingBlockedUntil = now + 2 * 60_000L
             Log.w("WebValidator", "Bing bot check too")
         }
         return SearchOutcome(emptyList(), "none", true)
+    }
+
+    private val queryFiller = setOf("reviews", "review", "trustpilot", "reddit", "official", "github", "website",
+        "how", "much", "can", "you", "really", "earn", "with", "from", "that", "this", "what", "free", "the", "and", "for")
+
+    /** At least half of the query's distinctive words (2 or more when it has 2+) appear in the result. */
+    private fun matchesQuery(query: String, r: EvidenceSource): Boolean {
+        val words = query.lowercase().split(Regex("[^a-z0-9]+")).filter { it.length >= 3 && it !in queryFiller }.distinct()
+        if (words.isEmpty()) return true
+        val text = (r.title + " " + r.url + " " + r.snippet).lowercase()
+        val hits = words.count { text.contains(it) }
+        val need = if (words.size >= 2) maxOf(2, (words.size + 1) / 2) else 1
+        return hits >= need
+    }
+
+    /** Exa search: results with page text, or null on any failure (then the old engines run). */
+    private suspend fun searchExa(query: String, maxResults: Int): List<EvidenceSource>? = withContext(Dispatchers.IO) {
+        try {
+            val body = org.json.JSONObject()
+                .put("query", query)
+                .put("numResults", maxResults)
+                .put("type", "auto")
+                .put("contents", org.json.JSONObject().put("text", org.json.JSONObject().put("maxCharacters", 2500)))
+            val conn = (java.net.URL("https://api.exa.ai/search").openConnection() as java.net.HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 10000
+                readTimeout = 20000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("x-api-key", exaKey)
+            }
+            conn.outputStream.use { it.write(body.toString().toByteArray()) }
+            if (conn.responseCode != 200) { conn.disconnect(); return@withContext null }
+            val json = org.json.JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            conn.disconnect()
+            val arr = json.optJSONArray("results") ?: return@withContext null
+            (0 until arr.length()).map { i ->
+                val r = arr.getJSONObject(i)
+                val text = r.optString("text", "")
+                EvidenceSource(
+                    title = r.optString("title", "").ifBlank { r.optString("url") },
+                    url = r.optString("url"),
+                    snippet = text.take(300).replace(Regex("\s+"), " "),
+                    pagePreview = text
+                )
+            }.filter { it.url.startsWith("http") }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /** Results, or null when DuckDuckGo answered with its bot check. */

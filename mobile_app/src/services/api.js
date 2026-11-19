@@ -398,13 +398,20 @@ const describeRunTokens = () => {
 // non-empty. Anything else - empty answer, cut-off answer, unparseable - moves
 // on to the next model instead of failing the run.
 //
-// Rate limits: wait the time Groq states and retry the SAME model once (its
-// minute has reset by then); if it is still limited, the next model has its own
-// separate budget. "Request too large" is not waited on - it cannot succeed.
+// Rate limits: wait the time Groq states and retry the SAME model (up to 3
+// waits, see MAX_WAITS_PER_MODEL); if it is still limited, the next model has
+// its own separate budget. "Request too large" is not waited on - it cannot succeed.
+// Nov 17: one wait of the stated time was not enough. The output-per-minute
+// limit is a rolling minute: after "try again in 9.54s" qwen was still full,
+// the fallback was limited too, and the reel failed (metav3rse, twice). Now a
+// model gets up to 3 waits, the later ones at least 20 s, within one budget.
+const MAX_WAITS_PER_MODEL = 3;
+const WAIT_BUDGET_MS = 150000;
 const callGroq = async (apiKey, messages, { job, json, accept, temperature }) => {
   let lastError;
+  let waitedMs = 0;
   for (const model of MODEL_CHAINS[job]) {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt <= MAX_WAITS_PER_MODEL; attempt++) {
       try {
         const response = await axios.post(
           GROQ_URL,
@@ -459,8 +466,10 @@ const callGroq = async (apiKey, messages, { job, json, accept, temperature }) =>
           console.warn(`${job}: ${model} unusable - ${error.message}`);
           lastError = error;
         }
-        const waitMs = attempt === 0 ? rateLimitWaitMs(error) : 0;
-        if (waitMs > 0) {
+        const stated = attempt < MAX_WAITS_PER_MODEL ? rateLimitWaitMs(error) : 0;
+        const waitMs = stated > 0 ? Math.max(stated, attempt > 0 ? 20000 : 0) : 0;
+        if (waitMs > 0 && waitedMs + waitMs <= WAIT_BUDGET_MS) {
+          waitedMs += waitMs;
           console.warn(`Rate limited on ${model}; waiting ${waitMs}ms then retrying.`);
           // Show the wait on Home's progress strip, then put back what it said.
           const before = (getJobState().running || {}).note || null;
@@ -486,6 +495,19 @@ const approxTokens = (s) => Math.ceil(String(s || '').length / 3.6);
 // A whole step-1 request (instructions + post text). Under the free tier's
 // 8,000 tokens per minute with room for the answer (~1-2.5k tokens).
 const EXTRACT_PROMPT_BUDGET = 5500;
+// The judge's whole request (prompt + the 4,096-token answer allowance Groq
+// counts against the same 8,000 per minute), with a margin for the estimate.
+const JUDGE_ANSWER_TOKENS = 4096;
+const JUDGE_REQUEST_LIMIT = 7300;
+
+// Step 3 of the Nov 17 accuracy plan, OFF until it scores better on the dev
+// set: the judge marks each claim supported / contradicted / exaggerated /
+// not found with a quote, and CODE picks the verdict (claimVerdict). On the
+// 37 dev posts the free-form verdict called 10 TRUE posts PARTIALLY_TRUE over
+// points no source made; a fixed rule cannot drift like that.
+// Nov 19: ON. 3 runs x 25 dev posts: 11 exact vs 4 (old), 31/75 runs vs 16/75.
+let claimJudge = true;
+export const setClaimJudge = (on) => { claimJudge = Boolean(on); };
 
 // The same piece of text on every slide - creator handle, series header, page
 // footer - is kept once. Short fragments (numbers, "1/20") are always kept:
@@ -1288,6 +1310,9 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     Boolean(subjectRepo && String(item.url || '').toLowerCase().replace(/\/$/, '').endsWith(subjectRepo));
   const ownRows = new Set(kept.filter(isOwn).slice(0, 2));
   const ownPage = (item) => ownRows.has(item);
+  transcript = (transcript || '').slice(0, MAX_TRANSCRIPT);
+  ocrText = (ocrText || '').slice(0, MAX_OCR);
+  const buildPrompt = () => {
   // Numbered so every gotcha can name the source it quotes (see PROOF).
   const evidenceText = kept.map((item, i) => [
     'Source [' + (i + 1) + ']',
@@ -1298,9 +1323,7 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     'Page Context: ' + extractClaimAnchored(item.pagePreview, ownPage(item) ? OWN_PAGE_PREVIEW
       : post.news && isNewsRow(item) ? 700 : MAX_PAGE_PREVIEW),
   ].join('\n')).join('\n\n');
-  transcript = (transcript || '').slice(0, MAX_TRANSCRIPT);
-  ocrText = (ocrText || '').slice(0, MAX_OCR);
-  const prompt = [
+  return [
     'You are a senior Applied AI and Software Engineer acting as a practical, objective Fact-Checker for social media tech videos and posts.',
     'Analyze the claims made in the transcript/caption and on-screen visuals against the collected real-world web evidence.',
     '',
@@ -1376,6 +1399,13 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     // over gotchas like "not fully confirmed" and "no independent verification".
     '"Not confirmed" is not a caveat: a detail the evidence does not mention never moves a post from TRUE to PARTIALLY_TRUE and is not a gotcha. A caveat is something a source states.',
     '',
+    ...(claimJudge ? ['',
+      'CLAIM CHECKS (claim_checks): list the 2-6 claims a viewer would act on, INCLUDING what the post implies: "free" / "open source" / "no expensive hardware" / "anyone can" / "unlimited" / a pay figure. For each: "main": true if the post stands or falls on it; "status": one of',
+      '- "supported": a source states it (quote that line);',
+      '- "contradicted": a source states otherwise - paid when the post says free, a big GPU when it says no hardware, a licence that is not open source, a pay figure far below the claim (quote that line);',
+      '- "exaggerated": the thing is real but a source shows it is much smaller than the post says (quote that line);',
+      '- "not_found": no source mentions it. Use this freely: a claim nobody mentions is not_found, never contradicted.',
+      'Each non-not_found check carries "source" and "quote" (4-25 words copied exactly). Judge each claim only by what a source says, never by memory.'] : []),
     'Return FIELDS ONLY. Do not write markdown, headings, bullet characters, tables or emoji inside any value.',
     'BE BRIEF. This is a card the reader scans in five seconds, not an article; they ask follow-up questions in chat afterwards.',
     '- factual_reality: AT MOST 2 sentences, under 220 characters total. Say what the tool/platform is and whether the claim holds. No preamble.',
@@ -1394,7 +1424,21 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     'Return ONLY JSON:',
     '{"tech_name":"string","verdict":"TRUE","pricing_model":"Open Source or Commercial","github_url":"https://github.com/... or null","factual_reality":"2-4 sentence explanation","claims":["one plain sentence per claim"],"tools":[{"name":"Tool or Website Name","repo":"owner/repo or null","website":"domain.com or null","install":"pip install x or null","what_it_does":"one plain sentence","caveat":{"text":"one plain sentence","source":3,"quote":"exact words from Source [3]"},"status":"verified","role":"main"}],"gotchas":[{"text":"one plain sentence","source":"post","quote":"exact words from the post"}],"verdict_basis":{"source":2,"quote":"exact words from Source [2] that decide the verdict"}}',
     'A tool with no caveat has "caveat": null.',
+    ...(claimJudge ? ['Also include "claim_checks":[{"claim":"one plain sentence","main":true,"status":"supported","source":2,"quote":"exact words from Source [2]"}].'] : []),
   ].join('\n');
+  };
+  // Nov 17: news posts (700 characters per article) sent requests of 8,042-
+  // 9,073 tokens; Groq's free tier refuses anything over 8,000 per minute
+  // (counting the answer allowance), so the verdict fell to the fallback model
+  // on 8 of 9 runs. Drop the lowest-ranked rows until the whole request fits.
+  // In place: the caller's evidence rules must see the rows the judge saw.
+  let prompt = buildPrompt();
+  const before = kept.length;
+  while (kept.length > 4 && approxTokens(prompt) + JUDGE_ANSWER_TOKENS > JUDGE_REQUEST_LIMIT) {
+    kept.length -= 1;
+    prompt = buildPrompt();
+  }
+  if (kept.length < before) console.warn(`Judge request over the per-minute limit: evidence ${before} -> ${kept.length} rows.`);
   return callGroq(apiKey, [
     { role: 'system', content: 'You are a precise, objective AI technical fact checker. Output strictly valid JSON.' },
     { role: 'user', content: prompt },
@@ -1594,9 +1638,36 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     }
     delete t.caveatProof;
   }
+  // Claim-level verdict (setClaimJudge). A check whose quote is in no source
+  // counts as not_found. FAKE (scam, dead link) stays with the model when its
+  // basis is quoted: that is a fact about the thing, not about one claim.
+  if (report.claimChecks && report.claimChecks.length) {
+    const checks = report.claimChecks.map((c) => {
+      const status = ['supported', 'contradicted', 'exaggerated'].includes(c && c.status) ? c.status : 'not_found';
+      const ok = status !== 'not_found' && proven({ source: c.source, quote: c.quote });
+      return { claim: cleanLine(c && c.claim), main: c && c.main !== false, status: ok ? status : 'not_found' };
+    });
+    const main = checks.filter((c) => c.main);
+    const side = checks.filter((c) => !c.main);
+    const any = (list, s) => list.some((c) => c.status === s);
+    let v;
+    if (report.verdict === 'FAKE' && proven(report.verdictProof)) v = 'FAKE';
+    else if (any(main, 'contradicted')) v = 'MISLEADING';
+    else if (!any(main, 'supported') && !any(main, 'exaggerated')) v = 'UNVERIFIED';
+    else if (any(main, 'exaggerated')) v = 'HYPE';
+    else if (any(side, 'contradicted') || any(side, 'exaggerated')) v = 'PARTIALLY_TRUE';
+    // Nov 19: a 'quoted caveat -> PARTIALLY_TRUE' rule was tried and removed:
+    // 3x on 25 dev posts it scored 6 exact (8 TRUE posts became PT).
+    else v = 'TRUE';
+    notes.push(`Claim verdict ${v} (model said ${report.verdict}): ` +
+      checks.map((c) => `${c.main ? 'M' : 's'}:${c.status}`).join(' '));
+    report.verdictModel = report.verdict;
+    report.verdict = v;
+    report.claimChecks = checks;
+  }
   // A FAKE or MISLEADING must rest on words someone actually wrote.
   const basisAt = proven(report.verdictProof);
-  if ((report.verdict === 'FAKE' || report.verdict === 'MISLEADING') && !basisAt) {
+  if ((report.verdict === 'FAKE' || report.verdict === 'MISLEADING') && !basisAt && !report.verdictModel) {
     notes.push(`${report.verdict} -> UNVERIFIED: the verdict's quote (${report.verdictProof ? '"' + report.verdictProof.quote + '"' : 'none'}) is in no source.`);
     report.verdict = 'UNVERIFIED';
   }
@@ -2160,6 +2231,7 @@ const normalizeReport = (report, evidence, opts = {}) => {
     gotchas,
     references,
     toolsReal: null,
+    claimChecks: claimJudge && Array.isArray(report.claim_checks) ? report.claim_checks : null,
   }, evidence, report.tech_name, opts);
   // Cards only for tools that tell the reader something (Oct 23). A news
   // roundup showed 14 cards, most of them "Node.js is real". Well-known
