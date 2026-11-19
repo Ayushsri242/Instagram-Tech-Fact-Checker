@@ -18,11 +18,27 @@ export default function SettingsScreen({ navigation }) {
   const [exaKey, setExaKey] = useState('');
   const [hasExaKey, setHasExaKey] = useState(false);
   useEffect(() => { getExaApiKey().then((k) => { setHasExaKey(Boolean(k)); setExaKey(k || ''); }).catch(() => {}); }, []);
+  // Exa keys are UUIDs (36 chars, 8-4-4-4-12 hex). Save also runs one tiny
+  // search (~$0.007 of the free credit) so a wrong or revoked key shows now,
+  // not as silently worse sources later.
+  const isExaKey = (k) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(k).trim());
   const saveExa = async () => {
-    if (!exaKey.trim()) return;
-    await saveExaApiKey(exaKey);
+    const key = exaKey.trim();
+    if (!key) return;
+    if (!isExaKey(key)) { Alert.alert('Not an Exa key', 'Exa keys look like xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (from dashboard.exa.ai).'); return; }
+    let ok = false;
+    try {
+      const r = await fetch('https://api.exa.ai/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': key },
+        body: JSON.stringify({ query: 'exa search', numResults: 1 }),
+      });
+      ok = r.ok;
+      if (r.status === 401 || r.status === 403) { Alert.alert('Exa rejected this key', 'Check it on dashboard.exa.ai and paste it again.'); return; }
+    } catch (e) { /* offline: save anyway */ }
+    await saveExaApiKey(key);
     setHasExaKey(true);
-    Alert.alert('Saved', 'Web searches now go through Exa.');
+    Alert.alert('Saved', ok ? 'Key works. Web searches now go through Exa.' : 'Saved, but the key could not be tested (no connection).');
   };
   const removeExa = async () => { await deleteExaApiKey(); setHasExaKey(false); setExaKey(''); };
   const [runLogRows, setRunLogRows] = useState(0);
@@ -217,7 +233,7 @@ export default function SettingsScreen({ navigation }) {
             autoCorrect={false}
             secureTextEntry
           />
-          <Text style={styles.keyStatus}>Status: {hasExaKey ? 'Saved on device' : 'Not saved'}</Text>
+          <Text style={styles.keyStatus}>Status: {hasExaKey ? 'Saved on device' : 'Not saved'}{exaKey && !isExaKey(exaKey) ? ' | Not an Exa key' : ''}</Text>
           <View style={styles.buttonRow}>
             <TouchableOpacity style={styles.downloadBtn} onPress={saveExa}>
               <Text style={styles.btnText}>Save Key</Text>
