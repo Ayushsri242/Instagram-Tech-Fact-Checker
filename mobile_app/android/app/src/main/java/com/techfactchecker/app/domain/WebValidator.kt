@@ -290,7 +290,7 @@ class WebValidator {
                 EvidenceSource(
                     title = r.optString("title", "").ifBlank { r.optString("url") },
                     url = r.optString("url"),
-                    snippet = text.take(300).replace(Regex("\s+"), " "),
+                    snippet = text.take(300).replace(Regex("\\s+"), " "),
                     pagePreview = text
                 )
             }.filter { it.url.startsWith("http") }
