@@ -312,6 +312,49 @@ const listQueries = (claimsData, isList) => {
   return out.slice(0, Math.min(16, Math.max(10, perItem.length + 3)));
 };
 
+// Search recipes (Nov 20, step A.1 of the accuracy plan). On the 37 dev posts
+// the key page never reached the judge on ~1/3: the model wrote vague queries
+// ("Remote Work Platform (Unidentified) reviews trustpilot"). Code now writes
+// the first queries from what was extracted, by claim type; drafted by agy,
+// tested on Exa: the key source (or an equivalent official page) was reached
+// on ~25 of the 28 missed dev posts. " ||exa:" carries Exa filters
+// (domains=..;category=news;since=<days>); other engines drop it.
+const JOB_RE = /\b(hiring|internship|intern|vacanc(?:y|ies)|recruitment|job openings?|apply now|fresher|stipend|careers?)\b/i;
+const COURSE_RE = /\b(free course|certificat(?:e|ion)|skill ?builder|learn(?:ing)? path|bootcamp|training)\b/i;
+const HW_RE = /\b(gpu|vram|run(?:s)? locally|local(?:ly)?|no expensive hardware|on your laptop|offline)\b/i;
+const FREE_RE = /\b(free|unlimited|no cost|giveaway|premium for free)\b/i;
+const OPEN_RE = /\bopen[- ]?source\b/i;
+export const recipeQueries = (claimsData, post = {}) => {
+  const text = [post.text || '', ...((claimsData && claimsData.claimed_features) || [])].join(' ');
+  const tools = ((claimsData && claimsData.tools) || []).filter((t) => t && t.name).slice(0, 4);
+  const real = (v) => v && v !== 'null';
+  const q = [];
+  if (post.news) {
+    const ev = claimsData.tech_name || (tools[0] && tools[0].name);
+    if (ev) q.push(ev + ' ||exa:category=news;since=45');
+    return q;
+  }
+  if (post.money) {
+    for (const p of (post.platforms || []).slice(0, 4)) {
+      q.push(p + ' how much does it really pay review');
+      q.push(p + ' pay rate ||exa:domains=reddit.com');
+    }
+    return q;
+  }
+  for (const t of tools) {
+    const dom = real(t.domain_url) ? String(t.domain_url).replace(/^https?:\/\//, '').split('/')[0] : null;
+    if (real(t.github_repo)) q.push(t.github_repo + ' github');
+    else if (!dom) q.push(t.name + ' github ||exa:domains=github.com');
+    if (dom) q.push(t.name + ' ||exa:domains=' + dom);
+    if (JOB_RE.test(text)) q.push(t.name + ' careers apply job opening');
+    if (COURSE_RE.test(text)) q.push(t.name + ' free course certificate official');
+    if (HW_RE.test(text)) q.push(t.name + ' hardware requirements GPU VRAM');
+    if (OPEN_RE.test(text) && !real(t.github_repo)) q.push(t.name + ' license');
+    if (FREE_RE.test(text) && dom) q.push(t.name + ' pricing ||exa:domains=' + dom);
+  }
+  return q;
+};
+
 // ---- Daily token tracker ----
 //
 // The free tier allows 200,000 tokens a day per model (measured Oct 7 from a
@@ -2384,6 +2427,14 @@ export const analyzeReelApi = async (url) => {
       : listQueries(claimsData, listPost);
   const lead = !money && !news ? captionLead(media.caption) : null;
   if (lead && !queries.some((q) => q.toLowerCase() === lead.toLowerCase())) queries.splice(1, 0, lead);
+  // Recipe queries go first; the model's own fill the rest (cap 14).
+  {
+    const recipe = recipeQueries(claimsData, { money, news, platforms, text: [media.caption, ocrText, transcript].join(' ') });
+    const seen = new Set();
+    const merged = [...recipe, ...queries].filter((x) => { const k = String(x).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+    queries.length = 0;
+    queries.push(...merged.slice(0, Math.max(14, recipe.length)));
+  }
   // A site the post sends people to is checked by its reputation (Oct 26): the
   // Oxaam post's 16 searches went on brand names it misspells on purpose
   // ("Phigma AI", "Adubye Pro"), and none on the site itself, so the Trustpilot

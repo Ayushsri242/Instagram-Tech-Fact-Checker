@@ -227,6 +227,8 @@ class WebValidator {
             if (exa != null) return SearchOutcome(exa, "exa", false)
             exaFailedUntil = now + 5 * 60_000L
         }
+        // Recipe queries may carry Exa filters after " ||exa:"; other engines get plain text.
+        val query = query.substringBefore(" ||exa:")
         if (now >= ddgBlockedUntil) {
             val ddg = searchDuckDuckGoChecked(query, maxResults)
             if (ddg != null) return SearchOutcome(ddg, "ddg", false)
@@ -266,11 +268,26 @@ class WebValidator {
     /** Exa search: results with page text, or null on any failure (then the old engines run). */
     private suspend fun searchExa(query: String, maxResults: Int): List<EvidenceSource>? = withContext(Dispatchers.IO) {
         try {
+            // Filters from the search recipes: domains=a.com,b.com;category=news;since=<days>
             val body = org.json.JSONObject()
-                .put("query", query)
+                .put("query", query.substringBefore(" ||exa:").trim())
                 .put("numResults", maxResults)
                 .put("type", "auto")
                 .put("contents", org.json.JSONObject().put("text", org.json.JSONObject().put("maxCharacters", 2500)))
+            for (part in query.substringAfter(" ||exa:", "").split(";")) {
+                val k = part.substringBefore("=")
+                val v = part.substringAfter("=", "")
+                if (v.isBlank()) continue
+                when (k) {
+                    "domains" -> body.put("includeDomains", org.json.JSONArray(v.split(",")))
+                    "category" -> body.put("category", v)
+                    "since" -> v.toLongOrNull()?.let { days ->
+                        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+                        fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                        body.put("startPublishedDate", fmt.format(java.util.Date(System.currentTimeMillis() - days * 86_400_000L)))
+                    }
+                }
+            }
             val conn = (java.net.URL("https://api.exa.ai/search").openConnection() as java.net.HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 10000
