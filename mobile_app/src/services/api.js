@@ -324,18 +324,34 @@ const COURSE_RE = /\b(free course|certificat(?:e|ion)|skill ?builder|learn(?:ing
 const HW_RE = /\b(gpu|vram|run(?:s)? locally|local(?:ly)?|no expensive hardware|on your laptop|offline)\b/i;
 const FREE_RE = /\b(free|unlimited|no cost|giveaway|premium for free)\b/i;
 const OPEN_RE = /\bopen[- ]?source\b/i;
+// Nov 21: searches follow what the post CLAIMS about each tool, not how famous
+// it is. A tool named in passing ("works with Codex") gets no searches; the
+// subject gets "<name> <what to check>" on its own site and the news, and
+// GitHub/licence searches only when the claim is about the code. On the dev
+// run, "Claude Code github / license / official" took the seats meant for
+// the post's real subject.
+export const PAYMENT_RE = /^(paypal|payoneer|upi|paytm|phonepe|google pay|gpay|stripe|wise|venmo|cash ?app|zelle|skrill|bank transfer|visa|mastercard|crypto|usdt|bitcoin)$/i;
+const CODE_RE = /(open[- ]?source|github|repo(?:sitory)?|self[- ]?host(?:ed)?|install|cli|library|framework|released?|launch(?:ed)?|new model|weights)/i;
+const shortWords = (s, n) => String(s || '').replace(/["'“”]/g, '').split(/\s+/).filter(Boolean).slice(0, n).join(' ');
+export const subjectTools = (claimsData) => {
+  const all = ((claimsData && claimsData.tools) || []).filter((t) => t && t.name);
+  const subj = all.filter((t) => String(t.role || '').toLowerCase() !== 'mention');
+  return (subj.length ? subj : all.slice(0, 1));
+};
 export const recipeQueries = (claimsData, post = {}) => {
   const text = [post.text || '', ...((claimsData && claimsData.claimed_features) || [])].join(' ');
-  const tools = ((claimsData && claimsData.tools) || []).filter((t) => t && t.name).slice(0, 4);
+  const tools = subjectTools(claimsData).slice(0, 4);
   const real = (v) => v && v !== 'null';
   const q = [];
   if (post.news) {
-    const ev = claimsData.tech_name || (tools[0] && tools[0].name);
-    if (ev) q.push(ev + ' ||exa:category=news;since=45');
+    const t0 = tools[0];
+    const ev = claimsData.tech_name || (t0 && t0.name);
+    if (ev) q.push(shortWords(ev + ' ' + ((t0 && t0.check) || ''), 10) + ' ||exa:category=news;since=45');
+    if (ev && t0 && t0.check) q.push(ev);
     return q;
   }
   if (post.money) {
-    for (const p of (post.platforms || []).slice(0, 4)) {
+    for (const p of (post.platforms || []).filter((x) => !PAYMENT_RE.test(String(x).trim())).slice(0, 4)) {
       q.push(p + ' how much does it really pay review');
       q.push(p + ' pay rate ||exa:domains=reddit.com');
     }
@@ -343,14 +359,19 @@ export const recipeQueries = (claimsData, post = {}) => {
   }
   for (const t of tools) {
     const dom = real(t.domain_url) ? String(t.domain_url).replace(/^https?:\/\//, '').split('/')[0] : null;
+    const check = String(t.check || t.claim || '');
+    const about = check + ' ' + (t.claim || '');
+    const code = real(t.github_repo) || CODE_RE.test(about) || (tools.length === 1 && OPEN_RE.test(text));
     if (real(t.github_repo)) q.push(t.github_repo + ' github');
-    else if (!dom) q.push(t.name + ' github ||exa:domains=github.com');
-    if (dom) q.push(t.name + ' ||exa:domains=' + dom);
-    if (JOB_RE.test(text)) q.push(t.name + ' careers apply job opening');
-    if (COURSE_RE.test(text)) q.push(t.name + ' free course certificate official');
-    if (HW_RE.test(text)) q.push(t.name + ' hardware requirements GPU VRAM');
-    if (OPEN_RE.test(text) && !real(t.github_repo)) q.push(t.name + ' license');
-    if (FREE_RE.test(text) && dom) q.push(t.name + ' pricing ||exa:domains=' + dom);
+    if (check) q.push(shortWords(t.name + ' ' + check, 10) + (dom ? ' ||exa:domains=' + dom : ''));
+    else if (dom) q.push(t.name + ' ||exa:domains=' + dom);
+    if (!real(t.github_repo) && code && !dom) q.push(t.name + ' github ||exa:domains=github.com');
+    if (JOB_RE.test(about) || (tools.length === 1 && JOB_RE.test(text))) q.push(t.name + ' careers apply job opening');
+    if (COURSE_RE.test(about)) q.push(t.name + ' free course certificate official');
+    if (HW_RE.test(about)) q.push(t.name + ' hardware requirements GPU VRAM');
+    if (OPEN_RE.test(about) && !real(t.github_repo)) q.push(t.name + ' license');
+    if (FREE_RE.test(about)) q.push(shortWords(t.name + ' ' + check, 10) + ' ||exa:category=news;since=60');
+    if (FREE_RE.test(about) && dom) q.push(t.name + ' pricing ||exa:domains=' + dom);
   }
   return q;
 };
@@ -450,7 +471,7 @@ const describeRunTokens = () => {
 // model gets up to 3 waits, the later ones at least 20 s, within one budget.
 const MAX_WAITS_PER_MODEL = 3;
 const WAIT_BUDGET_MS = 150000;
-const callGroq = async (apiKey, messages, { job, json, accept, temperature }) => {
+const callGroq = async (apiKey, messages, { job, json, accept, temperature, maxTokens }) => {
   let lastError;
   let waitedMs = 0;
   for (const model of MODEL_CHAINS[job]) {
@@ -465,7 +486,7 @@ const callGroq = async (apiKey, messages, { job, json, accept, temperature }) =>
             // gpt-oss reasons before it answers, and the reasoning shares the
             // output allowance. With the default allowance gpt-oss-20b spent
             // all of it reasoning and answered nothing; give room to finish.
-            max_completion_tokens: 4096,
+            max_completion_tokens: maxTokens || 4096,
             // Same evidence, same verdict as far as the model allows: a fixed
             // seed makes sampling repeatable (Groq: best effort). Oct 8: the
             // unchanged judge gave FAKE then MISLEADING on identical evidence.
@@ -540,8 +561,13 @@ const approxTokens = (s) => Math.ceil(String(s || '').length / 3.6);
 const EXTRACT_PROMPT_BUDGET = 5500;
 // The judge's whole request (prompt + the 4,096-token answer allowance Groq
 // counts against the same 8,000 per minute), with a margin for the estimate.
-const JUDGE_ANSWER_TOKENS = 4096;
-const JUDGE_REQUEST_LIMIT = 7300;
+// Nov 21: the 4096 allowance plus the estimate below (chars/3.6, ~25% high)
+// left room for only 4 sources on every dev post: the key page was found and
+// then cut. Groq refused one request at 3959 + 4096 = 8055, so a ~17.5k-char
+// prompt is ~4,000 real tokens (chars/4.4). The runner logs real use per call.
+const JUDGE_ANSWER_TOKENS = 3200;
+const judgeTokens = (s) => Math.ceil(String(s || '').length / 4.0);
+const JUDGE_REQUEST_LIMIT = 7900;
 
 // Step 3 of the Nov 17 accuracy plan, OFF until it scores better on the dev
 // set: the judge marks each claim supported / contradicted / exaggerated /
@@ -668,9 +694,10 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
     '7. If the post is a numbered list ("22 NLP techniques", "Top 10 repos"), return EVERY numbered item in tools - techniques and concepts included, not only installable tools - in the post\'s order, with its number in the name ("1. Text Normalisation"). Do not stop early.',
     '8. Keep the answer compact: leave out any field you would set to null, and keep each tool\'s "claim" to one short sentence (under 15 words). Long lists must still be complete.',
     '9. post_topic - what the post is ABOUT: "tech" = software, AI tools or models, apps, websites or online services, programming, gadgets, AND tech news (a model release such as "Claude released a new model", company announcements, product launches) even with no repo or link; "money" = ways to earn money (side hustles, sites that pay, freelancing); "other" = clearly not tech or earning: health, fitness, food, beauty, relationships, entertainment, comics, general news, government statistics, shopping deals, life advice. If unsure, use "tech".',
+    '10. For each tool give "role": "subject" if a claim is ABOUT it (its offer, price, pay, release, feature, job), "mention" if it is only named in passing ("works with Codex", "better than ChatGPT", "paid via PayPal"). And "check": what exactly must be verified about it, in under 8 words, keeping figures ("1 million free tokens offer", "pays $40 per hour", "new open-source release", "hiring interns", "runs without a GPU"). Fame does not matter: a famous tool is a subject when the claim is about it.',
     '',
     'Respond ONLY with valid JSON in this exact structure:',
-    '{"post_topic":"tech","tech_name":"Primary title or main tool/website name","is_multi_tool":true,"tools":[{"name":"Tool or Website Name","github_repo":"owner/repo or null","domain_url":"domain.com or null","pip_command":"pip install ... or null","claim":"Core feature or claim stated"}],"claimed_features":["claim 1","claim 2"],"search_queries":["query 1","query 2"]}',
+    '{"post_topic":"tech","tech_name":"Primary title or main tool/website name","is_multi_tool":true,"tools":[{"name":"Tool or Website Name","github_repo":"owner/repo or null","domain_url":"domain.com or null","pip_command":"pip install ... or null","claim":"Core feature or claim stated","role":"subject","check":"what to verify"}],"claimed_features":["claim 1","claim 2"],"search_queries":["query 1","query 2"]}',
   ].join('\n');
 
   // Groq's free tier refuses any SINGLE request over 8,000 tokens per minute
@@ -952,7 +979,8 @@ const moneyPlatforms = (claimsData) => {
   const out = [];
   for (const t of (claimsData && claimsData.tools) || []) {
     const n = String(t.name || '').trim();
-    if (n.length >= 2 && !out.some((x) => x.toLowerCase() === n.toLowerCase())) out.push(n);
+    // Payment methods ("paid via PayPal") are not the earning platform (Nov 21).
+    if (n.length >= 2 && !PAYMENT_RE.test(n) && !out.some((x) => x.toLowerCase() === n.toLowerCase())) out.push(n);
   }
   return out.slice(0, 5);
 };
@@ -1190,7 +1218,9 @@ const rankEvidence = (evidence, techName, tools, pinned = [], opts = {}) => {
   };
   const needles = [];
   if (techName) needles.push(String(techName).toLowerCase());
-  for (const t of tools || []) {
+  // Tools only named in passing do not pull rows up (Nov 21).
+  const subjects = opts.list ? (tools || []) : subjectTools({ tools });
+  for (const t of subjects) {
     if (t.github_repo && t.github_repo !== 'null') needles.push(String(t.github_repo).toLowerCase());
     if (t.name) needles.push(String(t.name).toLowerCase());
   }
@@ -1228,7 +1258,11 @@ const rankEvidence = (evidence, techName, tools, pinned = [], opts = {}) => {
   const score = (item) => {
     const hay = `${item.url || ''} ${item.title || ''}`.toLowerCase();
     let s = isPinned(item) ? 100 : 0;
-    if (aboutSubject(hay)) s += 40;
+    // "GitHub search - Agent Reach" whose repos all have other names is a list
+    // of strangers' repos (Nov 21: it led with anthropics/claude-code).
+    const strangers = /^GitHub search - /.test(item.title || '') && /\(name differs/.test(item.snippet || '');
+    if (aboutSubject(hay) && !strangers) s += 40;
+    if (strangers) s -= 15;
     const onTopic = uniq.some((n) => hay.includes(n));
     if (onTopic) s += 10;
     // A bare domain root is usually a landing page rather than evidence - but
@@ -1261,8 +1295,24 @@ const rankEvidence = (evidence, techName, tools, pinned = [], opts = {}) => {
       if (kept.length >= maxRows) break;
       const k = flatKey(t && t.name);
       if (k.length < 3) continue;
-      const hit = ranked.find((x) => !kept.includes(x.item) &&
-        flatKey(String(x.item.title || '') + ' ' + String(x.item.url || '') + ' ' + String(x.item.snippet || '')).includes(k));
+      const strange = (x) => /^GitHub search - /.test(x.item.title || '') && /\(name differs/.test(x.item.snippet || '');
+      const free = ranked.filter((x) => !kept.includes(x.item) && !strange(x));
+      const hit = free.find((x) => flatKey(String(x.item.url || '')).includes(k)) ||
+        free.find((x) => flatKey(String(x.item.title || '') + ' ' + String(x.item.url || '') + ' ' + String(x.item.snippet || '')).includes(k));
+      if (hit) kept.push(hit.item);
+    }
+  }
+  // Single-subject posts: the best row for each SUBJECT tool first, preferring
+  // its own address (Nov 21: the agent-reach repo was found, but 4 rows about
+  // the tools it "works with" were sent instead).
+  if (!opts.list) {
+    for (const t of subjects.slice(0, 4)) {
+      const k = flatKey(t && t.name);
+      if (k.length < 3) continue;
+      const inUrl = (x) => flatKey(String(x.item.url || '')).includes(k);
+      const inAny = (x) => flatKey(String(x.item.title || '') + ' ' + String(x.item.url || '')).includes(k);
+      const ok = (x) => !kept.includes(x.item) && !(/^GitHub search - /.test(x.item.title || '') && /\(name differs/.test(x.item.snippet || ''));
+      const hit = ranked.find((x) => ok(x) && inUrl(x)) || ranked.find((x) => ok(x) && inAny(x));
       if (hit) kept.push(hit.item);
     }
   }
@@ -1361,7 +1411,9 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     'Source [' + (i + 1) + ']',
     'Title: ' + (item.title || ''),
     'URL: ' + (item.url || ''),
-    'Snippet: ' + (item.snippet || '').slice(0, 300),
+    // Nov 21: the snippet is usually the page's first lines again; when the
+    // page text is there, the snippet's seat goes to more sources.
+    ...(item.pagePreview && String(item.pagePreview).length > 200 ? [] : ['Snippet: ' + (item.snippet || '').slice(0, 300)]),
     // News articles carry the facts in their body; give them more room.
     'Page Context: ' + extractClaimAnchored(item.pagePreview, ownPage(item) ? OWN_PAGE_PREVIEW
       : post.news && isNewsRow(item) ? 700 : MAX_PAGE_PREVIEW),
@@ -1374,7 +1426,7 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     '',
     'Visual/OCR Text:', ocrText,
     '',
-    'Extracted Claims & Tools:', JSON.stringify(claimsData),
+    'Extracted Claims & Tools:', JSON.stringify({ ...claimsData, search_queries: undefined }),
     ...(claimsData.tech_name === null ? ['',
       'SUBJECT UNIDENTIFIED: Do not guess the primary tool or subject name. If ONE evidence source describes the same thing the caption describes - same company AND the same mechanism or numbers - judge the post against that source and name it as the subject (Oct 26: a post that never named Google\'s Harness² had its repo and an article about it in the evidence). Otherwise state clearly in factual_reality that the primary subject could not be confidently identified, and only evaluate the tools that were found.'] : []),
     ...(coverage ? ['',
@@ -1477,7 +1529,7 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
   // In place: the caller's evidence rules must see the rows the judge saw.
   let prompt = buildPrompt();
   const before = kept.length;
-  while (kept.length > 4 && approxTokens(prompt) + JUDGE_ANSWER_TOKENS > JUDGE_REQUEST_LIMIT) {
+  while (kept.length > 4 && judgeTokens(prompt) + JUDGE_ANSWER_TOKENS > JUDGE_REQUEST_LIMIT) {
     kept.length -= 1;
     prompt = buildPrompt();
   }
@@ -1485,7 +1537,7 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
   return callGroq(apiKey, [
     { role: 'system', content: 'You are a precise, objective AI technical fact checker. Output strictly valid JSON.' },
     { role: 'user', content: prompt },
-  ], { job: 'verdict', json: true, temperature: 0, accept: (d) => d && typeof d.verdict === 'string' && d.verdict.trim().length > 0 });
+  ], { job: 'verdict', json: true, temperature: 0, maxTokens: JUDGE_ANSWER_TOKENS, accept: (d) => d && typeof d.verdict === 'string' && d.verdict.trim().length > 0 });
 };
 
 // The model is allowed to be sloppy; the object we hand to the UI is not.
@@ -2115,7 +2167,11 @@ const pickSubject = (rawModelName, evidence, ocrText, post = {}) => {
     // (Oct 26, the Harness² post was then titled "GLM-5").
     if (!printed && hits < 2 && countOf(caption, repoName) === 0) continue;
     if (candidates.some((c) => c.name.toLowerCase() === repoName.toLowerCase())) continue;
-    candidates.push({ name: repoName, slug: m[1] + '/' + m[2], hits, printed, dismissed: isDismissed(repoName) || isBaseline(repoName) });
+    // A repo of a tool the post only mentions is not the subject (Nov 21: the
+    // Agent Reach post said "Claude Code" more often, so anthropics/claude-code
+    // was pinned and the Agent Reach repo was cut).
+    const mentioned = (post.mentions || []).includes(flatKey(repoName));
+    candidates.push({ name: repoName, slug: m[1] + '/' + m[2], hits, printed, dismissed: isDismissed(repoName) || isBaseline(repoName) || (mentioned && !printed) });
   }
   // A tool the post promotes outranks one it dismisses, however often the
   // dismissed one is named; within a group, the more the post says it, the more
@@ -2363,6 +2419,14 @@ export const analyzeReelApi = async (url) => {
   jobStage(2);
   // Kept because the picker overwrites tech_name below, and a replay of this
   // run has to see what the model originally said to measure a picker change.
+  // Nov 21: the model named the post "claude-code" while marking Claude Code
+  // as only mentioned and Agent Reach as the subject; the subject wins.
+  {
+    const tl = (claimsData.tools || []).filter((t) => t && t.name);
+    const hit = tl.find((t) => flatKey(t.name) === flatKey(claimsData.tech_name));
+    const subj = tl.find((t) => String(t.role || '').toLowerCase() !== 'mention');
+    if (hit && String(hit.role || '').toLowerCase() === 'mention' && subj) claimsData.tech_name = subj.name;
+  }
   const modelTechName = claimsData.tech_name;
   log('STAGE 1 CLAIMS', claimsData);
   // Money / side-hustle posts are checked differently - see moneyPost().
@@ -2371,7 +2435,8 @@ export const analyzeReelApi = async (url) => {
   // Security incidents and tech news are checked as events - see newsPost().
   const news = !money && newsPost(claimsData, [media.caption, ocrText, transcript].join(' '));
   // A news post names products (PHP, WordPress, Cloudflare...) but is not a list of them.
-  const listPost = !money && !news && isListPost(modelTechName, claimsData.tools);
+  // Tools only mentioned do not make a post a list (Nov 21).
+  const listPost = !money && !news && isListPost(modelTechName, subjectTools(claimsData));
   // Not a tech or money post (Oct 10: friends ran dating, comics, fitness,
   // diabetes and shopping reels; the tech rules called a comic-character post
   // "Misleading"). Stop here: no search, no judge, ~5k tokens saved. Measured
@@ -2431,7 +2496,14 @@ export const analyzeReelApi = async (url) => {
   {
     const recipe = recipeQueries(claimsData, { money, news, platforms, text: [media.caption, ocrText, transcript].join(' ') });
     const seen = new Set();
-    const merged = [...recipe, ...queries].filter((x) => { const k = String(x).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+    // The model's own queries about a tool only named in passing are dropped
+    // ("Claude Code github" on a post about Agent Reach), unless they also
+    // name a subject tool (Nov 21).
+    const nameOf = (t) => String(t.name || '').toLowerCase();
+    const mentions = (claimsData.tools || []).filter((t) => t && t.name && String(t.role || '').toLowerCase() === 'mention').map(nameOf).filter((n) => n.length >= 3);
+    const subjNames = subjectTools(claimsData).map(nameOf).filter((n) => n.length >= 3);
+    const onlyMention = (x) => { const l = String(x).toLowerCase(); return mentions.some((m) => l.includes(m)) && !subjNames.some((n) => l.includes(n)); };
+    const merged = [...recipe, ...queries.filter((x) => listPost || !onlyMention(x))].filter((x) => { const k = String(x).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
     queries.length = 0;
     queries.push(...merged.slice(0, Math.max(14, recipe.length)));
   }
@@ -2509,6 +2581,7 @@ export const analyzeReelApi = async (url) => {
       author: media.author,
       caption: media.caption,
       aliases,
+      mentions: (claimsData.tools || []).filter((t) => t && t.name && String(t.role || '').toLowerCase() === 'mention').map((t) => flatKey(t.name)),
     });
   log('SUBJECT', subject);
   if (subject.name !== undefined && subject.name !== claimsData.tech_name) {
