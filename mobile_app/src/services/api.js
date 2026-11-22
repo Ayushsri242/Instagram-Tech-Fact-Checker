@@ -1364,7 +1364,18 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
   // dropped by the ranker on the nanobot run.
   console.log('\n===== TFC STAGE 2 KEPT (what the model actually reads) =====');
   console.log(JSON.stringify(kept.map((k) => ({ title: k.title, url: k.url, pageChars: (k.pagePreview || '').length })), null, 2));
-  const extractClaimAnchored = (text, budget) => {
+  const extractClaimAnchored = (raw, budget) => {
+    // Nov 22: reader pages arrive as markdown, and menus, image links and URLs
+    // filled the whole budget (UserTesting's page gave the judge 1,500 chars
+    // of navigation and no pay figure; money posts came back all not_found).
+    const text = String(raw || '')
+      .replace(/Title:[\s\S]{0,400}?Markdown Content:\s*/, '')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/https?:\/\/\S+/g, ' ')
+      .replace(/[*#|_=`>]{1,}|-{3,}/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!text) return '';
     const terms = [];
     if (claimsData && claimsData.tech_name) terms.push(claimsData.tech_name);
@@ -1376,6 +1387,7 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     const numbers = claimsStr.match(/\b\d+(?:\.\d+)?x?\b/g) || [];
     terms.push(...numbers);
     terms.push('price', 'pricing', 'license', 'free', 'cost', 'source');
+    if (post.money) terms.push('$', '₹', 'per hour', '/hr', 'pay', 'paid', 'earn', 'payout', 'minimum', 'scam', 'review');
     
     const sentences = text.replace(/([.!?])\s+/g, "$1|").split("|");
     const hits = [];
@@ -1747,7 +1759,9 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     const side = checks.filter((c) => !c.main);
     const any = (list, s) => list.some((c) => c.status === s);
     let v;
-    if (report.verdict === 'FAKE' && proven(report.verdictProof)) v = 'FAKE';
+    // Nov 22: FAKE stands only when no main claim holds - complaints about one
+    // of three platforms made a list of real sites FAKE.
+    if (report.verdict === 'FAKE' && proven(report.verdictProof) && !any(main, 'supported')) v = 'FAKE';
     // Nov 22: one contradicted main claim among more that hold is a partly
     // true post, not a misleading one (3 dev posts; offline 15 -> 17 exact,
     // no labelled MISLEADING post changed).
