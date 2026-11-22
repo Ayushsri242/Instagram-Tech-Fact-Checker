@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { NativeModules } from 'react-native';
-import { getGroqApiKey } from './secrets';
+import { getGroqApiKey, loadExaKeyIntoNative } from './secrets';
 import { getOfflineMode, saveApiLimits, getApiLimits } from './storage';
 import { runVerifiers, fillMissingPageText, readPage } from './verifiers';
 import { logRun } from './runlog';
@@ -567,7 +567,8 @@ const EXTRACT_PROMPT_BUDGET = 5500;
 // prompt is ~4,000 real tokens (chars/4.4). The runner logs real use per call.
 const JUDGE_ANSWER_TOKENS = 3200;
 const judgeTokens = (s) => Math.ceil(String(s || '').length / 4.0);
-const JUDGE_REQUEST_LIMIT = 7900;
+// Nov 22: 3 of ~110 requests still went 18-152 over 8,000; keep a margin.
+const JUDGE_REQUEST_LIMIT = 7650;
 
 // Step 3 of the Nov 17 accuracy plan, OFF until it scores better on the dev
 // set: the judge marks each claim supported / contradicted / exaggerated /
@@ -1747,6 +1748,11 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     const any = (list, s) => list.some((c) => c.status === s);
     let v;
     if (report.verdict === 'FAKE' && proven(report.verdictProof)) v = 'FAKE';
+    // Nov 22: one contradicted main claim among more that hold is a partly
+    // true post, not a misleading one (3 dev posts; offline 15 -> 17 exact,
+    // no labelled MISLEADING post changed).
+    else if (any(main, 'contradicted') &&
+      main.filter((c) => c.status === 'supported' || c.status === 'exaggerated').length > main.filter((c) => c.status === 'contradicted').length) v = 'PARTIALLY_TRUE';
     else if (any(main, 'contradicted')) v = 'MISLEADING';
     else if (!any(main, 'supported') && !any(main, 'exaggerated')) v = 'UNVERIFIED';
     else if (any(main, 'exaggerated')) v = 'HYPE';
@@ -2386,6 +2392,10 @@ export const analyzeReelApi = async (url) => {
   let mark = startedAt;
   const lap = (name) => { stage[name] = Date.now() - mark; mark = Date.now(); };
   trace('pipeline start ' + shortRef(url));
+  // Nov 22: the Exa key was handed to native search only when the app screen
+  // opened; bubble checks run headless after Android restarts the process, so
+  // 16 of 23 reels on 1.0.119 searched DuckDuckGo with a key saved.
+  await loadExaKeyIntoNative().catch(() => {});
   const media = await TechFactChecker.analyzeAndVerify(url, false, apiKey);
   lap('native');
   jobStage(1);
