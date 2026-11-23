@@ -35,6 +35,7 @@ const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const MODEL_CHAINS = {
   extract: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
   verdict: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'],
+  claims: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'],
   chat: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
 };
 const shortModel = (m) => String(m).split('/').pop();
@@ -578,6 +579,9 @@ const JUDGE_REQUEST_LIMIT = 7650;
 // Nov 19: ON. 3 runs x 25 dev posts: 11 exact vs 4 (old), 31/75 runs vs 16/75.
 let claimJudge = true;
 export const setClaimJudge = (on) => { claimJudge = Boolean(on); };
+// Per-claim checking (Nov 23); off = the old single-judge path with A.2.
+let perClaim = true;
+export const setPerClaim = (on) => { perClaim = Boolean(on); };
 
 // The same piece of text on every slide - creator handle, series header, page
 // footer - is kept once. Short fragments (numbers, "1/20") are always kept:
@@ -1354,6 +1358,135 @@ export const slideCoverage = (ocrText, imagesUsed) => {
   return declared > seen ? { declared, seen } : null;
 };
 
+// Per-claim checking (Nov 23). The one big judge call reads the top of 4-10
+// pages; answers to pay, licence or limit claims sit deeper (money posts 1/21
+// on the dev set). Here every fetched page is cut into small passages, each
+// main claim gets the passages that match it best (BM25 keyword scoring), and
+// one small call judges each claim only against its own passages.
+export const cleanPageText = (raw) => String(raw || '')
+  .replace(/Title:[\s\S]{0,400}?Markdown Content:\s*/, '')
+  .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+  .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+  .replace(/https?:\/\/\S+/g, ' ')
+  .replace(/[*#|_=`>]{1,}|-{3,}/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const CHUNK_CHARS = 450;
+export const chunkRows = (rows) => {
+  const out = [];
+  for (const row of rows || []) {
+    const text = cleanPageText(row.pagePreview || row.snippet || '');
+    if (!text) continue;
+    const sentences = text.replace(/([.!?])\s+/g, '$1|').split('|');
+    let cur = '';
+    for (const s of sentences) {
+      if (cur && cur.length + s.length > CHUNK_CHARS) { out.push({ row, text: cur.trim() }); cur = ''; }
+      cur += (cur ? ' ' : '') + s.slice(0, CHUNK_CHARS * 2);
+    }
+    if (cur.trim().length > 40) out.push({ row, text: cur.trim() });
+  }
+  return out;
+};
+
+const STOP = new Set('the a an and or of to in on for is are was be with it this that you your can by as at from its it\'s get all any not no but so if how what'.split(' '));
+// Dots split words ("Arc.dev" -> arc, dev) but stay inside numbers ("3.5").
+const termsOf = (s) => String(s || '').toLowerCase().replace(/(\D)\.|\.(\D)/g, '$1 $2').replace(/[^a-z0-9$₹%.\s]/g, ' ').split(/\s+/)
+  .map((w) => w.replace(/^\.+|\.+$/g, '')).filter((w) => w && !STOP.has(w));
+
+export const topChunks = (chunks, query, k = 4, perUrl = 2) => {
+  const q = [...new Set(termsOf(query))];
+  if (!q.length || !chunks.length) return [];
+  const docs = chunks.map((c) => c.terms || (c.terms = termsOf(c.text)));
+  const avg = docs.reduce((n, d) => n + d.length, 0) / docs.length || 1;
+  const df = {};
+  for (const d of docs) for (const t of new Set(d)) df[t] = (df[t] || 0) + 1;
+  const N = docs.length;
+  const scored = chunks.map((c, i) => {
+    const d = docs[i];
+    const tf = {};
+    for (const t of d) tf[t] = (tf[t] || 0) + 1;
+    let s = 0;
+    for (const t of q) {
+      if (!tf[t]) continue;
+      const idf = Math.log(1 + (N - df[t] + 0.5) / (df[t] + 0.5));
+      s += idf * (tf[t] * 2.2) / (tf[t] + 1.2 * (0.25 + 0.75 * d.length / avg));
+    }
+    return { c, s };
+  }).filter((x) => x.s > 0).sort((a, b) => b.s - a.s);
+  const picked = [];
+  const perHost = {};
+  for (const { c } of scored) {
+    const u = String(c.row.url || '');
+    if ((perHost[u] || 0) >= perUrl) continue;
+    perHost[u] = (perHost[u] || 0) + 1;
+    picked.push(c);
+    if (picked.length >= k) break;
+  }
+  return picked;
+};
+
+// checks: [{claim, main}] from the big judge. Returns the same list with
+// status/source/quote/search filled from the focused call. Only claims whose
+// index is in `only` (default: all) are sent.
+const CLAIM_ANSWER_TOKENS = 1200;
+export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post = {}, only = null) => {
+  const chunks = chunkRows(rows);
+  const names = subjectTools(claimsData || {}).map((t) => t.name).filter(Boolean).join(' ');
+  const payWords = post.money ? ' pay paid per hour earn payout $ ₹ minimum scam' : '';
+  const items = [];
+  (checks || []).forEach((c, i) => {
+    if (!c || !c.claim || (only && !only.includes(i))) return;
+    const passages = topChunks(chunks, c.claim + ' ' + names + payWords, c.main === false ? 2 : 4);
+    items.push({ i, c, passages });
+  });
+  if (!items.length) return { checks, used: 0 };
+  const body = items.map((it, n) => [
+    `Claim ${n + 1} (${it.c.main === false ? 'side' : 'main'}): ${it.c.claim}`,
+    ...(it.passages.length ? it.passages.map((p, j) => `  [${n + 1}${'abcd'[j]}] (${String(p.row.url || '').split('/')[2] || 'page'}) ${p.text}`) : ['  (no passage matched)']),
+  ].join('\n')).join('\n\n');
+  const prompt = [
+    'Check each claim from a social media tech post ONLY against the passages listed under it. Your own memory is older than the post: never use it.',
+    'Post subject: ' + ((claimsData && claimsData.tech_name) || names || 'unknown') + (post.money ? ' (money / side-hustle post: the question is whether the pay and payout claims hold)' : ''),
+    '',
+    body,
+    '',
+    'For each claim give "status":',
+    '- "supported": a passage states it;',
+    '- "contradicted": a passage states otherwise (paid when the post says free, pay far below the claim, not open source, needs a big GPU);',
+    '- "exaggerated": real, but a passage shows it is much smaller or narrower than the post says;',
+    '- "not_found": no passage settles it. Use this freely; not mentioned is never contradicted.',
+    'Non-not_found answers carry "passage" (e.g. "2b") and "quote": 4-25 words copied exactly from that passage.',
+    'not_found answers carry "search": one 3-8 word web search that would find the page settling it.',
+    'Return ONLY JSON: {"checks":[{"claim":1,"status":"supported","passage":"1a","quote":"exact words"},{"claim":2,"status":"not_found","search":"tool pay per hour reddit"}]}',
+  ].join('\n');
+  const res = await callGroq(apiKey, [
+    { role: 'system', content: 'You are a precise fact checker. Output strictly valid JSON.' },
+    { role: 'user', content: prompt },
+  ], { job: 'claims', json: true, temperature: 0, maxTokens: CLAIM_ANSWER_TOKENS, accept: (d) => d && Array.isArray(d.checks) });
+  const out = (checks || []).map((c) => ({ ...c }));
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9$₹%]+/g, ' ').trim();
+  let changed = 0;
+  for (const a of res.checks || []) {
+    const it = items[Number(a && a.claim) - 1];
+    if (!it) continue;
+    const target = out[it.i];
+    const status = ['supported', 'contradicted', 'exaggerated'].includes(a.status) ? a.status : 'not_found';
+    const m = String(a.passage || '').match(/(\d+)([a-d])/i);
+    const p = m && Number(m[1]) - 1 === items.indexOf(it) ? it.passages['abcd'.indexOf(m[2].toLowerCase())] : null;
+    // The quote must really be in the passage it names; otherwise not found.
+    const ok = status !== 'not_found' && p && a.quote && norm(p.text).includes(norm(a.quote));
+    if (ok) {
+      Object.assign(target, { status, quote: a.quote, source: 'passage', url: p.row.url, verified: true });
+      changed += 1;
+    } else if (!['supported', 'contradicted', 'exaggerated'].includes(target.status)) {
+      target.status = 'not_found';
+      if (a.search) target.search = a.search;
+    }
+  }
+  return { checks: out, used: items.length, changed, chunks: chunks.length };
+};
+
 const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, coverage, keptRows, post = {}) => {
   const kept = keptRows || rankEvidence(evidence, claimsData && claimsData.tech_name, claimsData && claimsData.tools);
   if ((evidence || []).length > kept.length) {
@@ -1753,7 +1886,9 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
   if (report.claimChecks && report.claimChecks.length) {
     const checks = report.claimChecks.map((c) => {
       const status = ['supported', 'contradicted', 'exaggerated'].includes(c && c.status) ? c.status : 'not_found';
-      const ok = status !== 'not_found' && proven({ source: c.source, quote: c.quote });
+      // A per-claim answer was already checked against its passage (cleaned
+      // text: a quote across a markdown link would fail the raw-page test).
+      const ok = status !== 'not_found' && (c.verified || proven({ source: c.source, quote: c.quote }));
       return { claim: cleanLine(c && c.claim), main: c && c.main !== false, status: ok ? status : 'not_found' };
     });
     const main = checks.filter((c) => c.main);
@@ -2662,10 +2797,32 @@ export const analyzeReelApi = async (url) => {
   // up to 2 targeted searches each (its own hint, on the tool's site and open),
   // then one more verdict with the new pages first. One extra round at most.
   let secondRound = '';
-  const unfound = claimJudge && report && report.verdict !== 'FAKE' && queries.length && !searchFailed
-    ? (Array.isArray(report.claim_checks) ? report.claim_checks : [])
-      .filter((c) => c && c.main !== false && !['supported', 'contradicted', 'exaggerated'].includes(c.status)).slice(0, 3)
+  const settled = (c) => ['supported', 'contradicted', 'exaggerated'].includes(c && c.status);
+  const waitJudge = async (need) => {
+    const w = modelWaitMs(MODEL_CHAINS.verdict[0], need);
+    if (w > 0) { setJobNote("Waiting for Groq's free per-minute limit", Date.now() + w); await sleep(w); setJobNote(null); }
+  };
+  // Per-claim check over EVERY fetched page, not just the rows the big call saw.
+  if (perClaim && claimJudge && report && Array.isArray(report.claim_checks) && report.claim_checks.length) {
+    await waitJudge(3500);
+    const r1 = await checkClaimsFocused(apiKey, report.claim_checks, evidence, claimsData, judgeOpts).catch((e) => { console.warn('per-claim check failed', e && e.message); return null; });
+    if (r1) {
+      report.claim_checks = r1.checks;
+      secondRound = `Per-claim: ${r1.used} claims over ${r1.chunks} passages, ${r1.changed} settled`;
+      log('PER-CLAIM CHECKS', r1.checks);
+    }
+    lap('per-claim');
+  }
+
+  // Step A.2 (Nov 23): search again. Main claims still not found get up to 2
+  // targeted searches each (the judge's hint, on the tool's site and open).
+  // With per-claim on, only those claims are checked again on the new pages;
+  // otherwise one more full verdict. One extra round at most.
+  const checksNow = Array.isArray(report && report.claim_checks) ? report.claim_checks : [];
+  const unfoundIdx = claimJudge && report && report.verdict !== 'FAKE' && queries.length && !searchFailed
+    ? checksNow.map((c, i) => (c && c.main !== false && !settled(c) ? i : -1)).filter((i) => i >= 0).slice(0, 3)
     : [];
+  const unfound = unfoundIdx.map((i) => checksNow[i]);
   if (unfound.length) {
     const subj = subjectTools(claimsData).find((t) => t.domain_url && t.domain_url !== 'null');
     const dom = subj ? String(subj.domain_url).replace(/^https?:\/\//, '').split('/')[0] : siteDomain;
@@ -2689,20 +2846,30 @@ export const analyzeReelApi = async (url) => {
         if (!u || seenUrls.has(u)) return false;
         seenUrls.add(u); return true;
       });
-      await fillMissingPageText(fresh, 2);
-      if (fresh.length) {
+      await fillMissingPageText(fresh, perClaim ? 4 : 2);
+      const note = (s) => { secondRound = secondRound ? secondRound + ' ; ' + s : s; };
+      if (!fresh.length) note(`Second round: ${extraQs.length} searches, no new pages`);
+      else if (perClaim) {
+        await waitJudge(3000);
+        const r2 = await checkClaimsFocused(apiKey, report.claim_checks, fresh, claimsData, judgeOpts, unfoundIdx).catch(() => null);
+        evidence = [...evidence, ...fresh];
+        if (r2) {
+          report.claim_checks = r2.checks;
+          log('SECOND ROUND CHECKS', r2.checks);
+        }
+        note(`Second round: ${extraQs.length} searches, ${fresh.length} new pages, ${r2 ? r2.changed : 0} of ${unfound.length} claims settled`);
+      } else {
         const kept2 = [...fresh.slice(0, 6), ...kept];
-        const wait2 = modelWaitMs(MODEL_CHAINS.verdict[0], 6500);
-        if (wait2 > 0) { setJobNote("Waiting for Groq's free per-minute limit", Date.now() + wait2); await sleep(wait2); setJobNote(null); }
+        await waitJudge(6500);
         const report2 = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, [...evidence, ...fresh], coverage, kept2, judgeOpts).catch(() => null);
         if (report2 && typeof report2.verdict === 'string') {
-          secondRound = `Second round: ${extraQs.length} searches, ${fresh.length} new pages, first verdict ${report.verdict} -> ${report2.verdict}`;
+          note(`Second round: ${extraQs.length} searches, ${fresh.length} new pages, first verdict ${report.verdict} -> ${report2.verdict}`);
           evidence = [...evidence, ...fresh];
           kept = kept2;
           report = report2;
           log('STAGE 3 SECOND REPORT', report);
         }
-      } else secondRound = `Second round: ${extraQs.length} searches, no new pages`;
+      }
       lap('second-round');
     }
   }
