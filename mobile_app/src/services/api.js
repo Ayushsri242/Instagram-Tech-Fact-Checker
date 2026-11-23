@@ -1513,7 +1513,8 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
       '- "contradicted": a source states otherwise - paid when the post says free, a big GPU when it says no hardware, a licence that is not open source, a pay figure far below the claim (quote that line);',
       '- "exaggerated": the thing is real but a source shows it is much smaller than the post says (quote that line);',
       '- "not_found": no source mentions it. Use this freely: a claim nobody mentions is not_found, never contradicted.',
-      'Each non-not_found check carries "source" and "quote" (4-25 words copied exactly). Judge each claim only by what a source says, never by memory.'] : []),
+      'Each non-not_found check carries "source" and "quote" (4-25 words copied exactly). Judge each claim only by what a source says, never by memory.',
+      'A MAIN claim that is not_found also carries "search": one 3-8 word web search that would find the page settling it (e.g. "UserTesting pay per test", "Mercor hourly rate reddit").'] : []),
     'Return FIELDS ONLY. Do not write markdown, headings, bullet characters, tables or emoji inside any value.',
     'BE BRIEF. This is a card the reader scans in five seconds, not an article; they ask follow-up questions in chat afterwards.',
     '- factual_reality: AT MOST 2 sentences, under 220 characters total. Say what the tool/platform is and whether the claim holds. No preamble.',
@@ -1532,7 +1533,7 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     'Return ONLY JSON:',
     '{"tech_name":"string","verdict":"TRUE","pricing_model":"Open Source or Commercial","github_url":"https://github.com/... or null","factual_reality":"2-4 sentence explanation","claims":["one plain sentence per claim"],"tools":[{"name":"Tool or Website Name","repo":"owner/repo or null","website":"domain.com or null","install":"pip install x or null","what_it_does":"one plain sentence","caveat":{"text":"one plain sentence","source":3,"quote":"exact words from Source [3]"},"status":"verified","role":"main"}],"gotchas":[{"text":"one plain sentence","source":"post","quote":"exact words from the post"}],"verdict_basis":{"source":2,"quote":"exact words from Source [2] that decide the verdict"}}',
     'A tool with no caveat has "caveat": null.',
-    ...(claimJudge ? ['Also include "claim_checks":[{"claim":"one plain sentence","main":true,"status":"supported","source":2,"quote":"exact words from Source [2]"}].'] : []),
+    ...(claimJudge ? ['Also include "claim_checks":[{"claim":"one plain sentence","main":true,"status":"supported","source":2,"quote":"exact words from Source [2]"},{"claim":"another claim","main":true,"status":"not_found","search":"tool name pay per hour"}].'] : []),
   ].join('\n');
   };
   // Nov 17: news posts (700 characters per article) sent requests of 8,042-
@@ -2574,7 +2575,7 @@ export const analyzeReelApi = async (url) => {
   log('STAGE 2 STRUCTURED', structured.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet })));
   // Structured rows lead: they are authoritative and short, so they survive the
   // token trim that drops the tail of the search results.
-  const evidence = [...structured, ...searched];
+  let evidence = [...structured, ...searched];
   log('STAGE 2 EVIDENCE', {
     count: evidence.length,
     withPageContext: evidence.filter((e) => (e.pagePreview || '').length > 0).length,
@@ -2634,7 +2635,7 @@ export const analyzeReelApi = async (url) => {
   // exactly these. The CSV used to log evidence.slice(0, 12) - the first rows
   // FOUND, not the ones ranked and sent - so "what the model saw" was wrong.
   const pinned = [...new Set([subject.slug, ...printedGithubSlugs(ocrText)].filter(Boolean))];
-  const kept = money
+  let kept = money
     ? rankMoneyEvidence(evidence, platforms)
     : rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned, {
       list: listPost,
@@ -2652,9 +2653,59 @@ export const analyzeReelApi = async (url) => {
     await sleep(judgeWait);
     setJobNote(null);
   }
-  const report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage, kept, { author: media.author, money, platforms, news, subjectSlug: subject.slug });
+  const judgeOpts = { author: media.author, money, platforms, news, subjectSlug: subject.slug };
+  let report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage, kept, judgeOpts);
   lap('synthesis');
   log('STAGE 3 RAW REPORT', report);
+
+  // Step A.2 (Nov 23): search again. Main claims the judge could not find get
+  // up to 2 targeted searches each (its own hint, on the tool's site and open),
+  // then one more verdict with the new pages first. One extra round at most.
+  let secondRound = '';
+  const unfound = claimJudge && report && report.verdict !== 'FAKE' && queries.length && !searchFailed
+    ? (Array.isArray(report.claim_checks) ? report.claim_checks : [])
+      .filter((c) => c && c.main !== false && !['supported', 'contradicted', 'exaggerated'].includes(c.status)).slice(0, 3)
+    : [];
+  if (unfound.length) {
+    const subj = subjectTools(claimsData).find((t) => t.domain_url && t.domain_url !== 'null');
+    const dom = subj ? String(subj.domain_url).replace(/^https?:\/\//, '').split('/')[0] : siteDomain;
+    const name = subject.name || (subjectTools(claimsData)[0] || {}).name || '';
+    const used = new Set(queries.map((q) => String(q).toLowerCase()));
+    const extraQs = [];
+    for (const c of unfound) {
+      let hint = shortWords(c.search || '', 8);
+      if (!hint) hint = shortWords(name + ' ' + (c.claim || ''), 8);
+      if (name && !flatKey(hint).includes(flatKey(name).slice(0, 6))) hint = shortWords(name + ' ' + hint, 9);
+      for (const q of [dom ? hint + ' ||exa:domains=' + dom : null, money ? hint + ' reddit' : hint]) {
+        if (q && !used.has(q.toLowerCase())) { used.add(q.toLowerCase()); extraQs.push(q); }
+      }
+    }
+    if (extraQs.length) {
+      log('SECOND ROUND QUERIES', extraQs);
+      const extra = await TechFactChecker.gatherEvidence(extraQs).catch(() => []);
+      const seenUrls = new Set(evidence.map((e) => String(e.url || '').replace(/\/$/, '').toLowerCase()));
+      const fresh = (extra || []).filter((e) => {
+        const u = String(e.url || '').replace(/\/$/, '').toLowerCase();
+        if (!u || seenUrls.has(u)) return false;
+        seenUrls.add(u); return true;
+      });
+      await fillMissingPageText(fresh, 2);
+      if (fresh.length) {
+        const kept2 = [...fresh.slice(0, 6), ...kept];
+        const wait2 = modelWaitMs(MODEL_CHAINS.verdict[0], 6500);
+        if (wait2 > 0) { setJobNote("Waiting for Groq's free per-minute limit", Date.now() + wait2); await sleep(wait2); setJobNote(null); }
+        const report2 = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, [...evidence, ...fresh], coverage, kept2, judgeOpts).catch(() => null);
+        if (report2 && typeof report2.verdict === 'string') {
+          secondRound = `Second round: ${extraQs.length} searches, ${fresh.length} new pages, first verdict ${report.verdict} -> ${report2.verdict}`;
+          evidence = [...evidence, ...fresh];
+          kept = kept2;
+          report = report2;
+          log('STAGE 3 SECOND REPORT', report);
+        }
+      } else secondRound = `Second round: ${extraQs.length} searches, no new pages`;
+      lap('second-round');
+    }
+  }
   const verdictRaw = report.verdict;
   const normalized = normalizeReport(report, evidence, {
     money, news, list: listPost,
@@ -2760,7 +2811,7 @@ export const analyzeReelApi = async (url) => {
     searchRows: searched.length,
     keptRows: kept.length,
     keptWithPageText: kept.filter((e) => (e.pagePreview || '').length > 0).length,
-    evidenceRules: (normalized.__rules || []).join(' ; '),
+    evidenceRules: [...(normalized.__rules || []), ...(secondRound ? [secondRound] : [])].join(' ; '),
     claims: (normalized.claims || []).length,
     gotchas: (normalized.gotchas || []).length,
     durationMs: Date.now() - startedAt,
