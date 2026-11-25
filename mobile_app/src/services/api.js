@@ -1465,58 +1465,90 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
     items.push({ i, c, passages });
   });
   if (!items.length) return { checks, used: 0 };
-  const body = items.map((it, n) => [
-    `Claim ${n + 1} (${it.c.main === false ? 'side' : 'main'}): ${it.c.claim}`,
-    ...(it.passages.length ? it.passages.map((p, j) => `  [${n + 1}${'abcd'[j]}] (${String(p.row.url || '').split('/')[2] || 'page'}) ${p.text}`) : ['  (no passage matched)']),
-  ].join('\n')).join('\n\n');
-  const prompt = [
-    'Check each claim from a social media tech post ONLY against the passages listed under it. Your own memory is older than the post: never use it.',
-    'Post subject: ' + ((claimsData && claimsData.tech_name) || names || 'unknown') + (post.money ? ' (money / side-hustle post: the question is whether the pay and payout claims hold)' : ''),
-    '',
-    body,
-    '',
-    'For each claim give "status":',
-    '- "supported": a passage states it;',
-    '- "contradicted": a passage states otherwise (paid when the post says free, pay far below the claim, not open source, needs a big GPU);',
-    '- "exaggerated": real, but a passage shows it is much smaller or narrower than the post says;',
-    '- "not_found": no passage settles it. Use this freely; not mentioned is never contradicted.',
-    // Nov 25 (run 45560207568): "/V1" vs "/v1" was called exaggerated (mesh-llm
-    // went HYPE); one repo's 105k stars "contradicted" 405k for 7 repos; "$10 a
-    // month" "contradicted" "replaces a $140 tool".
-    'Small differences in spelling, case, format or rounding ("/V1" vs "/v1", "2.1x" vs "2.19x") are "supported", never exaggerated.',
-    'A total or combined figure is settled only by the same total; one item\'s number never contradicts a sum over several items (then it is "not_found").',
-    'A claim that a tool is a cheaper or free replacement is "supported" by a passage showing it costs less; a lower price never contradicts it.',
-    // Nov 25 (run 45561757765): "about 20 providers" was "contradicted" by "87 providers".
-    'A passage showing MORE than the post claims (87 providers when the post says about 20, more stars, more features) makes the claim "supported", never contradicted.',
-    'Non-not_found answers carry "passage" (e.g. "2b") and "quote": 4-25 words copied exactly from that passage.',
-    'not_found answers carry "search": one 3-8 word web search that would find the page settling it.',
-    'Return ONLY JSON: {"checks":[{"claim":1,"status":"supported","passage":"1a","quote":"exact words"},{"claim":2,"status":"not_found","search":"tool pay per hour reddit"}]}',
-  ].join('\n');
-  const res = await callGroq(apiKey, [
-    { role: 'system', content: 'You are a precise fact checker. Output strictly valid JSON.' },
-    { role: 'user', content: prompt },
-  ], { job: 'claims', json: true, temperature: 0, maxTokens: CLAIM_ANSWER_TOKENS, accept: (d) => d && Array.isArray(d.checks) });
-  const out = (checks || []).map((c) => ({ ...c }));
+  // The prompt for a list of claims (all of them, or the re-asked ones).
+  const ask = (list) => {
+    const body = list.map((it, n) => [
+      `Claim ${n + 1} (${it.c.main === false ? 'side' : 'main'}): ${it.c.claim}`,
+      ...(it.passages.length ? it.passages.map((p, j) => `  [${n + 1}${'abcd'[j]}] (${String(p.row.url || '').split('/')[2] || 'page'}) ${p.text}`) : ['  (no passage matched)']),
+    ].join('\n')).join('\n\n');
+    const prompt = [
+      'Check each claim from a social media tech post ONLY against the passages listed under it. Your own memory is older than the post: never use it.',
+      'Post subject: ' + ((claimsData && claimsData.tech_name) || names || 'unknown') + (post.money ? ' (money / side-hustle post: the question is whether the pay and payout claims hold)' : ''),
+      '',
+      body,
+      '',
+      'For each claim give "status":',
+      '- "supported": a passage states it;',
+      '- "contradicted": a passage states otherwise (paid when the post says free, pay far below the claim, not open source, needs a big GPU);',
+      '- "exaggerated": real, but a passage shows it is much smaller or narrower than the post says;',
+      '- "not_found": no passage settles it. Use this freely; not mentioned is never contradicted.',
+      // Nov 25 (run 45560207568): "/V1" vs "/v1" was called exaggerated (mesh-llm
+      // went HYPE); one repo's 105k stars "contradicted" 405k for 7 repos; "$10 a
+      // month" "contradicted" "replaces a $140 tool".
+      'Small differences in spelling, case, format or rounding ("/V1" vs "/v1", "2.1x" vs "2.19x") are "supported", never exaggerated.',
+      'A total or combined figure is settled only by the same total; one item\'s number never contradicts a sum over several items (then it is "not_found").',
+      'A claim that a tool is a cheaper or free replacement is "supported" by a passage showing it costs less; a lower price never contradicts it.',
+      // Nov 25 (run 45561757765): "about 20 providers" was "contradicted" by "87 providers".
+      'A passage showing MORE than the post claims (87 providers when the post says about 20, more stars, more features) makes the claim "supported", never contradicted.',
+      'Non-not_found answers carry "passage" (e.g. "2b") and "quote": 4-25 words copied exactly from that passage.',
+      'not_found answers carry "search": one 3-8 word web search that would find the page settling it.',
+      'Return ONLY JSON: {"checks":[{"claim":1,"status":"supported","passage":"1a","quote":"exact words"},{"claim":2,"status":"not_found","search":"tool pay per hour reddit"}]}',
+    ].join('\n');
+    return callGroq(apiKey, [
+      { role: 'system', content: 'You are a precise fact checker. Output strictly valid JSON.' },
+      { role: 'user', content: prompt },
+    ], { job: 'claims', json: true, temperature: 0, maxTokens: CLAIM_ANSWER_TOKENS, accept: (d) => d && Array.isArray(d.checks) });
+  };
+  // One answer, checked: the quote must really be in the passage it names.
   const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9$₹%]+/g, ' ').trim();
-  let changed = 0;
-  for (const a of res.checks || []) {
-    const it = items[Number(a && a.claim) - 1];
-    if (!it) continue;
-    const target = out[it.i];
+  const read = (list, a) => {
+    const it = list[Number(a && a.claim) - 1];
+    if (!it) return null;
     const status = ['supported', 'contradicted', 'exaggerated'].includes(a.status) ? a.status : 'not_found';
     const m = String(a.passage || '').match(/(\d+)([a-d])/i);
-    const p = m && Number(m[1]) - 1 === items.indexOf(it) ? it.passages['abcd'.indexOf(m[2].toLowerCase())] : null;
-    // The quote must really be in the passage it names; otherwise not found.
+    const p = m && Number(m[1]) - 1 === list.indexOf(it) ? it.passages['abcd'.indexOf(m[2].toLowerCase())] : null;
     const ok = status !== 'not_found' && p && a.quote && norm(p.text).includes(norm(a.quote));
-    if (ok) {
-      Object.assign(target, { status, quote: a.quote, source: 'passage', url: p.row.url, verified: true });
+    return { it, status: ok ? status : 'not_found', a, p };
+  };
+  const res = await ask(items);
+  const out = (checks || []).map((c) => ({ ...c }));
+  let changed = 0;
+  const negative = [];
+  for (const a of res.checks || []) {
+    const r = read(items, a);
+    if (!r) continue;
+    const target = out[r.it.i];
+    if (r.status !== 'not_found') {
+      Object.assign(target, { status: r.status, quote: r.a.quote, source: 'passage', url: r.p.row.url, verified: true });
       changed += 1;
+      if (r.status !== 'supported') negative.push(r.it);
     } else if (!['supported', 'contradicted', 'exaggerated'].includes(target.status)) {
       target.status = 'not_found';
-      if (a.search) target.search = a.search;
+      if (r.a.search) target.search = r.a.search;
     }
   }
-  return { checks: out, used: items.length, changed, chunks: chunks.length };
+  // Nov 25: a "contradicted" or "exaggerated" answer is asked once more, alone
+  // with the same passages, and stands only if the second answer is negative
+  // too. One-off wrong negatives ("47 tools" against "29 tools", "/V1" vs
+  // "/v1") pulled true posts down; real catches came back on every run.
+  let doubted = 0;
+  if (negative.length) {
+    const again = await ask(negative).catch(() => null);
+    const second = new Map();
+    for (const a of (again && again.checks) || []) { const r = read(negative, a); if (r) second.set(r.it, r.status); }
+    for (const it of negative) {
+      const s2 = second.get(it);
+      const target = out[it.i];
+      if (s2 === 'contradicted' || s2 === 'exaggerated') {
+        if (s2 !== target.status) target.status = 'exaggerated'; // they disagree on how bad: the milder one
+      } else if (again) {
+        doubted += 1;
+        Object.assign(target, { status: 'not_found', verified: false });
+        delete target.quote; delete target.source; delete target.url;
+      }
+    }
+  }
+  return { checks: out, used: items.length, changed, doubted, chunks: chunks.length };
 };
 
 const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, coverage, keptRows, post = {}) => {
@@ -2845,7 +2877,7 @@ export const analyzeReelApi = async (url) => {
     const r1 = await checkClaimsFocused(apiKey, report.claim_checks, evidence, claimsData, judgeOpts).catch((e) => { console.warn('per-claim check failed', e && e.message); return null; });
     if (r1) {
       report.claim_checks = r1.checks;
-      secondRound = `Per-claim: ${r1.used} claims over ${r1.chunks} passages, ${r1.changed} settled`;
+      secondRound = `Per-claim: ${r1.used} claims over ${r1.chunks} passages, ${r1.changed} settled${r1.doubted ? `, ${r1.doubted} negative dropped on a second ask` : ''}`;
       log('PER-CLAIM CHECKS', r1.checks);
     }
     lap('per-claim');
