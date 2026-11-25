@@ -286,26 +286,46 @@ export const readPage = async (url, maxChars = 8000) => {
 // is dead": OCR misreads slugs and paths, and a misread must never become FAKE.
 const OWN_PAGE_CHARS = 2500;
 
-export const checkPrintedRepo = async (slug) => {
+// Nov 25: facts for "open source", "free download", "made by X" straight from
+// GitHub - license, owner, fork, archived, latest release - at the START of
+// the page text: the judge hides the snippet when a page has text, so the old
+// "REPO EXISTS" snippet never reached it on repos with a README.
+const repoFacts = (data, release) => {
+  const full = data.full_name;
+  const lic = data.license && data.license.spdx_id;
+  return `GitHub facts for ${full}: owner ${data.owner && data.owner.login}` +
+    (lic && lic !== 'NOASSERTION' ? `, license ${lic}` : lic ? ', license listed as other (see the repo)' : ', no license file found (the code is public; reuse terms not stated)') +
+    (data.fork ? `, a fork of ${(data.parent && data.parent.full_name) || 'another repo'}` : ', not a fork') +
+    (data.archived ? ', ARCHIVED (read-only, no longer maintained)' : '') +
+    `, ${data.stargazers_count} stars` +
+    (release ? `, latest release ${release.tag_name} (${String(release.published_at || '').slice(0, 10)})` : ', no releases') +
+    `, last push ${String(data.pushed_at || '').slice(0, 10)}.` +
+    (data.homepage ? ` Homepage ${data.homepage}.` : '') +
+    (data.description ? ` About: ${data.description}` : '');
+};
+
+// `printed`: the post shows this link. Otherwise the slug came from the claim
+// reader, which can be wrong, so only a repo that exists gives a row (as before).
+export const checkPrintedRepo = async (slug, printed = true) => {
+  const gh = { headers: { Accept: 'application/vnd.github+json' }, timeout: TIMEOUT };
   try {
-    const { data } = await axios.get(`https://api.github.com/repos/${slug}`, {
-      headers: { Accept: 'application/vnd.github+json' },
-      timeout: TIMEOUT,
-    });
-    const full = data.full_name || slug;
-    let readme = '';
-    try {
-      const res = await axios.get(`https://raw.githubusercontent.com/${full}/HEAD/README.md`, { timeout: TIMEOUT, responseType: 'text' });
-      readme = String(res.data || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    } catch (e) { /* no README is fine; the repo row stands */ }
+    const { data } = await axios.get(`https://api.github.com/repos/${slug}`, gh);
+    if (!data || !data.full_name) return []; // a 404 body is not a repo
+    const full = data.full_name;
+    const [release, readme] = await Promise.all([
+      axios.get(`https://api.github.com/repos/${full}/releases/latest`, gh).then((r) => r.data).catch(() => null),
+      axios.get(`https://raw.githubusercontent.com/${full}/HEAD/README.md`, { timeout: TIMEOUT, responseType: 'text' })
+        .then((r) => String(r.data || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).catch(() => ''),
+    ]);
+    const facts = repoFacts({ ...data, full_name: full }, release);
     return [{
       ...row(
-        `GitHub - ${full} (the repo the post prints)`,
+        `GitHub - ${full}` + (printed ? ' (the repo the post prints)' : ''),
         `https://github.com/${full}`,
-        `REPO EXISTS: ${full}, ${data.stargazers_count} stars, last push ${String(data.pushed_at || '').slice(0, 10)}. ${data.description || ''}`
+        facts
       ),
       // The post's own link is the best evidence there is; keep more of it.
-      pagePreview: readme.slice(0, OWN_PAGE_CHARS),
+      pagePreview: (facts + ' README: ' + readme).slice(0, OWN_PAGE_CHARS),
     }];
   } catch (e) {
     return [];
@@ -520,8 +540,21 @@ export const runVerifiers = async (claimsData, transcript = '', ocrText = '', ev
   };
 
   // Links the post prints, opened directly (see checkPrintedRepo).
+  const printedLower = (opts.printedRepos || []).map((x) => x.toLowerCase());
   for (const slug of (opts.printedRepos || []).slice(0, 3)) {
-    once(`ghrepo:${slug}`, () => checkPrintedRepo(slug));
+    once(`ghrepo:${slug.toLowerCase()}`, () => checkPrintedRepo(slug));
+  }
+  // Nov 25: repos the claim reader named for the post's main tools get the same
+  // facts (they had no GitHub lookup at all). Not for money posts, never for
+  // tools only mentioned in passing; 3 repos at most in all.
+  if (!opts.money) {
+    const named = tools
+      .filter((t) => t && String(t.role || '').toLowerCase() !== 'mention')
+      .map((t) => String(t.github_repo || '').trim())
+      .filter((r) => /^[\w.-]+\/[\w.-]+$/.test(r) && !printedLower.includes(r.toLowerCase()));
+    for (const slug of named.slice(0, Math.max(0, 3 - printedLower.length))) {
+      once(`ghrepo:${slug.toLowerCase()}`, () => checkPrintedRepo(slug, false));
+    }
   }
   for (const site of (opts.printedSites || []).slice(0, 3)) {
     once(`site:${site}`, () => checkPrintedSite(site));
