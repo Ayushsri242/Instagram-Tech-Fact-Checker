@@ -1198,8 +1198,32 @@ export const captionLead = (caption) => {
 const MAX_EVIDENCE_ROWS = 12;
 const MAX_PAGE_PREVIEW = 300;
 const OWN_PAGE_PREVIEW = 1500;
-const MAX_TRANSCRIPT = 3000;
-const MAX_OCR = 3000;
+const JUDGE_POST_CHARS = 1600;
+
+// Slide parts the caption already says, dropped (12+ chars, compared without
+// case or punctuation). Short parts stay: they carry list positions.
+const flatText = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+export const dropCaptionText = (ocr, caption) => {
+  const cap = ' ' + flatText(caption) + ' ';
+  return String(ocr || '').split('\n').map((line) => line.split(/\s*\|\s*/)
+    .filter((seg) => { const k = flatText(seg); return k.length < 12 || !cap.includes(' ' + k + ' '); })
+    .join(' | ')).filter((l) => l.trim()).join('\n');
+};
+
+// The extraction as the judge needs it: no search queries, no empty fields.
+export const compactClaims = (c) => {
+  const prune = (v) => {
+    if (Array.isArray(v)) return v.map(prune).filter((x) => x !== undefined);
+    if (v && typeof v === 'object') {
+      const o = {};
+      for (const [k, x] of Object.entries(v)) { const p = prune(x); if (p !== undefined) o[k] = p; }
+      return Object.keys(o).length ? o : undefined;
+    }
+    return v === null || v === 'null' || v === '' || v === false ? undefined : v;
+  };
+  const { search_queries, post_topic, ...rest } = c || {};
+  return { tech_name: (c && c.tech_name) ?? null, ...(prune(rest) || {}) };
+};
 
 // Relevance first, page text second.
 //
@@ -1549,8 +1573,11 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     Boolean(subjectRepo && String(item.url || '').toLowerCase().replace(/\/$/, '').endsWith(subjectRepo));
   const ownRows = new Set(kept.filter(isOwn).slice(0, 2));
   const ownPage = (item) => ownRows.has(item);
-  transcript = (transcript || '').slice(0, MAX_TRANSCRIPT);
-  ocrText = (ocrText || '').slice(0, MAX_OCR);
+  // Nov 25: the judge read only 4 of 12 sources on 17 of 57 dev posts. The
+  // post's own text took the room: slides repeat the caption (43% of caption
+  // words), so those slide parts go, and both are capped tighter here.
+  transcript = (transcript || '').slice(0, JUDGE_POST_CHARS);
+  ocrText = dropCaptionText(dropRepeatedText(ocrText || ''), transcript).slice(0, JUDGE_POST_CHARS);
   const buildPrompt = () => {
   // Numbered so every gotcha can name the source it quotes (see PROOF).
   const evidenceText = kept.map((item, i) => [
@@ -1572,7 +1599,7 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     '',
     'Visual/OCR Text:', ocrText,
     '',
-    'Extracted Claims & Tools:', JSON.stringify({ ...claimsData, search_queries: undefined }),
+    'Extracted Claims & Tools:', JSON.stringify(compactClaims(claimsData)),
     ...(claimsData.tech_name === null ? ['',
       'SUBJECT UNIDENTIFIED: Do not guess the primary tool or subject name. If ONE evidence source describes the same thing the caption describes - same company AND the same mechanism or numbers - judge the post against that source and name it as the subject (Oct 26: a post that never named Google\'s Harness² had its repo and an article about it in the evidence). Otherwise state clearly in factual_reality that the primary subject could not be confidently identified, and only evaluate the tools that were found.'] : []),
     ...(coverage ? ['',
