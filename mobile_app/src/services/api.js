@@ -1916,7 +1916,8 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
       // A per-claim answer was already checked against its passage (cleaned
       // text: a quote across a markdown link would fail the raw-page test).
       const ok = status !== 'not_found' && (c.verified || proven({ source: c.source, quote: c.quote }));
-      return { claim: cleanLine(c && c.claim), main: c && c.main !== false, status: ok ? status : 'not_found' };
+      // Source and quote kept so a test run shows WHY a claim was judged (Nov 25).
+      return { claim: cleanLine(c && c.claim), main: c && c.main !== false, status: ok ? status : 'not_found', ...(ok ? { source: c.source, quote: c.quote } : {}) };
     });
     const main = checks.filter((c) => c.main);
     const side = checks.filter((c) => !c.main);
