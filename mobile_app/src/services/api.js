@@ -1486,6 +1486,8 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
     'Small differences in spelling, case, format or rounding ("/V1" vs "/v1", "2.1x" vs "2.19x") are "supported", never exaggerated.',
     'A total or combined figure is settled only by the same total; one item\'s number never contradicts a sum over several items (then it is "not_found").',
     'A claim that a tool is a cheaper or free replacement is "supported" by a passage showing it costs less; a lower price never contradicts it.',
+    // Nov 25 (run 45561757765): "about 20 providers" was "contradicted" by "87 providers".
+    'A passage showing MORE than the post claims (87 providers when the post says about 20, more stars, more features) makes the claim "supported", never contradicted.',
     'Non-not_found answers carry "passage" (e.g. "2b") and "quote": 4-25 words copied exactly from that passage.',
     'not_found answers carry "search": one 3-8 word web search that would find the page settling it.',
     'Return ONLY JSON: {"checks":[{"claim":1,"status":"supported","passage":"1a","quote":"exact words"},{"claim":2,"status":"not_found","search":"tool pay per hour reddit"}]}',
