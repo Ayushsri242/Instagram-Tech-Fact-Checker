@@ -16,6 +16,19 @@ import axios from 'axios';
 
 const TIMEOUT = 6000;
 
+// Nov 25: optional GitHub token from Settings (the app loads it at the start of
+// each check). With it GitHub allows 5,000 lookups an hour instead of 60.
+let ghToken = '';
+export const setGithubToken = (t) => { ghToken = String(t || '').trim(); };
+const ghHeaders = () => ({ Accept: 'application/vnd.github+json', ...(ghToken ? { Authorization: 'Bearer ' + ghToken } : {}) });
+// An expired or wrong token makes GitHub refuse every call (401): drop it for
+// this run and ask again without it, rather than lose all GitHub rows.
+const ghGet = (url, cfg = {}) => axios.get(url, { ...cfg, headers: ghHeaders() }).catch((e) => {
+  if (!ghToken || !e.response || e.response.status !== 401) throw e;
+  ghToken = '';
+  return axios.get(url, { ...cfg, headers: ghHeaders() });
+});
+
 const row = (title, url, snippet, pagePreview) => ({
   title,
   url,
@@ -197,8 +210,8 @@ const checkGitHubRename = async (name) => {
   if (bare.length < 4) return [];
   const slug = `${bare}/${bare}`;
   try {
-    const { data } = await axios.get(`https://api.github.com/repos/${slug}`, {
-      headers: { Accept: 'application/vnd.github+json' },
+    const { data } = await ghGet(`https://api.github.com/repos/${slug}`, {
+      headers: ghHeaders(),
       timeout: TIMEOUT,
     });
     const actual = data.full_name || slug;
@@ -220,9 +233,9 @@ const checkGitHubName = async (name) => {
   const q = String(name).trim();
   if (q.length < 3 || /\s/.test(q) === false && q.length > 40) return [];
   try {
-    const { data } = await axios.get('https://api.github.com/search/repositories', {
+    const { data } = await ghGet('https://api.github.com/search/repositories', {
       params: { q: `${q} in:name`, sort: 'stars', order: 'desc', per_page: 3 },
-      headers: { Accept: 'application/vnd.github+json' },
+      headers: ghHeaders(),
       timeout: TIMEOUT,
     });
     const items = data.items || [];
@@ -307,13 +320,13 @@ const repoFacts = (data, release) => {
 // `printed`: the post shows this link. Otherwise the slug came from the claim
 // reader, which can be wrong, so only a repo that exists gives a row (as before).
 export const checkPrintedRepo = async (slug, printed = true) => {
-  const gh = { headers: { Accept: 'application/vnd.github+json' }, timeout: TIMEOUT };
+  const gh = { headers: ghHeaders(), timeout: TIMEOUT };
   try {
-    const { data } = await axios.get(`https://api.github.com/repos/${slug}`, gh);
+    const { data } = await ghGet(`https://api.github.com/repos/${slug}`, gh);
     if (!data || !data.full_name) return []; // a 404 body is not a repo
     const full = data.full_name;
     const [release, readme] = await Promise.all([
-      axios.get(`https://api.github.com/repos/${full}/releases/latest`, gh).then((r) => r.data).catch(() => null),
+      ghGet(`https://api.github.com/repos/${full}/releases/latest`, gh).then((r) => r.data).catch(() => null),
       axios.get(`https://raw.githubusercontent.com/${full}/HEAD/README.md`, { timeout: TIMEOUT, responseType: 'text' })
         .then((r) => String(r.data || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).catch(() => ''),
     ]);

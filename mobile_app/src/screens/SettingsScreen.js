@@ -3,7 +3,7 @@ import { View, Text, TextInput, StyleSheet, TouchableOpacity, SafeAreaView, Nati
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from '../theme/colors';
-import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey, restoreGroqKeyFromBackup, getExaApiKey, saveExaApiKey, deleteExaApiKey } from '../services/secrets';
+import { deleteGroqApiKey, getGroqApiKey, saveGroqApiKey, restoreGroqKeyFromBackup, getExaApiKey, saveExaApiKey, deleteExaApiKey, getGithubToken, saveGithubToken, deleteGithubToken } from '../services/secrets';
 import { isGroqKey } from '../services/api';
 import { readRunLog, readOldRunLog, clearRunLog, RUN_LOG_PATH } from '../services/runlog';
 import { checkForUpdates, currentVersion } from '../services/updater';
@@ -41,6 +41,25 @@ export default function SettingsScreen({ navigation }) {
     Alert.alert('Saved', ok ? 'Key works. Web searches now go through Exa.' : 'Saved, but the key could not be tested (no connection).');
   };
   const removeExa = async () => { await deleteExaApiKey(); setHasExaKey(false); setExaKey(''); };
+  // GitHub token (Nov 25): optional; 5,000 GitHub lookups an hour instead of 60.
+  const [ghToken, setGhToken] = useState('');
+  const [hasGhToken, setHasGhToken] = useState(false);
+  useEffect(() => { getGithubToken().then((t) => { setHasGhToken(Boolean(t)); setGhToken(t || ''); }).catch(() => {}); }, []);
+  const isGhToken = (t) => /^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(String(t).trim());
+  const saveGh = async () => {
+    const t = ghToken.trim();
+    if (!isGhToken(t)) { Alert.alert('Not a GitHub token', 'GitHub tokens start with github_pat_ or ghp_.'); return; }
+    let limit = null;
+    try {
+      const r = await fetch('https://api.github.com/rate_limit', { headers: { Authorization: 'Bearer ' + t } });
+      if (r.status === 401) { Alert.alert('GitHub rejected this token', 'Check it on github.com and paste it again.'); return; }
+      limit = (await r.json()).rate.limit;
+    } catch (e) { /* offline: save anyway */ }
+    await saveGithubToken(t);
+    setHasGhToken(true);
+    Alert.alert('Saved', limit ? `Token works: ${limit} GitHub lookups an hour.` : 'Saved, but the token could not be tested (no connection).');
+  };
+  const removeGh = async () => { await deleteGithubToken(); setHasGhToken(false); setGhToken(''); };
   const [runLogRows, setRunLogRows] = useState(0);
   const [updateStatus, setUpdateStatus] = useState('');
   const [showWhatsNew, setShowWhatsNew] = useState(false);
@@ -240,6 +259,35 @@ export default function SettingsScreen({ navigation }) {
             </TouchableOpacity>
             {hasExaKey && (
               <TouchableOpacity style={styles.deleteBtn} onPress={removeExa}>
+                <Text style={styles.btnText}>Delete</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.title}>GitHub Token (optional)</Text>
+          <Text style={styles.desc}>
+            Lets the app ask GitHub 5,000 times an hour instead of 60. Make a
+            fine-grained token with public read-only access on github.com.
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={ghToken}
+            onChangeText={setGhToken}
+            placeholder="github_pat_..."
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+          />
+          <Text style={styles.keyStatus}>Status: {hasGhToken ? 'Saved on device' : 'Not saved'}{ghToken && !isGhToken(ghToken) ? ' | Not a GitHub token' : ''}</Text>
+          <View style={styles.buttonRow}>
+            <TouchableOpacity style={styles.downloadBtn} onPress={saveGh}>
+              <Text style={styles.btnText}>Save Token</Text>
+            </TouchableOpacity>
+            {hasGhToken && (
+              <TouchableOpacity style={styles.deleteBtn} onPress={removeGh}>
                 <Text style={styles.btnText}>Delete</Text>
               </TouchableOpacity>
             )}

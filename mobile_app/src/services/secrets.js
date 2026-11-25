@@ -62,3 +62,10 @@ export const getExaApiKey = () => SecureStore.getItemAsync(EXA_API_KEY);
 export const saveExaApiKey = async (key) => { await SecureStore.setItemAsync(EXA_API_KEY, key.trim()); await pushExaKey(key.trim()); };
 export const deleteExaApiKey = async () => { await SecureStore.deleteItemAsync(EXA_API_KEY); await pushExaKey(''); };
 export const loadExaKeyIntoNative = async () => pushExaKey(await getExaApiKey());
+
+// GitHub token (Nov 25): optional, read-only, lifts GitHub's 60 lookups an hour
+// to 5,000. Kept on the device only; never in the app's code or the APK.
+const GITHUB_TOKEN = 'github_token';
+export const getGithubToken = () => SecureStore.getItemAsync(GITHUB_TOKEN);
+export const saveGithubToken = (t) => SecureStore.setItemAsync(GITHUB_TOKEN, String(t).trim());
+export const deleteGithubToken = () => SecureStore.deleteItemAsync(GITHUB_TOKEN);

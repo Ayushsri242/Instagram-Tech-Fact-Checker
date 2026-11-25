@@ -1,8 +1,8 @@
 import axios from 'axios';
 import { NativeModules } from 'react-native';
-import { getGroqApiKey, loadExaKeyIntoNative } from './secrets';
+import { getGroqApiKey, loadExaKeyIntoNative, getGithubToken } from './secrets';
 import { getOfflineMode, saveApiLimits, getApiLimits } from './storage';
-import { runVerifiers, fillMissingPageText, readPage } from './verifiers';
+import { runVerifiers, fillMissingPageText, readPage, setGithubToken } from './verifiers';
 import { logRun } from './runlog';
 import { trace, shortRef } from './trace';
 import { jobStage, setJobNote, getJobState } from './jobState';
@@ -2574,6 +2574,7 @@ export const analyzeReelApi = async (url) => {
   // opened; bubble checks run headless after Android restarts the process, so
   // 16 of 23 reels on 1.0.119 searched DuckDuckGo with a key saved.
   await loadExaKeyIntoNative().catch(() => {});
+  setGithubToken(await getGithubToken().catch(() => ''));
   const media = await TechFactChecker.analyzeAndVerify(url, false, apiKey);
   lap('native');
   jobStage(1);
