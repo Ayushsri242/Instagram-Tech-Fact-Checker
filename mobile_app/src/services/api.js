@@ -390,9 +390,13 @@ export const fixedClaims = (claimsData) => {
 // tech unchanged): only the PAY claims are main - "7 campaigns open" vs 5 made
 // Megasheet MISLEADING while Scribie's "$48/hr" ($6 real) was outvoted.
 const PAY_CLAIM = /(\$|₹|€|£|\brs\.?\s?\d|\bpay|\bpaid|\bearn|per hour|\/hr|per task|income|salary|lakh)/i;
+// Who can join is main too (v2 labels, offline: safety 91% -> 92%, exact
+// 43% -> 46%, no honest post called bad): "no age limit, school students can
+// join" was caught as contradicted (min age 16-18) but counted as a side claim.
+const ELIGIBILITY_CLAIM = /(\bage\b|\bstudents?\b|\banyone\b|\bno experience\b|\bbeginners?\b|\bno degree\b|\bfrom india\b|\bindians?\b|\bany country\b|\bworldwide\b|\bno skills?\b|\bminimum\b|\bqualif)/i;
 export const alignClaimChecks = (checks, fixed, money = false) => {
   if (!fixed.length) return checks;
-  const payIdx = money ? fixed.map((c) => PAY_CLAIM.test(c)) : null;
+  const payIdx = money ? fixed.map((c) => PAY_CLAIM.test(c) || ELIGIBILITY_CLAIM.test(c)) : null;
   const isMain = (i) => !money || (payIdx.some(Boolean) ? payIdx[i] : i === 0);
   const flat = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const got = Array.isArray(checks) ? checks : [];
@@ -2045,7 +2049,7 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
       // text: a quote across a markdown link would fail the raw-page test).
       const ok = status !== 'not_found' && (c.verified || proven({ source: c.source, quote: c.quote }));
       // Source and quote kept so a test run shows WHY a claim was judged (Nov 25).
-      return { claim: cleanLine(c && c.claim), main: c && c.main !== false, status: ok ? status : 'not_found', ...(ok ? { source: c.source, quote: c.quote } : {}) };
+      return { claim: cleanLine(c && c.claim), main: c && c.main !== false, status: ok ? status : 'not_found', ...(ok ? { source: c.source, quote: c.quote, url: c.url } : {}) };
     });
     const main = checks.filter((c) => c.main);
     const side = checks.filter((c) => !c.main);
