@@ -1458,28 +1458,10 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
   const chunks = chunkRows(rows);
   const names = subjectTools(claimsData || {}).map((t) => t.name).filter(Boolean).join(' ');
   const payWords = post.money ? ' pay paid per hour earn payout $ ₹ minimum scam' : '';
-  // Nov 26: pages from the tool's OWN repo or site are marked, so its own
-  // marketing ("scrape the entire internet") cannot prove the post's sweeping
-  // promise. The headline claim (the first) also gets 2 "catch" passages
-  // (requires, only, experimental, VRAM...): the limits were in the README.
-  const ownRepos = [post.subjectSlug, ...subjectTools(claimsData || {}).map((t) => t.github_repo)]
-    .filter((r) => r && r !== 'null').map((r) => 'github.com/' + String(r).toLowerCase());
-  const ownHosts = subjectTools(claimsData || {}).map((t) => t.domain_url).filter((d) => d && d !== 'null')
-    .map((d) => String(d).toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]);
-  const isOwn = (url) => {
-    const u = String(url || '').toLowerCase();
-    const host = (u.split('/')[2] || '').replace(/^www\./, '');
-    return ownRepos.some((r) => u.includes(r + '/') || u.endsWith(r) || u.includes(r + '#')) || (host && ownHosts.includes(host));
-  };
-  const CATCH_WORDS = ' requires require needs only limited limit experimental beta login account VRAM GB paid cost price not supported cannot rate quota';
   const items = [];
   (checks || []).forEach((c, i) => {
     if (!c || !c.claim || (only && !only.includes(i))) return;
-    let passages = topChunks(chunks, c.claim + ' ' + names + payWords, c.main === false ? 2 : 4);
-    if (i === 0 && !post.money) {
-      const extra = topChunks(chunks, names + CATCH_WORDS, 4).filter((p) => !passages.includes(p)).slice(0, 2);
-      passages = [...passages, ...extra];
-    }
+    const passages = topChunks(chunks, c.claim + ' ' + names + payWords, c.main === false ? 2 : 4);
     items.push({ i, c, passages });
   });
   if (!items.length) return { checks, used: 0 };
@@ -1487,7 +1469,7 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
   const ask = (list) => {
     const body = list.map((it, n) => [
       `Claim ${n + 1} (${it.c.main === false ? 'side' : 'main'}): ${it.c.claim}`,
-      ...(it.passages.length ? it.passages.map((p, j) => `  [${n + 1}${'abcdef'[j]}] (${String(p.row.url || '').split('/')[2] || 'page'}${isOwn(p.row.url) ? ', OWN page of the tool' : ''}) ${p.text}`) : ['  (no passage matched)']),
+      ...(it.passages.length ? it.passages.map((p, j) => `  [${n + 1}${'abcd'[j]}] (${String(p.row.url || '').split('/')[2] || 'page'}) ${p.text}`) : ['  (no passage matched)']),
     ].join('\n')).join('\n\n');
     const prompt = [
       'Check each claim from a social media tech post ONLY against the passages listed under it. Your own memory is older than the post: never use it.',
@@ -1509,7 +1491,6 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
       // Nov 25 (run 45561757765): "about 20 providers" was "contradicted" by "87 providers".
       'A passage showing MORE than the post claims (87 providers when the post says about 20, more stars, more features) makes the claim "supported", never contradicted.',
     // Nov 26: the headline promise. Sweeping words are claims about scope.
-    'Passages marked OWN come from the own repo or site of the tool. They prove what the tool has (features, licence, counts, price), but they cannot prove a sweeping or comparative promise ("the entire internet", "works like Claude Code", "no performance drop", "without a GPU"): such a promise needs a non-OWN passage, and an OWN passage that states a limit (a fixed list of sites, needs 24 GB of VRAM, experimental, login required) makes it "exaggerated".',
     'Sweeping words are part of the claim: "secret", "hidden", "entire", "any", "unlimited", "everyone", "replaces X", "never pay again". If the passages show the thing is real but narrower, limited, or widely known (thousands of stars, a famous product), the claim is "exaggerated", not supported.',
       'Non-not_found answers carry "passage" (e.g. "2b") and "quote": 4-25 words copied exactly from that passage.',
       'not_found answers carry "search": one 3-8 word web search that would find the page settling it.',
@@ -1526,8 +1507,8 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
     const it = list[Number(a && a.claim) - 1];
     if (!it) return null;
     const status = ['supported', 'contradicted', 'exaggerated'].includes(a.status) ? a.status : 'not_found';
-    const m = String(a.passage || '').match(/(\d+)([a-f])/i);
-    const p = m && Number(m[1]) - 1 === list.indexOf(it) ? it.passages['abcdef'.indexOf(m[2].toLowerCase())] : null;
+    const m = String(a.passage || '').match(/(\d+)([a-d])/i);
+    const p = m && Number(m[1]) - 1 === list.indexOf(it) ? it.passages['abcd'.indexOf(m[2].toLowerCase())] : null;
     const ok = status !== 'not_found' && p && a.quote && norm(p.text).includes(norm(a.quote));
     return { it, status: ok ? status : 'not_found', a, p };
   };
