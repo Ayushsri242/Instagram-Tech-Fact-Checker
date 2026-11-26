@@ -374,6 +374,28 @@ export const payLinesFirst = (rows, platforms, claimsData) => {
   }
 };
 
+// The claims every run checks, in post order: the extraction's own list
+// (cached, so the same each run). Short labels ("79K stars", "LIVE 31 NODES")
+// are skipped; 4 at most, so the per-claim check stays small.
+export const fixedClaims = (claimsData) => {
+  const words = (c) => String(c || '').trim().split(/\s+/).filter((w) => /[a-z]{2,}/i.test(w)).length;
+  const from = ((claimsData && claimsData.claimed_features) || []).filter((c) => words(c) >= 3);
+  const tools = ((claimsData && claimsData.tools) || []).map((t) => t && t.claim).filter((c) => words(c) >= 3);
+  return [...new Set([...from, ...tools].map((c) => String(c).trim()))].slice(0, 4);
+};
+// The judge's claim_checks laid onto the fixed list: same claims, same order.
+// A check the judge wrote for a fixed claim keeps its status and quote;
+// a fixed claim it skipped starts as not_found (the per-claim step checks it).
+export const alignClaimChecks = (checks, fixed) => {
+  if (!fixed.length) return checks;
+  const flat = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const got = Array.isArray(checks) ? checks : [];
+  return fixed.map((c, i) => {
+    const m = got.find((x) => x && flat(x.claim) === flat(c)) || got[i] || {};
+    return { ...m, claim: c, main: true, ...(m.claim && flat(m.claim) !== flat(c) && !got.find((x) => x && flat(x.claim) === flat(c)) ? { status: 'not_found', quote: undefined, source: undefined } : {}) };
+  });
+};
+
 export const recipeQueries = (claimsData, post = {}) => {
   const text = [post.text || '', ...((claimsData && claimsData.claimed_features) || [])].join(' ');
   const tools = subjectTools(claimsData).slice(0, 4);
@@ -1605,6 +1627,9 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
 };
 
 const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, coverage, keptRows, post = {}) => {
+  // Nov 26: the claims to check come from the extraction (stable across runs),
+  // not chosen anew by the judge each run - that choice was the main wobble.
+  const fixed = fixedClaims(claimsData);
   const kept = keptRows || rankEvidence(evidence, claimsData && claimsData.tech_name, claimsData && claimsData.tools);
   if ((evidence || []).length > kept.length) {
     console.warn(`Evidence trimmed for token budget: ${evidence.length} -> ${kept.length} rows.`);
@@ -1761,11 +1786,11 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     '"Not confirmed" is not a caveat: a detail the evidence does not mention never moves a post from TRUE to PARTIALLY_TRUE and is not a gotcha. A caveat is something a source states.',
     '',
     ...(claimJudge ? ['',
-      'CLAIM CHECKS (claim_checks): list the 2-6 claims a viewer would act on, INCLUDING what the post implies: "free" / "open source" / "no expensive hardware" / "anyone can" / "unlimited" / a pay figure. For each: "main": true if the post stands or falls on it; "status": one of',
+      ...(fixed.length ? ['CLAIM CHECKS (claim_checks): check EXACTLY these claims of the post, in this order, keeping their words; all are "main": true. ' + fixed.map((c, n) => (n + 1) + '. ' + c).join(' ')] : ['CLAIM CHECKS (claim_checks): list the 2-6 claims a viewer would act on, INCLUDING what the post implies: "free" / "open source" / "no expensive hardware" / "anyone can" / "unlimited" / a pay figure. For each: "main": true if the post stands or falls on it; "status": one of',
       // Nov 26 (32x2 run 45770335666): 13 overhyped posts came back TRUE because
       // their headline promise was never one of the checks ("5 SECRET tools"
       // checked only licences; "scrape the entire internet" never listed).
-      'The FIRST claim check is always the headline promise of the post, in the words of the post (e.g. "5 secret AI tools", "scrape the entire internet", "Claude Pro for free", "run 70B models without a GPU"), with "main": true. Pure excitement with nothing to check ("insane", "game-changer") is not a promise; then use the boldest checkable claim instead.',
+      'The FIRST claim check is always the headline promise of the post, in the words of the post (e.g. "5 secret AI tools", "scrape the entire internet", "Claude Pro for free", "run 70B models without a GPU"), with "main": true. Pure excitement with nothing to check ("insane", "game-changer") is not a promise; then use the boldest checkable claim instead.', ]),
       '- "supported": a source states it (quote that line);',
       '- "contradicted": a source states otherwise - paid when the post says free, a big GPU when it says no hardware, a licence that is not open source, a pay figure far below the claim (quote that line);',
       '- "exaggerated": the thing is real but a source shows it is much smaller than the post says (quote that line);',
@@ -2933,6 +2958,8 @@ export const analyzeReelApi = async (url) => {
     if (w > 0) { setJobNote("Waiting for Groq's free per-minute limit", Date.now() + w); await sleep(w); setJobNote(null); }
   };
   // Per-claim check over EVERY fetched page, not just the rows the big call saw.
+  // Nov 26: same claims every run (see fixedClaims).
+  if (claimJudge && report) report.claim_checks = alignClaimChecks(report.claim_checks, fixedClaims(claimsData));
   if (perClaim && claimJudge && report && Array.isArray(report.claim_checks) && report.claim_checks.length) {
     await waitJudge(3500);
     const r1 = await checkClaimsFocused(apiKey, report.claim_checks, evidence, claimsData, judgeOpts).catch((e) => { console.warn('per-claim check failed', e && e.message); return null; });
