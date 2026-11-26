@@ -1586,6 +1586,16 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
   };
   // One answer, checked: the quote must really be in the passage it names.
   const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9$₹%]+/g, ' ').trim();
+  const subjectKeys = [...new Set([
+    ...((claimsData && claimsData.tools) || []).map((t) => t && t.name),
+    ...((claimsData && claimsData.tools) || []).map((t) => t && t.github_repo && t.github_repo !== 'null' && String(t.github_repo).split('/').pop()),
+    ...(post.platforms || []),
+    claimsData && claimsData.tech_name,
+  ].map((n) => flatKey(n)).filter((k) => k.length >= 4))];
+  const aboutSubject = (url) => {
+    const u = flatKey(String(url || '').toLowerCase());
+    return subjectKeys.some((k) => u.includes(k.slice(0, Math.max(4, k.length - 2))));
+  };
   const read = (list, a) => {
     const it = list[Number(a && a.claim) - 1];
     if (!it) return null;
@@ -1593,6 +1603,12 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
     const m = String(a.passage || '').match(/(\d+)([a-d])/i);
     const p = m && Number(m[1]) - 1 === list.indexOf(it) ? it.passages['abcd'.indexOf(m[2].toLowerCase())] : null;
     const ok = status !== 'not_found' && p && a.quote && norm(p.text).includes(norm(a.quote));
+    // Nov 26: "supported" only from a page about the subject (its address names
+    // a tool or platform of the post). Offline on run 45810119090 with the v2
+    // labels: exact 48% -> 54%, safety 92% -> 93%, no honest post called bad.
+    // MyGov's "earn money" was backed by a blog, free-claude-code by copycat
+    // listing sites. A negative may come from any page.
+    if (ok && status === 'supported' && subjectKeys.length && !aboutSubject(p.row.url)) return { it, status: 'not_found', a, p };
     return { it, status: ok ? status : 'not_found', a, p };
   };
   const res = await ask(items);
