@@ -332,7 +332,7 @@ const OPEN_RE = /\bopen[- ]?source\b/i;
 // run, "Claude Code github / license / official" took the seats meant for
 // the post's real subject.
 export const PAYMENT_RE = /^(paypal|payoneer|upi|paytm|phonepe|google pay|gpay|stripe|wise|venmo|cash ?app|zelle|skrill|bank transfer|visa|mastercard|crypto|usdt|bitcoin)$/i;
-const CODE_RE = /(open[- ]?source|github|repo(?:sitory)?|self[- ]?host(?:ed)?|install|cli|library|framework|released?|launch(?:ed)?|new model|weights)/i;
+const CODE_RE = /\b(open[- ]?source|github|repo(?:sitory)?|self[- ]?host(?:ed)?|install|cli|library|framework|released?|launch(?:ed)?|new model|weights)b/i;
 const shortWords = (s, n) => String(s || '').replace(/["'“”]/g, '').split(/\s+/).filter(Boolean).slice(0, n).join(' ');
 export const subjectTools = (claimsData) => {
   const all = ((claimsData && claimsData.tools) || []).filter((t) => t && t.name);
@@ -386,13 +386,19 @@ export const fixedClaims = (claimsData) => {
 // The judge's claim_checks laid onto the fixed list: same claims, same order.
 // A check the judge wrote for a fixed claim keeps its status and quote;
 // a fixed claim it skipped starts as not_found (the per-claim step checks it).
-export const alignClaimChecks = (checks, fixed) => {
+// Money posts (Nov 26, offline on run 45797116668: money safety 74% -> 89%,
+// tech unchanged): only the PAY claims are main - "7 campaigns open" vs 5 made
+// Megasheet MISLEADING while Scribie's "$48/hr" ($6 real) was outvoted.
+const PAY_CLAIM = /(\$|₹|€|£|\brs\.?\s?\d|\bpay|\bpaid|\bearn|per hour|\/hr|per task|income|salary|lakh)/i;
+export const alignClaimChecks = (checks, fixed, money = false) => {
   if (!fixed.length) return checks;
+  const payIdx = money ? fixed.map((c) => PAY_CLAIM.test(c)) : null;
+  const isMain = (i) => !money || (payIdx.some(Boolean) ? payIdx[i] : i === 0);
   const flat = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const got = Array.isArray(checks) ? checks : [];
   return fixed.map((c, i) => {
     const m = got.find((x) => x && flat(x.claim) === flat(c)) || got[i] || {};
-    return { ...m, claim: c, main: true, ...(m.claim && flat(m.claim) !== flat(c) && !got.find((x) => x && flat(x.claim) === flat(c)) ? { status: 'not_found', quote: undefined, source: undefined } : {}) };
+    return { ...m, claim: c, main: isMain(i), ...(m.claim && flat(m.claim) !== flat(c) && !got.find((x) => x && flat(x.claim) === flat(c)) ? { status: 'not_found', quote: undefined, source: undefined } : {}) };
   });
 };
 
@@ -1786,7 +1792,7 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     '"Not confirmed" is not a caveat: a detail the evidence does not mention never moves a post from TRUE to PARTIALLY_TRUE and is not a gotcha. A caveat is something a source states.',
     '',
     ...(claimJudge ? ['',
-      ...(fixed.length ? ['CLAIM CHECKS (claim_checks): check EXACTLY these claims of the post, in this order, keeping their words; all are "main": true. ' + fixed.map((c, n) => (n + 1) + '. ' + c).join(' ')] : ['CLAIM CHECKS (claim_checks): list the 2-6 claims a viewer would act on, INCLUDING what the post implies: "free" / "open source" / "no expensive hardware" / "anyone can" / "unlimited" / a pay figure. For each: "main": true if the post stands or falls on it; "status": one of',
+      ...(fixed.length ? ['CLAIM CHECKS (claim_checks): check EXACTLY these claims of the post, in this order, keeping their words. ' + fixed.map((c, n) => (n + 1) + '. ' + c).join(' ')] : ['CLAIM CHECKS (claim_checks): list the 2-6 claims a viewer would act on, INCLUDING what the post implies: "free" / "open source" / "no expensive hardware" / "anyone can" / "unlimited" / a pay figure. For each: "main": true if the post stands or falls on it; "status": one of',
       // Nov 26 (32x2 run 45770335666): 13 overhyped posts came back TRUE because
       // their headline promise was never one of the checks ("5 SECRET tools"
       // checked only licences; "scrape the entire internet" never listed).
@@ -2959,7 +2965,7 @@ export const analyzeReelApi = async (url) => {
   };
   // Per-claim check over EVERY fetched page, not just the rows the big call saw.
   // Nov 26: same claims every run (see fixedClaims).
-  if (claimJudge && report) report.claim_checks = alignClaimChecks(report.claim_checks, fixedClaims(claimsData));
+  if (claimJudge && report) report.claim_checks = alignClaimChecks(report.claim_checks, fixedClaims(claimsData), money);
   if (perClaim && claimJudge && report && Array.isArray(report.claim_checks) && report.claim_checks.length) {
     await waitJudge(3500);
     const r1 = await checkClaimsFocused(apiKey, report.claim_checks, evidence, claimsData, judgeOpts).catch((e) => { console.warn('per-claim check failed', e && e.message); return null; });
