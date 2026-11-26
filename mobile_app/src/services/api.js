@@ -1490,6 +1490,8 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
       'A claim that a tool is a cheaper or free replacement is "supported" by a passage showing it costs less; a lower price never contradicts it.',
       // Nov 25 (run 45561757765): "about 20 providers" was "contradicted" by "87 providers".
       'A passage showing MORE than the post claims (87 providers when the post says about 20, more stars, more features) makes the claim "supported", never contradicted.',
+    // Nov 26: the headline promise. Sweeping words are claims about scope.
+    'Sweeping words are part of the claim: "secret", "hidden", "entire", "any", "unlimited", "everyone", "replaces X", "never pay again". If the passages show the thing is real but narrower, limited, or widely known (thousands of stars, a famous product), the claim is "exaggerated", not supported.',
       'Non-not_found answers carry "passage" (e.g. "2b") and "quote": 4-25 words copied exactly from that passage.',
       'not_found answers carry "search": one 3-8 word web search that would find the page settling it.',
       'Return ONLY JSON: {"checks":[{"claim":1,"status":"supported","passage":"1a","quote":"exact words"},{"claim":2,"status":"not_found","search":"tool pay per hour reddit"}]}',
@@ -1709,6 +1711,10 @@ const synthesizeFactCheck = (apiKey, transcript, ocrText, claimsData, evidence, 
     '',
     ...(claimJudge ? ['',
       'CLAIM CHECKS (claim_checks): list the 2-6 claims a viewer would act on, INCLUDING what the post implies: "free" / "open source" / "no expensive hardware" / "anyone can" / "unlimited" / a pay figure. For each: "main": true if the post stands or falls on it; "status": one of',
+      // Nov 26 (32x2 run 45770335666): 13 overhyped posts came back TRUE because
+      // their headline promise was never one of the checks ("5 SECRET tools"
+      // checked only licences; "scrape the entire internet" never listed).
+      'The FIRST claim check is always the headline promise of the post, in the words of the post (e.g. "5 secret AI tools", "scrape the entire internet", "Claude Pro for free", "run 70B models without a GPU"), with "main": true. Pure excitement with nothing to check ("insane", "game-changer") is not a promise; then use the boldest checkable claim instead.',
       '- "supported": a source states it (quote that line);',
       '- "contradicted": a source states otherwise - paid when the post says free, a big GPU when it says no hardware, a licence that is not open source, a pay figure far below the claim (quote that line);',
       '- "exaggerated": the thing is real but a source shows it is much smaller than the post says (quote that line);',
