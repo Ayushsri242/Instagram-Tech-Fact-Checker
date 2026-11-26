@@ -339,6 +339,41 @@ export const subjectTools = (claimsData) => {
   const subj = all.filter((t) => String(t.role || '').toLowerCase() !== 'mention');
   return (subj.length ? subj : all.slice(0, 1));
 };
+// ---- Money facts (Nov 26) ----
+// Like GitHub facts for tech: a money claim is settled on the platform's own
+// pay/jobs/apply page. Its site is the one the claim reader names for it, if any.
+const hostOf = (u) => String(u || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0];
+export const moneyDomain = (platform, claimsData) => {
+  const k = String(platform || '').toLowerCase();
+  const t = ((claimsData && claimsData.tools) || []).find((x) => x && String(x.name || '').toLowerCase() === k);
+  const d = t && t.domain_url && t.domain_url !== 'null' ? hostOf(t.domain_url) : '';
+  return /\.[a-z]{2,}$/.test(d) ? d : '';
+};
+// A row from the platform's own site: its host is the named site, or carries
+// the platform's name ("opentrain.ai" for OpenTrain AI). Review sites never are.
+const REVIEW_HOST = /trustpilot|reddit|duckduckgo|google\.|bing\.|youtube|facebook|quora|medium\.com|linkedin|glassdoor|indeed/;
+export const isOfficialRow = (row, platforms, claimsData) => {
+  const h = hostOf(row && row.url);
+  if (!h || REVIEW_HOST.test(h)) return false;
+  return (platforms || []).some((p) => {
+    const d = moneyDomain(p, claimsData);
+    if (d && (h === d || h.endsWith('.' + d))) return true;
+    const k = flatKey(String(p).split(/\s+/)[0]);
+    return k.length >= 4 && flatKey(h.split('.').slice(-2, -1)[0] || '').startsWith(k.slice(0, Math.max(4, k.length - 2)));
+  });
+};
+// Pay lines from an official page go first, so the judge and the passages see
+// "$80-$120/hr" rather than the page's menu.
+const PAY_LINE = /(\$|₹|€|£|\busd\b|\binr\b|\brs\.?\s?\d)[\s\d,.-]*\d|\bper (hour|task|test|minute|audio hour|study|video)\b|\/\s?(hr|hour|task)\b/i;
+export const payLinesFirst = (rows, platforms, claimsData) => {
+  for (const r of rows || []) {
+    if (!isOfficialRow(r, platforms, claimsData) || !r.pagePreview || /^Official pay lines:/.test(r.pagePreview)) continue;
+    const lines = String(r.pagePreview).split(/(?<=[.!?])\s+|\s{2,}|\n+/).filter((s) => PAY_LINE.test(s) && s.length < 260);
+    if (lines.length) r.pagePreview = 'Official pay lines: ' + [...new Set(lines)].slice(0, 6).join(' | ').slice(0, 700) + ' || ' + r.pagePreview;
+    r.official = true;
+  }
+};
+
 export const recipeQueries = (claimsData, post = {}) => {
   const text = [post.text || '', ...((claimsData && claimsData.claimed_features) || [])].join(' ');
   const tools = subjectTools(claimsData).slice(0, 4);
@@ -353,6 +388,10 @@ export const recipeQueries = (claimsData, post = {}) => {
   }
   if (post.money) {
     for (const p of (post.platforms || []).filter((x) => !PAYMENT_RE.test(String(x).trim())).slice(0, 4)) {
+      // Nov 26: the platform's OWN pay/jobs page settled ~37 of ~60 sources in
+      // the money labels and reached the judge on 1 of 25 posts. Ask for it first.
+      const dom = moneyDomain(p, claimsData);
+      q.push(p + ' official pay rate jobs apply' + (dom ? ' ||exa:domains=' + dom : ''));
       q.push(p + ' how much does it really pay review');
       q.push(p + ' pay rate ||exa:domains=reddit.com');
     }
@@ -1026,7 +1065,7 @@ const moneyQueries = (platforms, claimsData, text) => {
 // Trustpilot readings and "what people say" rows first, and every platform
 // gets up to 3 seats before any platform gets a fourth.
 const CODE_REGISTRY = /github\.com|hn\.algolia\.com|news\.ycombinator\.com|pypi\.org|npmjs\.com|huggingface\.co/i;
-const rankMoneyEvidence = (evidence, platforms) => {
+const rankMoneyEvidence = (evidence, platforms, claimsData = {}) => {
   // A platform's Trustpilot page arrives twice: once as the row the Trustpilot
   // check READ, once as the bare search result with no text. Keep the read one
   // - the duplicates took 4 of the 12 seats on the first money-mode run.
@@ -1036,9 +1075,15 @@ const rankMoneyEvidence = (evidence, platforms) => {
     .map((r) => pageKey(r.url)));
   const rows = (evidence || []).filter((r) =>
     !CODE_REGISTRY.test(String(r.url || '')) &&
+    // A search engine's result list is not evidence (Nov 26: duckduckgo.com
+    // rows reached the judge on most money posts).
+    !/duckduckgo\.com|bing\.com\/search|google\.[a-z.]+\/search/.test(String(r.url || '')) &&
     (/^Trustpilot - /.test(String(r.title || '')) || !readPages.has(pageKey(r.url))));
+  // Nov 26: official pay/jobs pages lead (they settled most money labels);
+  // Trustpilot was +30 and settled none, so it no longer outranks them.
   const score = (r) =>
-    (/^(Trustpilot - |What people say about)/.test(String(r.title || '')) ? 30 : 0) +
+    (isOfficialRow(r, platforms, claimsData) ? 40 : 0) +
+    (/^(Trustpilot - |What people say about)/.test(String(r.title || '')) ? 8 : 0) +
     ((r.pagePreview || '').length > 0 ? 10 : 0) +
     ((r.snippet || '').length > 0 ? 2 : 0);
   const sorted = rows.map((r, i) => ({ r, i, s: score(r) })).sort((a, b) => (b.s - a.s) || (a.i - b.i));
@@ -1492,6 +1537,12 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
       'A passage showing MORE than the post claims (87 providers when the post says about 20, more stars, more features) makes the claim "supported", never contradicted.',
     // Nov 26: the headline promise. Sweeping words are claims about scope.
     'Sweeping words are part of the claim: "secret", "hidden", "entire", "any", "unlimited", "everyone", "replaces X", "never pay again". If the passages show the thing is real but narrower, limited, or widely known (thousands of stars, a famous product), the claim is "exaggerated", not supported.',
+    // Nov 26 (money run 45782852995): one WishUp complaint and a Brazil-only
+    // payout limit "contradicted" pay claims on posts the labels call TRUE.
+    ...(post.money ? [
+      'Money posts: a pay claim is settled by the official pay or jobs page of the platform (marked "Official pay lines") or by many user reports. ONE user complaint or review never contradicts it; at most it is a caveat (then "not_found").',
+      'A limit for a different country or group than the post is aimed at ("cannot pay you in Brazil" on a post for India) does not contradict the claim.',
+    ] : []),
       'Non-not_found answers carry "passage" (e.g. "2b") and "quote": 4-25 words copied exactly from that passage.',
       'not_found answers carry "search": one 3-8 word web search that would find the page settling it.',
       'Return ONLY JSON: {"checks":[{"claim":1,"status":"supported","passage":"1a","quote":"exact words"},{"claim":2,"status":"not_found","search":"tool pay per hour reddit"}]}',
@@ -2796,9 +2847,13 @@ export const analyzeReelApi = async (url) => {
   // Money posts live or die on what users report, so read more of it. News
   // posts live on the articles: read those first (the PHP run read none).
   await fillMissingPageText(
-    news ? [...evidence].sort((a, b) => Number(isNewsRow(b)) - Number(isNewsRow(a))) : evidence,
+    news ? [...evidence].sort((a, b) => Number(isNewsRow(b)) - Number(isNewsRow(a)))
+      // Money: the platforms' own pages are read first (Nov 26).
+      : money ? [...evidence].sort((a, b) => Number(isOfficialRow(b, platforms, claimsData)) - Number(isOfficialRow(a, platforms, claimsData)))
+      : evidence,
     money || news ? 4 : 2
   );
+  if (money) payLinesFirst(evidence, platforms, claimsData);
   lap('pagefill');
 
   // Decide the subject in code before the model writes anything about it.
@@ -2846,7 +2901,7 @@ export const analyzeReelApi = async (url) => {
   // FOUND, not the ones ranked and sent - so "what the model saw" was wrong.
   const pinned = [...new Set([subject.slug, ...printedGithubSlugs(ocrText)].filter(Boolean))];
   let kept = money
-    ? rankMoneyEvidence(evidence, platforms)
+    ? rankMoneyEvidence(evidence, platforms, claimsData)
     : rankEvidence(evidence, claimsData.tech_name, claimsData.tools, pinned, {
       list: listPost,
       news,
