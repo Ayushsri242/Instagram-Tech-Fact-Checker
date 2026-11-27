@@ -1109,7 +1109,7 @@ const rankMoneyEvidence = (evidence, platforms, claimsData = {}) => {
     !CODE_REGISTRY.test(String(r.url || '')) &&
     // A search engine's result list is not evidence (Nov 26: duckduckgo.com
     // rows reached the judge on most money posts).
-    !/duckduckgo\.com|bing\.com\/search|google\.[a-z.]+\/search/.test(String(r.url || '')) &&
+    !SEARCH_PAGE.test(String(r.url || '')) &&
     (/^Trustpilot - /.test(String(r.title || '')) || !readPages.has(pageKey(r.url))));
   // Nov 26: official pay/jobs pages lead (they settled most money labels);
   // Trustpilot was +30 and settled none, so it no longer outranks them.
@@ -1531,8 +1531,13 @@ export const topChunks = (chunks, query, k = 4, perUrl = 2) => {
 // status/source/quote/search filled from the focused call. Only claims whose
 // index is in `only` (default: all) are sent.
 const CLAIM_ANSWER_TOKENS = 1200;
+// A search engine's result list is not a page about the claim: its titles often
+// echo the post's own words (Nov 27: "FreeUp has low competition" was
+// "supported" by a duckduckgo result title).
+export const SEARCH_PAGE = /duckduckgo\.com|bing\.com\/search|google\.[a-z.]+\/search/;
+
 export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post = {}, only = null) => {
-  const chunks = chunkRows(rows);
+  const chunks = chunkRows((rows || []).filter((r) => !SEARCH_PAGE.test(String((r && r.url) || ''))));
   const names = subjectTools(claimsData || {}).map((t) => t.name).filter(Boolean).join(' ');
   const payWords = post.money ? ' pay paid per hour earn payout $ ₹ minimum scam' : '';
   const items = [];
