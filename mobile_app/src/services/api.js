@@ -1535,23 +1535,44 @@ const CLAIM_ANSWER_TOKENS = 1200;
 // echo the post's own words (Nov 27: "FreeUp has low competition" was
 // "supported" by a duckduckgo result title).
 export const SEARCH_PAGE = /duckduckgo\.com|bing\.com\/search|google\.[a-z.]+\/search/;
+// Passage ids under each claim: up to 12 (2 per platform x 6).
+const PASSAGE_IDS = 'abcdefghijkl';
 
 export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post = {}, only = null) => {
   const chunks = chunkRows((rows || []).filter((r) => !SEARCH_PAGE.test(String((r && r.url) || ''))));
   const names = subjectTools(claimsData || {}).map((t) => t.name).filter(Boolean).join(' ');
   const payWords = post.money ? ' pay paid per hour earn payout $ ₹ minimum scam' : '';
+  // Nov 27: in a money post listing several platforms, the top 4 passages for
+  // "these sites pay beginners" were all about the first site (BzzAgent's "not
+  // paid" ranked 18th, Claude Corps' $85,000 17th). Passages are now picked per
+  // platform: a claim naming one platform reads that platform's pages; a claim
+  // naming none reads the best 2 passages of EACH platform.
+  const plats = post.money ? (post.platforms || []).filter((p) => flatKey(p).length >= 3).slice(0, 6) : [];
+  const keyOf = (p) => flatKey(p).slice(0, 8);
+  const aboutPlat = (p) => (ch) => flatKey(String(ch.row.url || '') + ' ' + String(ch.row.title || '') + ' ' + ch.text).includes(keyOf(p));
+  const pick = (c) => {
+    const k = c.main === false ? 2 : 4;
+    if (plats.length < 2) return topChunks(chunks, c.claim + ' ' + names + payWords, k);
+    const own = plats.filter((p) => flatKey(c.claim).includes(keyOf(p)));
+    if (own.length === 1) {
+      const mine = chunks.filter(aboutPlat(own[0]));
+      return topChunks(mine.length ? mine : chunks, c.claim + ' ' + own[0] + payWords, k);
+    }
+    const out = [];
+    for (const p of plats) out.push(...topChunks(chunks.filter(aboutPlat(p)), c.claim + payWords, 2, 1).filter((x) => !out.includes(x)));
+    return out.length ? out : topChunks(chunks, c.claim + ' ' + names + payWords, k);
+  };
   const items = [];
   (checks || []).forEach((c, i) => {
     if (!c || !c.claim || (only && !only.includes(i))) return;
-    const passages = topChunks(chunks, c.claim + ' ' + names + payWords, c.main === false ? 2 : 4);
-    items.push({ i, c, passages });
+    items.push({ i, c, passages: pick(c) });
   });
   if (!items.length) return { checks, used: 0 };
   // The prompt for a list of claims (all of them, or the re-asked ones).
   const ask = (list) => {
     const body = list.map((it, n) => [
       `Claim ${n + 1} (${it.c.main === false ? 'side' : 'main'}): ${it.c.claim}`,
-      ...(it.passages.length ? it.passages.map((p, j) => `  [${n + 1}${'abcd'[j]}] (${String(p.row.url || '').split('/')[2] || 'page'}) ${p.text}`) : ['  (no passage matched)']),
+      ...(it.passages.length ? it.passages.map((p, j) => `  [${n + 1}${PASSAGE_IDS[j]}] (${String(p.row.url || '').split('/')[2] || 'page'}) ${p.text}`) : ['  (no passage matched)']),
     ].join('\n')).join('\n\n');
     const prompt = [
       'Check each claim from a social media tech post ONLY against the passages listed under it. Your own memory is older than the post: never use it.',
@@ -1595,8 +1616,8 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
     const it = list[Number(a && a.claim) - 1];
     if (!it) return null;
     const status = ['supported', 'contradicted', 'exaggerated'].includes(a.status) ? a.status : 'not_found';
-    const m = String(a.passage || '').match(/(\d+)([a-d])/i);
-    const p = m && Number(m[1]) - 1 === list.indexOf(it) ? it.passages['abcd'.indexOf(m[2].toLowerCase())] : null;
+    const m = String(a.passage || '').match(/(\d+)([a-l])/i);
+    const p = m && Number(m[1]) - 1 === list.indexOf(it) ? it.passages[PASSAGE_IDS.indexOf(m[2].toLowerCase())] : null;
     const ok = status !== 'not_found' && p && a.quote && norm(p.text).includes(norm(a.quote));
     return { it, status: ok ? status : 'not_found', a, p };
   };
@@ -2063,6 +2084,13 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     // Nov 22: FAKE stands only when no main claim holds - complaints about one
     // of three platforms made a list of real sites FAKE.
     if (report.verdict === 'FAKE' && proven(report.verdictProof) && !any(main, 'supported')) v = 'FAKE';
+    // Money post listing several platforms (Nov 27, the user's rule): the worst
+    // platform decides - one "not paid" (BzzAgent) is no longer outvoted by the
+    // sites that do pay. Offline on 11 money posts: safety 83% -> 89%, no
+    // honest post called bad.
+    else if (opts.perPlatform) {
+      v = any(main, 'contradicted') ? 'MISLEADING' : any(main, 'exaggerated') ? 'HYPE' : any(main, 'supported') ? 'TRUE' : 'UNVERIFIED';
+    }
     // Nov 22: one contradicted main claim among more that hold is a partly
     // true post, not a misleading one (3 dev posts; offline 15 -> 17 exact,
     // no labelled MISLEADING post changed).
@@ -3048,6 +3076,7 @@ export const analyzeReelApi = async (url) => {
   const verdictRaw = report.verdict;
   const normalized = normalizeReport(report, evidence, {
     money, news, list: listPost,
+    perPlatform: money && platforms.length >= 2,
     sources: kept,
     postText: [media.caption, ocrText, transcript].join(' '),
   });
