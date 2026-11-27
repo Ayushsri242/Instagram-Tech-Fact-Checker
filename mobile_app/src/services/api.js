@@ -1547,7 +1547,7 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
   // paid" ranked 18th, Claude Corps' $85,000 17th). Passages are now picked per
   // platform: a claim naming one platform reads that platform's pages; a claim
   // naming none reads the best 2 passages of EACH platform.
-  const plats = post.money ? (post.platforms || []).filter((p) => flatKey(p).length >= 3).slice(0, 6) : [];
+  const plats = post.money ? (post.listPlatforms || []).filter((p) => flatKey(p).length >= 3).slice(0, 6) : [];
   const keyOf = (p) => flatKey(p).slice(0, 8);
   const aboutPlat = (p) => (ch) => flatKey(String(ch.row.url || '') + ' ' + String(ch.row.title || '') + ' ' + ch.text).includes(keyOf(p));
   const pick = (c) => {
@@ -1558,9 +1558,11 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
       const mine = chunks.filter(aboutPlat(own[0]));
       return topChunks(mine.length ? mine : chunks, c.claim + ' ' + own[0] + payWords, k);
     }
-    const out = [];
+    // The overall best passages stay (Nov 27 dev run: replacing them lost the
+    // userinterviews.com page); each platform's best 2 are added after them.
+    const out = topChunks(chunks, c.claim + ' ' + names + payWords, k);
     for (const p of plats) out.push(...topChunks(chunks.filter(aboutPlat(p)), c.claim + payWords, 2, 1).filter((x) => !out.includes(x)));
-    return out.length ? out : topChunks(chunks, c.claim + ' ' + names + payWords, k);
+    return out.slice(0, PASSAGE_IDS.length);
   };
   const items = [];
   (checks || []).forEach((c, i) => {
@@ -1600,6 +1602,10 @@ export const checkClaimsFocused = async (apiKey, checks, rows, claimsData, post 
     ...(post.money ? [
       'Money posts: a pay claim is settled by the official pay or jobs page of the platform (marked "Official pay lines") or by many user reports. ONE user complaint or review never contradicts it; at most it is a caveat (then "not_found").',
       'A limit for a different country or group than the post is aimed at ("cannot pay you in Brazil" on a post for India) does not contradict the claim.',
+      // Nov 27 (OpenTrain AI, honest post called MISLEADING): "Approx. ₹1,400 per hour" was "contradicted" by "$15/hour".
+      // Nov 27, the user's rule (MyGov: tasks earn points; only top monthly scorers and contest winners get cash).
+      'Pay that goes only to top winners, ranked users or contest prizes, when the post says doing the task pays, is "exaggerated", not contradicted.',
+      'A currency conversion of the same pay ("approx. ₹1,400/hour" for "$15/hour") is "supported" when it is within about 15% at today\'s rate (1 USD is about 84-90 INR); it is never "contradicted" for the rate used.',
     ] : []),
       'Non-not_found answers carry "passage" (e.g. "2b") and "quote": 4-25 words copied exactly from that passage.',
       'not_found answers carry "search": one 3-8 word web search that would find the page settling it.',
@@ -2094,6 +2100,11 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
     // Nov 22: one contradicted main claim among more that hold is a partly
     // true post, not a misleading one (3 dev posts; offline 15 -> 17 exact,
     // no labelled MISLEADING post changed).
+    // Nov 27: in a money post a contradicted PAY claim is the headline and is
+    // never outvoted - Scribie's "$48/hr" ($6 real) went PARTIALLY_TRUE because
+    // "no experience needed" held. Offline on main's dev run: money safety 86%
+    // -> 88%, exact 32% -> 36%, no new honest post called bad.
+    else if (opts.money && main.some((c) => c.status === 'contradicted' && PAY_CLAIM.test(c.claim || ''))) v = 'MISLEADING';
     else if (any(main, 'contradicted') &&
       main.filter((c) => c.status === 'supported' || c.status === 'exaggerated').length > main.filter((c) => c.status === 'contradicted').length) v = 'PARTIALLY_TRUE';
     else if (any(main, 'contradicted')) v = 'MISLEADING';
@@ -2986,7 +2997,11 @@ export const analyzeReelApi = async (url) => {
     await sleep(judgeWait);
     setJobNote(null);
   }
-  const judgeOpts = { author: media.author, money, platforms, news, subjectSlug: subject.slug };
+  // Platforms the post is ABOUT (not ones named in passing, not payment apps).
+  // Nov 27 dev run: OpenTrain AI + one passing mention counted as a list.
+  const listPlatforms = money ? subjectTools(claimsData).map((t) => String(t.name || '').trim()).filter((n) => n && !PAYMENT_RE.test(n)) : [];
+  const perPlatform = listPlatforms.length >= 2;
+  const judgeOpts = { author: media.author, money, platforms, news, subjectSlug: subject.slug, listPlatforms };
   let report = await synthesizeFactCheck(apiKey, transcript, ocrText, claimsData, evidence, coverage, kept, judgeOpts);
   lap('synthesis');
   log('STAGE 3 RAW REPORT', report);
@@ -3076,7 +3091,7 @@ export const analyzeReelApi = async (url) => {
   const verdictRaw = report.verdict;
   const normalized = normalizeReport(report, evidence, {
     money, news, list: listPost,
-    perPlatform: money && platforms.length >= 2,
+    perPlatform,
     sources: kept,
     postText: [media.caption, ocrText, transcript].join(' '),
   });
