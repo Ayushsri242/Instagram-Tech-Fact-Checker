@@ -754,7 +754,28 @@ export const mergeExtractions = (results) => {
     }
   }
   const first = results.find((r) => r && r.tech_name) || {};
+  // Card (Nov 28): items merged by name, promises filled from whichever part has them.
+  const cards = results.map((r) => r && r.card).filter((c) => c && typeof c === 'object');
+  let card;
+  if (cards.length) {
+    const items = [];
+    for (const c of cards) {
+      for (const it of Array.isArray(c.items) ? c.items : []) {
+        const k = String(strip(it && it.name)).toLowerCase().replace(/[\s_.-]+/g, '');
+        const same = k && items.find((x) => String(strip(x.name)).toLowerCase().replace(/[\s_.-]+/g, '') === k);
+        if (same) same.promises = { ...(it.promises || {}), ...(same.promises || {}) };
+        else if (k) items.push({ ...it, promises: { ...(it.promises || {}) } });
+      }
+    }
+    card = {
+      type: cards[0].type,
+      items,
+      not_checkable: [...new Set(cards.flatMap((c) => (Array.isArray(c.not_checkable) ? c.not_checkable : [])))],
+      motive: (cards.find((c) => c.motive && c.motive !== 'none') || cards[0]).motive || 'none',
+    };
+  }
   return {
+    ...(card ? { card } : {}),
     // "other" only if EVERY part says so; any tech or money part keeps it checked.
     post_topic: results.every((r) => r && r.post_topic === 'other') ? 'other'
       : (results.some((r) => r && r.post_topic === 'money') ? 'money' : 'tech'),
@@ -766,11 +787,95 @@ export const mergeExtractions = (results) => {
   };
 };
 
+// ---- Card slots (Nov 28, CARD_DESIGN.md section 11 A) ----------------------
+// Code finds the slot phrases first; the reader places them on items; code then
+// checks every value was copied from the post and every phrase was placed.
+const CARD_PATTERNS = [
+  // Money figures with their qualifier and unit: "up to $15/hour", "600 rupees per hour", "₹3 lakh/month".
+  ['money', /(?:(?:up ?to|upto|around|approx(?:\.|imately)?|about|over|more than|starting (?:at|from))\s+)?(?:(?:\$|₹|(?<![a-z])rs\.?\s?|(?<![a-z])inr\s?|(?<![a-z])usd\s?)\d[\d,.]*(?:\s*(?:k|lakhs?|crores?|cr)\b)?|\d[\d,.]*\s*(?:k\s*|lakhs?\s*|crores?\s*)?(?:rupees|inr|usd|dollars?)\b)(?:\s*(?:-|–|to)\s*(?:\$|₹|rs\.?\s?)?\d[\d,.]*(?:\s*(?:k|lakhs?)\b)?)?(?:\s*(?:usd|inr|dollars?|rupees)\b)?(?:\s*(?:\/|per|an?|each|every)\s*(?:hour|hr|h|task|day|week|month|mo|year|yr|minute|min|review|survey|video|submission|participant|study|session|project|setup)\b)?/gi],
+  ['license', /\b(?:open[- ]?sourced?|source[- ]available|fair source|apache[- ]?2(?:\.0)?)\b/gi],
+  ['license', /\b(?:MIT|BSD|MPL|FSL|BSL|A?GPL(?:[- ]?v?3(?:\.0)?)?)\b/g],
+  ['cost', /\b(?:100% free|free forever|completely free|totally free|absolutely free|for free|free to (?:use|join)|register free|free|no api key|without (?:an? )?api key|no credit card|no subscription|zero rupees|paid plan|subscription|zero commission|no commission|commission[- ]free|registration fee|joining fee|no fees?)\b/gi],
+  ['who_can_join', /\b(?:anyone|anybody|everyone|no experience(?: needed| required)?|no degree|no coding|without coding|beginners?|freshers?|students?|(?:from|in|sitting in|across) india|worldwide|any country|no matter (?:what|your)(?: \w+){0,4}|aged? \d{2}\+?|\d{2}\+ (?:years|only)|\d{2} years? (?:old|and above))\b/gi],
+  ['needs', /\b(?:no gpu|without (?:an? )?(?:\d+ ?gb )?gpu|\d+ ?gb (?:of )?v?ram|\d+ ?gb gpu|rtx ?\d{3,4}|any laptop|any (?:pc|computer|phone)|runs? (?:locally|offline|on your (?:laptop|phone|pc|machine))|android \d+|ios \d+|iphone \d+(?: or newer)?|macos|windows|linux)\b/gi],
+  ['payout', /\b(?:paypal|payoneer|upi|paytm|bank (?:account|transfer)s?|wire transfer|gift cards?|instant (?:withdrawal|payout)|minimum (?:withdrawal|payout)|(?:weekly|daily) payouts?|points|coins|vouchers)\b/gi],
+  ['open_now', /\b(?:hiring now|now hiring|apply now|spots? left|seats? left|limited (?:seats|spots)|open now|now open|applications? (?:are )?(?:open|closed)|closed|waitlist|deadline|last date)\b/gi],
+];
+const normText = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^a-z0-9$₹]+/g, ' ').trim();
+const figures = (s) => (String(s || '').match(/\d[\d,.]*/g) || []).map((n) => n.replace(/[,.]+$/, '').replace(/,/g, ''));
+
+export const cardHits = (text) => {
+  const seen = new Set();
+  const hits = [];
+  for (const [slot, re] of CARD_PATTERNS) {
+    for (const m of String(text || '').matchAll(re)) {
+      const t = m[0].trim().replace(/\s+/g, ' ');
+      const k = normText(t);
+      if (!k || seen.has(k) || (slot === 'money' && !/\d/.test(t))) continue;
+      seen.add(k);
+      hits.push({ slot, text: t });
+    }
+  }
+  return hits.slice(0, 40);
+};
+
+// A slot value counts as copied when its figures are all in the post and most of its words are.
+const postIndex = (postText) => {
+  const norm = normText(postText);
+  return { norm, words: new Set(norm.split(' ')), figs: new Set(figures(postText)) };
+};
+export const inPost = (value, post) => {
+  const v = normText(value);
+  if (!v) return false;
+  if (post.norm.includes(v)) return true;
+  if (figures(value).some((f) => !post.figs.has(f))) return false;
+  const words = v.split(' ').filter((w) => w.length > 1);
+  if (!words.length) return false;
+  return words.filter((w) => post.words.has(w)).length / words.length >= 0.75;
+};
+
+// Drops slot values not found in the post; returns the hits no slot holds.
+const EARNING_TYPES = new Set(['gig', 'gig_list', 'opportunity', 'income_claim']);
+export const checkCard = (card, postText, hits) => {
+  const post = postIndex(postText);
+  const rejected = [];
+  for (const it of (card && Array.isArray(card.items) ? card.items : [])) {
+    const p = it.promises && typeof it.promises === 'object' ? it.promises : {};
+    // An earning card has no price: "zero commission" / "free" is the cost of joining.
+    if (EARNING_TYPES.has(card.type) && typeof p.cost === 'string') {
+      p.cost_to_join = typeof p.cost_to_join === 'string' ? p.cost_to_join + '; ' + p.cost : p.cost;
+      delete p.cost;
+    }
+    for (const [slot, val] of Object.entries(p)) {
+      if (typeof val !== 'string' || !inPost(val, post)) {
+        rejected.push(`${it.name}.${slot}: ${typeof val === 'string' ? val : JSON.stringify(val)}`);
+        delete p[slot];
+      }
+    }
+    it.promises = p;
+  }
+  const placedRaw = [
+    ...((card && card.items) || []).flatMap((it) => Object.values(it.promises || {})),
+    ...((card && card.not_checkable) || []), ...((card && card.ignored) || []),
+  ].map(String).join(' | ');
+  const placed = ' ' + normText(placedRaw) + ' ';
+  const placedFigs = new Set(figures(placedRaw));
+  const leftovers = hits.filter((h) => {
+    if (placed.includes(' ' + normText(h.text) + ' ')) return false;
+    // A money figure placed with other words around it ("$15 USD/hour" for "$15/hour").
+    return !(h.slot === 'money' && figures(h.text).every((f) => placedFigs.has(f)));
+  });
+  return { rejected, leftovers };
+};
+
 const extractClaims = async (apiKey, transcript, ocrText) => {
   // Text repeated on every slide (handle, header, footer) is kept once - free
   // shrinking before any splitting is considered.
   const cleanOcr = dropRepeatedText(ocrText);
-  const buildPrompt = (ocrPart, part) => [
+  const buildPrompt = (ocrPart, part) => {
+  const hits = cardHits((part.index === 0 ? transcript : '') + '\n' + ocrPart);
+  return [
     'Analyze this content from a tech video/Instagram reel/carousel post.',
     'You are given both the Audio Transcript (or post caption) and all On-Screen Text detected from the video frames/slides.',
     ...(part.count > 1 ? ['',
@@ -794,10 +899,27 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
     '8. Keep the answer compact: leave out any field you would set to null, and keep each tool\'s "claim" to one short sentence (under 15 words). Long lists must still be complete.',
     '9. post_topic - what the post is ABOUT: "tech" = software, AI tools or models, apps, websites or online services, programming, gadgets, AND tech news (a model release such as "Claude released a new model", company announcements, product launches) even with no repo or link; "money" = ways to earn money (side hustles, sites that pay, freelancing); "other" = clearly not tech or earning: health, fitness, food, beauty, relationships, entertainment, comics, general news, government statistics, shopping deals, life advice. If unsure, use "tech".',
     '10. For each tool give "role": "subject" if a claim is ABOUT it (its offer, price, pay, release, feature, job), "mention" if it is only named in passing ("works with Codex", "better than ChatGPT", "paid via PayPal"). And "check": what exactly must be verified about it, in under 8 words, keeping figures ("1 million free tokens offer", "pays $40 per hour", "new open-source release", "hiring interns", "runs without a GPU"). Fame does not matter: a famous tool is a subject when the claim is about it.',
+    '11. "card" - the post\'s promises sorted into fixed slots:',
+    '   type: "tool" (one software tool, app, repo, model or website to USE), "tool_list" (several tools), "workflow" (a how-to built from tools, e.g. an n8n automation), "gig" (ONE platform that pays people for tasks or freelance work), "gig_list" (several such platforms), "opportunity" (a specific fellowship, internship, job opening, course, program, contest or paid offer to apply for - even when it is from a tech company or about AI), "income_claim" (a headline earning figure, e.g. "earn 3 lakh/month training AI", with or without platforms), "news" (an event or announcement), "other" (not tech, not earning).',
+    '   items: each tool / platform / opportunity the post is ABOUT (role subject), in post order, at most 6. Each item: {"name", "github_repo", "domain", "promises"}.',
+    '   promises: only slots the post actually promises; leave out every slot it does not mention. Tool slots: cost (free, price, "no API key"), license ("open source"), what_it_does (main features it claims), needs (hardware, OS, "runs on any laptop", "no GPU"), safety ("safe", "official", "no ban"), replaces ("replaces ElevenLabs", "better than Cursor", "works like X"). Earning/opportunity slots: pay (the figure and unit), pays_in (cash, gift cards, points, products), who_can_join ("anyone", "students", "no experience", "from India", "no matter your skill"), cost_to_join ("free to join"), open_now ("hiring now", "spots left"), payout (PayPal, UPI, "instant withdrawal"), deadline.',
+    '   COPY the post\'s own words or figure into each slot, short (under 12 words), in the post\'s language. Never paraphrase, translate, soften, round or drop a word: "free" stays "free", "no matter what skill you have" stays as said, "up to" and "approx" stay.',
+    '   license gets every licence or open-source word, as written ("MIT", "Apache-2.0", "open source"). cost is ONLY price words (free, ₹0, $20/mo, "no API key") - never "open source".',
+    '   pay copies EVERY figure the post gives for that item with its words, joined by "; " ("up to $15/hour; approx ₹1,400; $3 bonus").',
+    '   A promise the post makes about ALL items or about joining ("3 platforms to earn sitting in India", "ZERO COMMISSION", "no age limit") goes on EVERY item.',
+    '   claims_secret: true on an item only if the post calls it secret, hidden, unknown or "nobody knows".',
+    '   not_checkable: promises that fit no slot and cannot be checked ("low competition", "life-changing", "earn daily"), copied short.',
+    '   ignored: phrases from the list below that are background (another app, an ad, a menu, an unrelated listing), not promises.',
+    '   motive: "comment_for_link" (comment a word to get the link), "link_in_bio", "sells_course" (creator sells a course, ebook, series or community), "referral" (referral or invite code), or "none". Use only what the post itself says.',
+    ...(hits.length ? [
+      '   Code found these phrases in the post (speech, caption and screen text count the same). Put EACH one into the right slot of the right item, with the words around it, or into not_checkable / ignored:',
+      '   ' + hits.map((h) => '"' + h.text + '"').join(', '),
+    ] : []),
     '',
     'Respond ONLY with valid JSON in this exact structure:',
-    '{"post_topic":"tech","tech_name":"Primary title or main tool/website name","is_multi_tool":true,"tools":[{"name":"Tool or Website Name","github_repo":"owner/repo or null","domain_url":"domain.com or null","pip_command":"pip install ... or null","claim":"Core feature or claim stated","role":"subject","check":"what to verify"}],"claimed_features":["claim 1","claim 2"],"search_queries":["query 1","query 2"]}',
+    '{"post_topic":"tech","tech_name":"Primary title or main tool/website name","is_multi_tool":true,"tools":[{"name":"Tool or Website Name","github_repo":"owner/repo or null","domain_url":"domain.com or null","pip_command":"pip install ... or null","claim":"Core feature or claim stated","role":"subject","check":"what to verify"}],"claimed_features":["claim 1","claim 2"],"search_queries":["query 1","query 2"],"card":{"type":"tool","items":[{"name":"Tool or Website Name","github_repo":"owner/repo or null","domain":"domain.com or null","promises":{"cost":"post words"},"claims_secret":false}],"not_checkable":["post words"],"ignored":["phrase"],"motive":"none"}}',
   ].join('\n');
+  };
 
   // Groq's free tier refuses any SINGLE request over 8,000 tokens per minute
   // (Oct 7: a 20-slide carousel asked for 10,773 and both models refused it).
@@ -826,6 +948,33 @@ const extractClaims = async (apiKey, transcript, ocrText) => {
   }
   if (parts.length > 1) setJobNote(null);
   const data = results.length === 1 ? results[0] : mergeExtractions(results);
+
+  // Card check (CARD_DESIGN.md 11 A2-A3): drop slot values the post never says,
+  // and re-ask once for phrases code found that no slot holds. Only the card is
+  // taken from the re-ask, so the old flow's fields stay as first read.
+  if (data.card && typeof data.card === 'object') {
+    const postText = transcript + '\n' + ocrText;
+    const hits = cardHits(transcript + '\n' + cleanOcr);
+    let check = checkCard(data.card, postText, hits);
+    let reasked = false;
+    if (check.leftovers.length && parts.length === 1) {
+      try {
+        const again = await callGroq(apiKey, [
+          { role: 'system', content: 'You are an expert technical entity and claim extraction system. Output strictly valid JSON.' },
+          { role: 'user', content: buildPrompt(parts[0], { index: 0, count: 1 }) },
+          { role: 'assistant', content: JSON.stringify({ card: data.card }) },
+          { role: 'user', content: 'You missed these phrases from the post: ' + check.leftovers.map((h) => '"' + h.text + '"').join(', ') +
+            '. Put each into the right slot of the right item, copied with the words around it, or into not_checkable / ignored if it is background. Keep everything else. Respond ONLY with {"card": {...the full card...}}.' },
+        ], { job: 'extract', json: true, temperature: 0, accept: (d) => d && d.card && Array.isArray(d.card.items) });
+        reasked = true;
+        data.card = again.card;
+        check = checkCard(data.card, postText, hits);
+      } catch (e) {
+        console.warn('Card re-ask failed: ' + e.message);
+      }
+    }
+    data.card.check = { hits: hits.length, rejected: check.rejected, leftovers: check.leftovers.map((h) => h.text), reasked };
+  }
 
   // Rule 7 asks for list items as "12. Word2Vec" so none is skipped; drop the
   // number again (order is kept) or the name never matches an evidence page.
