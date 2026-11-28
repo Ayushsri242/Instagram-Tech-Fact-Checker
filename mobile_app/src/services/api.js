@@ -37,6 +37,7 @@ const MODEL_CHAINS = {
   verdict: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'],
   claims: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'],
   chat: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
+  card: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'],
 };
 const shortModel = (m) => String(m).split('/').pop();
 
@@ -2884,6 +2885,10 @@ const normalizeReport = (report, evidence, opts = {}) => {
 // and the normaliser without a device. Testing on hardware costs a build, an
 // Instagram fetch and an API call per case, which is why earlier sessions kept
 // tuning against a single reel and calling it a pass.
+// Card step 2: the one model call that fills a card's text fields (card.js).
+export const askCard = (apiKey, messages, accept) =>
+  callGroq(apiKey, messages, { job: 'card', json: true, temperature: 0, maxTokens: 6000, accept });
+
 export const __test = { synthesizeFactCheck, extractClaims, pickSubject, normalizeReport, looksLikeSubject, applyEvidenceRules, rankEvidence, printedGithubSlugs, moneyPlatforms, moneyQueries, rankMoneyEvidence, moneyTitle, isListPost, listTitle };
 
 const normalizeTools = (tools) => (tools || []).map((tool) => ({

@@ -264,6 +264,42 @@ const checkGitHubName = async (name) => {
   }
 };
 
+// Nov 28 (card step 2): raw GitHub facts for the Tool card. null = not found / not checked.
+export const githubLookup = async (slug) => {
+  const gh = { timeout: TIMEOUT };
+  try {
+    const { data } = await ghGet(`https://api.github.com/repos/${slug}`, gh);
+    if (!data || !data.full_name) return null;
+    const full = data.full_name;
+    const [release, readme] = await Promise.all([
+      ghGet(`https://api.github.com/repos/${full}/releases/latest`, gh).then((r) => r.data).catch(() => null),
+      axios.get(`https://raw.githubusercontent.com/${full}/HEAD/README.md`, { timeout: TIMEOUT, responseType: 'text' })
+        .then((r) => String(r.data || '')).catch(() => ''),
+    ]);
+    // GitHub reports AGPL with extra terms, FSL, BSL and "sustainable use" as NOASSERTION: read the file.
+    let licenseText = '';
+    if (data.license && data.license.spdx_id === 'NOASSERTION') {
+      licenseText = await ghGet(`https://api.github.com/repos/${full}/license`, gh)
+        .then((r) => (r.data && r.data.download_url ? axios.get(r.data.download_url, { timeout: TIMEOUT, responseType: 'text' }) : null))
+        .then((r) => (r ? String(r.data || '').slice(0, 6000) : '')).catch(() => '');
+    }
+    return { data, release, readme, licenseText };
+  } catch (e) {
+    return null;
+  }
+};
+// Most-starred repos whose NAME matches; [] when none or not checked.
+export const githubSearch = async (name) => {
+  try {
+    const { data } = await ghGet('https://api.github.com/search/repositories', {
+      params: { q: `${String(name).trim()} in:name`, sort: 'stars', order: 'desc', per_page: 5 }, timeout: TIMEOUT,
+    });
+    return (data && data.items) || [];
+  } catch (e) {
+    return [];
+  }
+};
+
 // ---------------------------------------------------------------- Jina Reader
 
 // Free, keyless page-to-text proxy.
