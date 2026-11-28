@@ -394,6 +394,29 @@ const PAY_CLAIM = /(\$|₹|€|£|\brs\.?\s?\d|\bpay|\bpaid|\bearn|per hour|\/hr
 // 43% -> 46%, no honest post called bad): "no age limit, school students can
 // join" was caught as contradicted (min age 16-18) but counted as a side claim.
 const ELIGIBILITY_CLAIM = /(\bage\b|\bstudents?\b|\banyone\b|\bno experience\b|\bbeginners?\b|\bno degree\b|\bfrom india\b|\bindians?\b|\bany country\b|\bworldwide\b|\bno skills?\b|\bminimum\b|\bqualif)/i;
+// The size of a pay gap is checked by code, not taken from the word
+// "contradicted" (Nov 27 dev run: "$100 for 30 min" vs "average $77" and
+// "approx. ₹1,400/hr" vs "$50-115/hr" made honest posts MISLEADING). Rubric:
+// real pay at or above the claim -> supported; up to 2x below -> exaggerated;
+// more than 2x below stays contradicted (Scribie: $48 claimed, $6 real).
+// Offline on 3 saved dev runs: only honest posts moved; money safety 83% -> 91%.
+const INR_PER_USD = 85;
+const dollarAmounts = (s) => {
+  const out = [];
+  for (const m of String(s || '').matchAll(/(\$|₹|rs\.?\s?|inr\s?|usd\s?)\s?(\d[\d,]*(?:\.\d+)?)(\s?k\b)?/gi)) {
+    let v = parseFloat(m[2].replace(/,/g, '')) * (m[3] ? 1000 : 1);
+    if (/₹|rs|inr/i.test(m[1])) v /= INR_PER_USD;
+    if (v > 0) out.push(v);
+  }
+  return out;
+};
+export const payGapStatus = (claim, quote) => {
+  const a = dollarAmounts(claim), b = dollarAmounts(quote);
+  if (!a.length || !b.length) return null;
+  const claimed = Math.max(...a), real = Math.max(...b);
+  if (real >= claimed * 0.95) return 'supported';
+  return claimed / real <= 2 ? 'exaggerated' : 'contradicted';
+};
 export const alignClaimChecks = (checks, fixed, money = false) => {
   if (!fixed.length) return checks;
   const payIdx = money ? fixed.map((c) => PAY_CLAIM.test(c) || ELIGIBILITY_CLAIM.test(c)) : null;
@@ -2081,7 +2104,10 @@ const applyEvidenceRules = (report, evidence, techName, opts = {}) => {
       // text: a quote across a markdown link would fail the raw-page test).
       const ok = status !== 'not_found' && (c.verified || proven({ source: c.source, quote: c.quote }));
       // Source and quote kept so a test run shows WHY a claim was judged (Nov 25).
-      return { claim: cleanLine(c && c.claim), main: c && c.main !== false, status: ok ? status : 'not_found', ...(ok ? { source: c.source, quote: c.quote, url: c.url } : {}) };
+      // Money: a "contradicted" pay claim is re-graded by its numbers (payGapStatus).
+      const graded = ok && opts.money && status === 'contradicted' && PAY_CLAIM.test(c.claim || '') ? (payGapStatus(c.claim, c.quote) || status) : status;
+      if (graded !== status) notes.push(`Pay gap re-graded ${status} -> ${graded}: "${cleanLine(c.claim)}" vs "${c.quote}"`);
+      return { claim: cleanLine(c && c.claim), main: c && c.main !== false, status: ok ? graded : 'not_found', ...(ok ? { source: c.source, quote: c.quote, url: c.url } : {}) };
     });
     const main = checks.filter((c) => c.main);
     const side = checks.filter((c) => !c.main);
@@ -3045,10 +3071,17 @@ export const analyzeReelApi = async (url) => {
     const used = new Set(queries.map((q) => String(q).toLowerCase()));
     const extraQs = [];
     for (const c of unfound) {
-      let hint = shortWords(c.search || '', 8);
-      if (!hint) hint = shortWords(name + ' ' + (c.claim || ''), 8);
-      if (name && !flatKey(hint).includes(flatKey(name).slice(0, 6))) hint = shortWords(name + ' ' + hint, 9);
-      for (const q of [dom ? hint + ' ||exa:domains=' + dom : null, money ? hint + ' reddit' : hint]) {
+      // Nov 28: built from the claim's own words, not the judge's "search" hint.
+      // The hint was worded anew each run, so every run searched something
+      // different and got different evidence (the main wobble left: BzzAgent and
+      // OpenTrain flipped between identical-code tests). The claim list is fixed,
+      // so the same claim now searches the same words and hits the cache.
+      const ownPlat = (listPlatforms || []).find((p) => flatKey(c.claim || '').includes(flatKey(p).slice(0, 8)));
+      const who = ownPlat || name;
+      const site = ownPlat ? (moneyDomain(ownPlat, claimsData) || null) : dom;
+      let hint = shortWords(c.claim || '', 8);
+      if (who && !flatKey(hint).includes(flatKey(who).slice(0, 6))) hint = shortWords(who + ' ' + hint, 9);
+      for (const q of [site ? hint + ' ||exa:domains=' + site : null, money ? hint + ' reddit' : hint]) {
         if (q && !used.has(q.toLowerCase())) { used.add(q.toLowerCase()); extraQs.push(q); }
       }
     }
